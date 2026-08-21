@@ -196,6 +196,12 @@ async function loadDispatcher() {
           recordFacebookMapping: async () => true,
         };
       }
+      if (specifier === "./tiktok-shop-publishing") {
+        return {
+          sendTikTokShopListing: async () => { throw new Error("not injected"); },
+          recordTikTokShopMappings: async () => true,
+        };
+      }
       throw new Error(`Unexpected import: ${specifier}`);
     },
   });
@@ -212,6 +218,8 @@ function job(id, connectionId, overrides = {}) {
     id,
     workspace_id: "workspace-test",
     connection_id: connectionId,
+    product_id: null,
+    draft_id: null,
     job_kind: "social_post",
     dedupe_key: `schedule:${id}:1000`,
     payload_snapshot_json: JSON.stringify({ message: `Bài ${id}`, mediaIds: [] }),
@@ -233,6 +241,8 @@ function publishers(overrides = {}) {
     facebook: async () => ({ externalId: "fb-1", externalUrl: "https://facebook.test/fb-1", providerResponse: {} }),
     website: async () => ({ externalId: "web-1", externalUrl: "https://shop.test/web-1", providerResponse: {} }),
     recordFacebook: async () => true,
+    tiktokShop: async () => ({ externalId: "tts-1", externalUrl: null, providerResponse: {} }),
+    recordTikTokShop: async () => true,
     ...overrides,
   };
 }
@@ -287,21 +297,76 @@ test("retries a temporary failure with bounded backoff then publishes", async ()
   assert.equal(database.jobs.get("retry").attempt_count, 2);
 });
 
-test("blocks unsupported commerce jobs and never touches Zalo confirmation jobs", async () => {
+test("dispatches TikTok product drafts, blocks Shopee, and never touches Zalo confirmation jobs", async () => {
   const { runPublishDispatcher } = await loadDispatcher();
   const database = new FakeDispatcherD1({
     jobs: [
       job("shop", "shopee", { job_kind: "listing_upsert" }),
+      job("tiktok", "tiktok", {
+        job_kind: "listing_upsert",
+        product_id: "product-1",
+        payload_snapshot_json: JSON.stringify({
+          mediaIds: ["media-1"],
+          platformData: { tiktokShop: { saveMode: "AS_DRAFT" } },
+        }),
+      }),
       job("zalo", "zalo", { status: "awaiting_confirmation" }),
     ],
-    connections: [connection("shopee", "shopee"), { ...connection("zalo", "zalo_personal"), publish_mode: "assisted" }],
+    connections: [
+      connection("shopee", "shopee"),
+      connection("tiktok", "tiktok_shop"),
+      { ...connection("zalo", "zalo_personal"), publish_mode: "assisted" },
+    ],
+  });
+  let sentInput = null;
+  let mappedInput = null;
+  const configured = publishers({
+    tiktokShop: async (input) => {
+      sentInput = input;
+      return {
+        externalId: "tts-product-1",
+        externalUrl: null,
+        providerResponse: { operation: "created", saveMode: "AS_DRAFT" },
+      };
+    },
+    recordTikTokShop: async (input) => {
+      mappedInput = input;
+      return true;
+    },
   });
 
-  const result = await runPublishDispatcher({ database, publishers: publishers(), now: 2_000, workerId: "worker" });
+  const result = await runPublishDispatcher({ database, publishers: configured, now: 2_000, workerId: "worker" });
   assert.equal(result.blocked, 1);
+  assert.equal(result.published, 1);
   assert.equal(database.jobs.get("shop").status, "blocked");
   assert.equal(database.jobs.get("shop").error_code, "COMMERCE_PUBLISH_NOT_IMPLEMENTED");
+  assert.equal(database.jobs.get("tiktok").status, "published");
+  assert.equal(sentInput.productId, "product-1");
+  assert.equal(sentInput.payload.platformData.tiktokShop.saveMode, "AS_DRAFT");
+  assert.equal(mappedInput.externalId, "tts-product-1");
   assert.equal(database.jobs.get("zalo").status, "awaiting_confirmation");
+});
+
+test("blocks a TikTok listing missing operator configuration without retrying", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({
+    jobs: [job("tiktok-config", "tiktok", {
+      job_kind: "listing_upsert",
+      product_id: "product-1",
+    })],
+    connections: [connection("tiktok", "tiktok_shop")],
+  });
+  const configured = publishers({
+    tiktokShop: async () => {
+      throw new MockPublishDeliveryError("TIKTOK_CATEGORY_REQUIRED");
+    },
+  });
+
+  const result = await runPublishDispatcher({ database, publishers: configured, now: 2_000, workerId: "worker" });
+  assert.equal(result.blocked, 1);
+  assert.equal(result.retrying, 0);
+  assert.equal(database.jobs.get("tiktok-config").status, "blocked");
+  assert.equal(database.jobs.get("tiktok-config").error_code, "TIKTOK_CATEGORY_REQUIRED");
 });
 
 test("recovers website leases with idempotent retry but blocks uncertain Facebook leases", async () => {

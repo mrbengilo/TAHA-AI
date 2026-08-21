@@ -5,6 +5,7 @@ import {
   sendFacebookPost,
   sendWebsitePayload,
 } from "./publishing";
+import { recordTikTokShopMappings, sendTikTokShopListing } from "./tiktok-shop-publishing";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -18,6 +19,8 @@ type CandidateJob = {
   id: string;
   workspace_id: string;
   connection_id: string;
+  product_id: string | null;
+  draft_id: string | null;
   job_kind: JobKind;
   dedupe_key: string;
   payload_snapshot_json: string;
@@ -66,6 +69,18 @@ export type DispatcherPublishers = {
     externalId: string;
     externalUrl: string;
   }): Promise<boolean>;
+  tiktokShop(input: {
+    connectionId: string;
+    jobId: string;
+    productId: string;
+    payload: Record<string, unknown>;
+  }): Promise<RemoteResult>;
+  recordTikTokShop(input: {
+    connectionId: string;
+    productId: string;
+    externalId: string;
+    providerResponse: Record<string, unknown>;
+  }): Promise<boolean>;
 };
 
 export type DispatcherOptions = {
@@ -95,6 +110,8 @@ const defaultPublishers: DispatcherPublishers = {
   facebook: sendFacebookPost,
   website: sendWebsitePayload,
   recordFacebook: recordFacebookMapping,
+  tiktokShop: sendTikTokShopListing,
+  recordTikTokShop: recordTikTokShopMappings,
 };
 
 function dispatcherDatabase(override?: DispatcherDatabase) {
@@ -161,6 +178,29 @@ function errorDetails(error: unknown) {
     retryable: typeof shaped?.retryable === "boolean" ? shaped.retryable : !blocked,
     outcomeUnknown: shaped?.outcomeUnknown === true,
   };
+}
+
+function isTikTokOperatorBlock(code: string) {
+  return code === "TIKTOK_JOB_KIND_UNSUPPORTED"
+    || code === "TIKTOK_PRODUCT_ID_REQUIRED"
+    || code === "TIKTOK_PRODUCT_NOT_FOUND"
+    || code === "TIKTOK_SHOP_CIPHER_MISSING"
+    || code === "TIKTOK_LISTING_CONFIG_REQUIRED"
+    || code === "TIKTOK_CATEGORY_REQUIRED"
+    || code === "TIKTOK_WAREHOUSE_REQUIRED"
+    || code === "TIKTOK_PACKAGE_WEIGHT_REQUIRED"
+    || code === "TIKTOK_PACKAGE_WEIGHT_UNIT_REQUIRED"
+    || code === "TIKTOK_TITLE_LENGTH_INVALID"
+    || code === "TIKTOK_DESCRIPTION_INVALID"
+    || code === "TIKTOK_CURRENCY_INVALID"
+    || code === "TIKTOK_MAIN_IMAGES_INVALID"
+    || code === "TIKTOK_VARIANTS_INVALID"
+    || code === "TIKTOK_SKU_INVALID"
+    || code === "TIKTOK_PRICE_INVALID"
+    || code === "TIKTOK_INVENTORY_INVALID"
+    || code === "TIKTOK_SALES_ATTRIBUTES_REQUIRED"
+    || code === "TIKTOK_IMAGE_TYPE_UNSUPPORTED"
+    || code === "TIKTOK_PRODUCT_UPDATE_REQUIRES_REMOTE_SNAPSHOT";
 }
 
 async function recoverExpiredLeases(database: DispatcherDatabase, now: number) {
@@ -326,7 +366,17 @@ async function publishLeasedJob(
       jobId: job.id,
     });
   }
-  if (job.provider === "shopee" || job.provider === "tiktok_shop") {
+  if (job.provider === "tiktok_shop") {
+    if (job.job_kind !== "listing_upsert") throw new PublishDeliveryError("TIKTOK_JOB_KIND_UNSUPPORTED");
+    if (!job.product_id) throw new PublishDeliveryError("TIKTOK_PRODUCT_ID_REQUIRED");
+    return publishers.tiktokShop({
+      connectionId: job.connection_id,
+      jobId: job.id,
+      productId: job.product_id,
+      payload,
+    });
+  }
+  if (job.provider === "shopee") {
     throw new PublishDeliveryError("COMMERCE_PUBLISH_NOT_IMPLEMENTED");
   }
   throw new PublishDeliveryError("PROVIDER_PUBLISH_NOT_SUPPORTED");
@@ -341,7 +391,8 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
   const workerId = options.workerId ?? crypto.randomUUID();
   const recovered = await recoverExpiredLeases(database, now);
   const due = await database.prepare(
-    `SELECT j.id, j.workspace_id, j.connection_id, j.job_kind, j.dedupe_key,
+    `SELECT j.id, j.workspace_id, j.connection_id, j.product_id, j.draft_id,
+            j.job_kind, j.dedupe_key,
             j.payload_snapshot_json, j.attempt_count, j.max_attempts,
             c.provider, c.status AS connection_status, c.publish_mode
      FROM publish_jobs j
@@ -397,6 +448,19 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
           summary.errors.push({ jobId: job.id, code: "FACEBOOK_MAPPING_PENDING" });
         }
       }
+      if (job.provider === "tiktok_shop" && job.product_id) {
+        try {
+          const recorded = await publishers.recordTikTokShop({
+            connectionId: job.connection_id,
+            productId: job.product_id,
+            externalId: accepted.externalId,
+            providerResponse: accepted.providerResponse,
+          });
+          if (!recorded) summary.errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
+        } catch {
+          summary.errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
+        }
+      }
     } catch (error) {
       if (accepted) {
         const changed = await markBlocked(
@@ -418,7 +482,8 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
         || details.code === "PROVIDER_PUBLISH_NOT_SUPPORTED"
         || details.code === "FACEBOOK_JOB_KIND_UNSUPPORTED"
         || details.code === "CONNECTION_NOT_CONNECTED"
-        || details.code === "CONNECTION_NOT_AUTOMATIC";
+        || details.code === "CONNECTION_NOT_AUTOMATIC"
+        || isTikTokOperatorBlock(details.code);
       if (shouldBlock) {
         const changed = await markBlocked(
           database,
