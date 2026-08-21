@@ -133,14 +133,36 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   const endpoint = typeof connection.config.publishEndpoint === "string" ? connection.config.publishEndpoint : "";
   if (!secret || !endpoint) throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
 
-  const body = JSON.stringify({ ...input.payload, tahaJobId: input.jobId });
-  const signature = await hmacHex(secret, body);
+  const mediaIds = Array.isArray(input.payload.mediaIds)
+    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, 4)
+    : [];
+  const media: Array<{ filename: string; mimeType: string; dataBase64: string }> = [];
+  for (const mediaId of mediaIds) {
+    try {
+      const loaded = await mediaBlob(mediaId, 6 * 1024 * 1024);
+      const bytes = new Uint8Array(await loaded.blob.arrayBuffer());
+      let binary = "";
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      media.push({ filename: loaded.filename, mimeType: loaded.mimeType, dataBase64: btoa(binary) });
+    } catch {
+      throw new PublishDeliveryError("WEBSITE_MEDIA_PREPARE_FAILED");
+    }
+  }
+
+  const body = JSON.stringify({ ...input.payload, media, tahaJobId: input.jobId });
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = await hmacHex(secret, `${timestamp}.${body}`);
   let response: Response;
   try {
     response = await fetch(endpoint, {
       method: "POST",
+      redirect: "error",
+      signal: AbortSignal.timeout(20_000),
       headers: {
         "content-type": "application/json",
+        "x-taha-timestamp": timestamp,
         "x-taha-signature": `sha256=${signature}`,
         "x-taha-idempotency-key": input.idempotencyKey,
       },
@@ -149,7 +171,7 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   } catch {
     throw new PublishDeliveryError("WEBSITE_NETWORK_ERROR", { retryable: true });
   }
-  if (!response.ok) {
+  if (response.status !== 200 && response.status !== 201) {
     throw new PublishDeliveryError(`WEBSITE_API_${response.status}`, {
       retryable: response.status === 429 || response.status >= 500,
     });
