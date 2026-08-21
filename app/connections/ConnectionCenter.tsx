@@ -47,7 +47,6 @@ function modeLabel(mode: Provider["publishMode"]) {
 
 function statusLabel(provider: Provider) {
   if (provider.connections.some((connection) => connection.status === "connected")) return "Đã kết nối";
-  if (provider.id === "zalo_personal") return "Chế độ hỗ trợ";
   if (!provider.configured) return "Chờ cấu hình";
   return "Sẵn sàng kết nối";
 }
@@ -68,6 +67,25 @@ function publicVariableName(value: string) {
     WEBSITE_WEBHOOK_SECRET: "Khóa webhook website",
   };
   return labels[value] ?? value;
+}
+
+function channelWorkspaces(providerId: string) {
+  if (providerId === "google") {
+    return [
+      { href: "/channels/google_drive", label: "Kho Google Drive" },
+      { href: "/channels/google_sheets", label: "Kho Google Sheet" },
+    ];
+  }
+
+  const routes: Record<string, { href: string; label: string }> = {
+    facebook: { href: "/channels/facebook", label: "Kho Facebook" },
+    zalo_personal: { href: "/channels/zalo_personal", label: "Kho Zalo" },
+    tiktok_shop: { href: "/channels/tiktok_shop", label: "Kho TikTok" },
+    shopee: { href: "/channels/shopee", label: "Kho Shopee" },
+    website: { href: "/channels/website", label: "Kho website" },
+  };
+
+  return routes[providerId] ? [routes[providerId]] : [];
 }
 
 export function ConnectionCenter() {
@@ -101,7 +119,7 @@ export function ConnectionCenter() {
   }, [refresh]);
 
   const connectedCount = providers.filter(
-    (provider) => provider.connections.some((connection) => connection.status === "connected") || provider.id === "zalo_personal",
+    (provider) => provider.connections.some((connection) => connection.status === "connected"),
   ).length;
 
   async function connect(provider: Provider) {
@@ -153,6 +171,8 @@ export function ConnectionCenter() {
       <aside className="connections-aside">
         <Link className="brand connections-brand" href="/"><BrandMark /><div><strong>TAHA</strong><span>AI Commerce</span></div></Link>
         <Link className="back-link" href="/"><span>←</span> Quay lại tổng quan</Link>
+        <Link className="back-link" href="/channels"><span>▦</span> Kho nội dung từng kênh</Link>
+        <Link className="back-link" href="/connections/guide"><span>?</span> Hướng dẫn kết nối</Link>
         <div className="setup-progress">
           <span>TIẾN ĐỘ THIẾT LẬP</span><strong>{connectedCount}/{providers.length || 6} kênh sẵn sàng</strong>
           <div><i style={{ width: `${Math.round((connectedCount / Math.max(providers.length, 6)) * 100)}%` }} /></div>
@@ -186,13 +206,15 @@ export function ConnectionCenter() {
               {providers.map((provider) => {
                 const connected = provider.connections.some((connection) => connection.status === "connected");
                 const isAssisted = provider.publishMode === "assisted";
+                const workspaces = channelWorkspaces(provider.id);
                 return (
-                  <article className={`provider-card ${connected || isAssisted ? "ready" : ""}`} key={provider.id}>
-                    <div className="provider-card-top"><span className="provider-mark" style={{ backgroundColor: provider.accent }}>{provider.mark}</span><span className={`provider-status ${connected ? "connected" : isAssisted ? "assisted" : provider.configured ? "config-ready" : "pending"}`}><i />{statusLabel(provider)}</span></div>
+                  <article className={`provider-card ${connected ? "ready" : ""}`} key={provider.id}>
+                    <div className="provider-card-top"><span className="provider-mark" style={{ backgroundColor: provider.accent }}>{provider.mark}</span><span className={`provider-status ${connected ? "connected" : provider.configured ? "config-ready" : "pending"}`}><i />{statusLabel(provider)}</span></div>
                     <h3>{provider.name}</h3><p>{provider.description}</p>
                     <div className="capability-list">{provider.capabilities.map((item) => <span key={item}>✓ {item}</span>)}</div>
                     {provider.connections.length > 0 && <div className="connected-accounts">{provider.connections.map((connection) => <div key={connection.id}><span>{connection.displayName}</span><small>{connection.externalAccountId || modeLabel(provider.publishMode)}</small></div>)}</div>}
                     {!provider.configured && provider.missing.length > 0 && <details><summary>Còn thiếu {provider.missing.length} cấu hình</summary><ul>{provider.missing.map((item) => <li key={item}>{publicVariableName(item)}</li>)}</ul></details>}
+                    {workspaces.length > 0 ? <div className="channel-shortcuts">{workspaces.map((workspace) => <Link href={workspace.href} key={workspace.href}>{workspace.label} <span>→</span></Link>)}</div> : null}
                     <div className="provider-card-footer">
                       <span>{modeLabel(provider.publishMode)}</span>
                       <div className="provider-actions">

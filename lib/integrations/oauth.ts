@@ -55,7 +55,11 @@ export async function buildAuthorizationUrl(provider: Exclude<ProviderId, "zalo_
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
     url.searchParams.set("include_granted_scopes", "true");
-    url.searchParams.set("scope", runtime.GOOGLE_OAUTH_SCOPES?.trim() || "openid email profile https://www.googleapis.com/auth/drive.readonly");
+    url.searchParams.set(
+      "scope",
+      runtime.GOOGLE_OAUTH_SCOPES?.trim()
+        || "openid email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly",
+    );
     url.searchParams.set("state", state);
     return url.toString();
   }
@@ -181,7 +185,8 @@ export async function connectFacebook(code: string) {
   for (const page of pages) {
     const tasks = Array.isArray(page.tasks) ? page.tasks.map(String) : [];
     const pageToken = asString(page.access_token);
-    if (!pageToken || !asString(page.id) || !tasks.includes("CREATE_CONTENT")) continue;
+    const canCreateContent = tasks.includes("CREATE_CONTENT") || tasks.includes("PROFILE_PLUS_CREATE_CONTENT");
+    if (!pageToken || !asString(page.id) || !canCreateContent) continue;
     const encrypted = await encryptCredentials({ accessToken: pageToken, tokenType: "Bearer" });
     await upsertConnection({
       provider: "facebook",

@@ -57,11 +57,11 @@ export default async function Home() {
 
         <nav aria-label="Điều hướng chính">
           <a className="nav-item active" href="#tong-quan"><span className="nav-symbol">⌂</span>Tổng quan</a>
-          <a className="nav-item" href="#san-pham"><span className="nav-symbol">□</span>Sản phẩm<span className="nav-count">{snapshot.activeProducts}</span></a>
-          <a className="nav-item" href="#noi-dung"><span className="nav-symbol">✦</span>Studio AI</a>
-          <a className="nav-item" href="#lich-dang"><span className="nav-symbol">◫</span>Lịch đăng<span className="nav-count warm">{snapshot.upcoming.length}</span></a>
+          <Link className="nav-item" href="/channels/google_sheets"><span className="nav-symbol">□</span>Sản phẩm<span className="nav-count">{snapshot.activeProducts}</span></Link>
+          <Link className="nav-item" href="/channels/facebook?compose=1"><span className="nav-symbol">✦</span>Studio nội dung</Link>
+          <Link className="nav-item" href="/channels?view=schedules"><span className="nav-symbol">◫</span>Lịch đăng<span className="nav-count warm">{snapshot.upcoming.length}</span></Link>
           <Link className="nav-item" href="/connections"><span className="nav-symbol">⌁</span>Kết nối kênh</Link>
-          <a className="nav-item" href="#nhat-ky"><span className="nav-symbol">≡</span>Nhật ký</a>
+          <Link className="nav-item" href="/channels?view=activity"><span className="nav-symbol">≡</span>Nhật ký</Link>
         </nav>
 
         <div className="sidebar-card">
@@ -74,7 +74,7 @@ export default async function Home() {
         <div className="profile">
           <span className="avatar">TH</span>
           <div><strong>TAHA Store</strong><span>Quản trị viên</span></div>
-          <button type="button" aria-label="Mở tùy chọn tài khoản">•••</button>
+          <Link className="profile-menu" href="/connections" aria-label="Mở cài đặt tài khoản">•••</Link>
         </div>
       </aside>
 
@@ -83,8 +83,8 @@ export default async function Home() {
           <div><span className="eyebrow">TRUNG TÂM VẬN HÀNH</span><h1>Chào buổi sáng, TAHA.</h1></div>
           <div className="top-actions">
             <span className="live-status"><i /> {snapshot.attentionCount > 0 ? `${snapshot.attentionCount} mục cần chú ý` : "Hệ thống ổn định"}</span>
-            <button className="icon-button" type="button" aria-label="Thông báo">♢<b>3</b></button>
-            <button className="primary-button" type="button"><span>＋</span> Thêm sản phẩm</button>
+            <Link className="icon-button" href="/channels?view=attention" aria-label="Xem mục cần chú ý">♢<b>{snapshot.attentionCount}</b></Link>
+            <Link className="primary-button" href="/channels/google_sheets"><span>＋</span> Thêm sản phẩm</Link>
           </div>
         </header>
 
@@ -95,8 +95,8 @@ export default async function Home() {
               <h2>Nội dung của bạn<br />đang vận hành.</h2>
               <p>{snapshot.upcoming.length} bài chờ đăng, {snapshot.reviewCount} nội dung cần duyệt và {snapshot.activeProducts} sản phẩm đang hoạt động.</p>
               <div className="command-actions">
-                <button type="button" className="light-button">Xem lịch hôm nay <span>→</span></button>
-                <button type="button" className="ghost-button">Duyệt nội dung</button>
+                <Link className="light-button" href="/channels?view=schedules">Xem lịch hôm nay <span>→</span></Link>
+                <Link className="ghost-button" href="/channels?status=in_review">Duyệt nội dung</Link>
               </div>
             </div>
             <div className="orbit-visual" aria-hidden="true">
@@ -110,7 +110,7 @@ export default async function Home() {
           <article className="review-card">
             <div className="section-heading compact">
               <div><span className="eyebrow">CẦN XỬ LÝ</span><h2>{snapshot.reviewCount} nội dung chờ duyệt</h2></div>
-              <button type="button" aria-label="Xem tất cả">→</button>
+              <Link className="review-all" href="/channels?status=in_review" aria-label="Xem tất cả nội dung chờ duyệt">→</Link>
             </div>
             {snapshot.review ? (
               <><div className="product-preview">
@@ -119,7 +119,7 @@ export default async function Home() {
                   <span className="platform-tag">{providerNames[snapshot.review.target_provider]?.toUpperCase() || snapshot.review.target_provider.toUpperCase()}</span>
                   <strong>{snapshot.review.product_name}</strong>
                   <p>“{snapshot.review.body.slice(0, 72)}{snapshot.review.body.length > 72 ? "…" : ""}”</p>
-                  <div className="preview-actions"><button type="button" className="approve">Duyệt</button><button type="button" className="more" aria-label="Tùy chọn">•••</button></div>
+                  <div className="preview-actions"><Link className="approve" href={`/channels/${snapshot.review.target_provider}?draft=${snapshot.review.id}`}>Mở để duyệt</Link><Link className="more" href={`/channels/${snapshot.review.target_provider}`} aria-label="Mở kho kênh">•••</Link></div>
                 </div>
               </div><div className="review-progress"><i /><span>1 / {snapshot.reviewCount}</span></div></>
             ) : <div className="review-empty"><span>✓</span><strong>Không có nội dung chờ duyệt</strong><p>Nội dung mới sẽ xuất hiện ở đây sau khi được tạo.</p></div>}
@@ -137,7 +137,7 @@ export default async function Home() {
           <article className="schedule-card" id="lich-dang">
             <div className="section-heading">
               <div><span className="eyebrow">LỊCH ĐĂNG HÔM NAY</span><h2>Mọi kênh, một nhịp vận hành</h2></div>
-              <button type="button" className="text-button">Mở lịch đầy đủ →</button>
+              <Link className="text-button" href="/channels?view=schedules">Mở lịch đầy đủ →</Link>
             </div>
             <div className="queue-list">
               {snapshot.upcoming.length ? snapshot.upcoming.map((item) => (
@@ -145,7 +145,7 @@ export default async function Home() {
                   <time>{formatTime(item.scheduled_for)}</time><i className="timeline-dot" />
                   <div className="queue-copy"><span>{providerNames[item.provider] || item.provider}</span><strong>{item.title || item.body || "Nội dung đã lên lịch"}</strong></div>
                   <span className={`state ${item.status === "awaiting_confirmation" ? "waiting" : "scheduled"}`}>{item.status === "awaiting_confirmation" ? "Chờ xác nhận" : "Đã lên lịch"}</span>
-                  <button type="button" aria-label={`Tùy chọn ${item.title || "bài đăng"}`}>•••</button>
+                  <Link className="queue-more" href={`/channels/${item.provider}`} aria-label={`Mở kênh của ${item.title || "bài đăng"}`}>•••</Link>
                 </div>
               )) : <div className="queue-empty"><span>◫</span><strong>Chưa có bài nào trong lịch</strong><p>Kích hoạt một lịch sau khi nội dung đã được duyệt.</p></div>}
             </div>
@@ -155,10 +155,10 @@ export default async function Home() {
             <div className="section-heading"><div><span className="eyebrow">KẾT NỐI KÊNH</span><h2>{snapshot.connectedProviders.length} kênh đã kết nối</h2></div><Link className="channel-settings-link" href="/connections" aria-label="Cài đặt kết nối">⚙</Link></div>
             <div className="channel-list">
               {channels.map((channel) => (
-                <div className="channel-row" key={channel.name}>
+                <Link className="channel-row" href={`/channels/${channel.id}`} key={channel.name}>
                   <span className={`channel-mark ${channel.tone}`}>{channel.mark}</span>
                   <div><strong>{channel.name}</strong><span>{channel.detail}</span></div><i className={connected.has(channel.id) ? "connected" : "disconnected"} />
-                </div>
+                </Link>
               ))}
             </div>
             <Link href="/connections" className="connect-button">＋ Kết nối kênh mới</Link>

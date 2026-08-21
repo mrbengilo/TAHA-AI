@@ -18,6 +18,8 @@ Facebook · Zalo cá nhân · Website · Shopee · TikTok Shop
 
 - Dashboard vận hành bằng tiếng Việt, responsive cho máy tính và điện thoại.
 - Trung tâm kết nối Google, Facebook Page, Zalo cá nhân, Shopee, TikTok Shop và website.
+- Khu vực **Quản lý từng kênh** có dữ liệu thật, tách riêng Google Drive, Google Sheets, Facebook, Zalo, TikTok Shop, Shopee và Website.
+- Mỗi kho kênh cho phép xem ảnh/video, bài viết, hàng đợi và sản phẩm; tạo bản nháp, tải media vào R2 và dùng lại ảnh Drive ở nhiều kênh mà không nhân bản tệp.
 - OAuth có `state` dùng một lần; token kết nối được mã hóa AES-GCM trước khi lưu.
 - Đồng bộ Google Sheet thành sản phẩm/biến thể và gắn ảnh theo thư mục SKU trên Google Drive.
 - Đăng bài Facebook Page bằng API chính thức, gồm bài chữ và tối đa 10 ảnh.
@@ -32,6 +34,25 @@ Facebook · Zalo cá nhân · Website · Shopee · TikTok Shop
 
 - Shopee và TikTok Shop đã có luồng ủy quyền tài khoản. Bước ghi listing chỉ bật sau khi ứng dụng live được duyệt module sản phẩm/media và đã chốt ánh xạ danh mục thuộc tính tại thị trường Việt Nam.
 - Phần sinh nội dung/hình ảnh AI chưa gọi nhà cung cấp cho tới khi khóa API được cấu hình an toàn.
+
+## Các trang chính
+
+- `/` — tổng quan vận hành.
+- `/channels` — danh sách bảy kho kênh độc lập.
+- `/channels/:provider` — ảnh, bài viết, hàng đợi và sản phẩm của một kênh. Giá trị `provider` hợp lệ: `google_drive`, `google_sheets`, `facebook`, `zalo_personal`, `tiktok_shop`, `shopee`, `website`.
+- `/connections` — trạng thái kết nối và thao tác OAuth.
+- `/connections/guide` — hướng dẫn kết nối từng nền tảng theo từng bước.
+
+## Mức tự động hiện tại
+
+| Kênh | Trạng thái thực tế |
+|---|---|
+| Google Drive và Google Sheets | Đã có OAuth và đồng bộ dữ liệu nguồn qua API Google. Hai kho hiển thị riêng nhưng dùng chung kết nối Google. |
+| Facebook Page | Đã có OAuth, đăng bài chữ/ảnh bằng API chính thức, lưu Post ID và dispatcher tự xử lý job đến hạn. |
+| Zalo cá nhân | Chỉ hỗ trợ chuẩn bị caption/ảnh và chờ chủ tài khoản xác nhận đã đăng. Không tự động điều khiển Zalo Web, cookie hay phiên QR. |
+| Website | Đã gửi được payload qua webhook ký HMAC và dispatcher tự xử lý job đến hạn. Website nhận phải triển khai endpoint tương thích. |
+| TikTok Shop | Đã có OAuth, lưu và làm mới token. Chưa bật ghi listing cho tới khi ứng dụng live được duyệt quyền sản phẩm/media và hoàn tất ánh xạ danh mục. |
+| Shopee | Đã có OAuth, lưu và làm mới token. Chưa bật ghi listing cho tới khi ứng dụng live được duyệt module cần thiết và hoàn tất ánh xạ danh mục/thuộc tính. |
 
 ## Chạy dự án
 
@@ -51,7 +72,7 @@ Mở `http://localhost:3000` và chọn **Kết nối kênh**.
 1. Sao chép `.env.example` thành tệp môi trường chỉ tồn tại trên máy chủ.
 2. Thay toàn bộ domain mẫu bằng domain HTTPS thật.
 3. Nhập app ID/secret trong secret manager của môi trường triển khai, không commit tệp chứa bí mật.
-4. Áp dụng migration trong `drizzle/` cho D1 trước khi thực hiện OAuth.
+4. Áp dụng **toàn bộ** migration trong `drizzle/` theo thứ tự tên tệp cho D1 trước khi thực hiện OAuth hoặc mở kho kênh. Local D1 mới hoàn toàn phải chạy từ `0000`; gói triển khai Sites production áp dụng toàn bộ migration.
 5. Đăng ký chính xác callback URL hiển thị trong `.env.example` ở từng developer console.
 6. Cấu hình một cron trigger gọi `POST /api/internal/cron/tick` mỗi phút bằng Bearer `INTERNAL_API_SECRET`, hoặc bật Scheduled Worker tương ứng.
 

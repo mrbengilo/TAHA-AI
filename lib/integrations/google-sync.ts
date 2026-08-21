@@ -53,7 +53,7 @@ function valueFor(row: unknown[], headers: Map<string, number>, names: string[])
   return "";
 }
 
-function parseCatalog(rows: unknown[][]) {
+export function parseGoogleCatalogRows(rows: unknown[][]) {
   if (rows.length < 2) return [];
   const headers = new Map(rows[0].map((cell, index) => [normalizeHeader(cell), index]));
   return rows.slice(1).flatMap((row, index): CatalogProduct[] => {
@@ -62,15 +62,21 @@ function parseCatalog(rows: unknown[][]) {
     if (!sku || !name) return [];
     const rawStatus = normalizeHeader(valueFor(row, headers, ["trang thai", "status"]));
     const status = rawStatus.includes("ready") || rawStatus.includes("active") || rawStatus.includes("san sang") ? "active" : rawStatus.includes("pause") || rawStatus.includes("tam dung") ? "paused" : "draft";
-    const sale = parseMoney(valueFor(row, headers, ["gia sale", "gia khuyen mai", "sale price", "compare at price"]));
+    const listPrice = parseMoney(valueFor(row, headers, ["gia ban", "gia"]));
+    const salePrice = parseMoney(valueFor(row, headers, ["gia sale", "gia khuyen mai", "sale price", "discount price"]));
+    const englishPrice = parseMoney(valueFor(row, headers, ["price"]));
+    const englishCompareAtPrice = parseMoney(valueFor(row, headers, ["compare at price"]));
+    const usesVietnamesePricing = listPrice > 0 || salePrice > 0;
+    const hasVietnameseDiscount = listPrice > 0 && salePrice > 0 && salePrice < listPrice;
+    const hasEnglishDiscount = englishPrice > 0 && englishCompareAtPrice > englishPrice;
     return [{
       sku,
       name,
       brand: String(valueFor(row, headers, ["thuong hieu", "brand"])).trim() || null,
       category: String(valueFor(row, headers, ["danh muc", "category"])).trim() || null,
       description: String(valueFor(row, headers, ["mo ta", "mo ta that", "description"])).trim(),
-      price: parseMoney(valueFor(row, headers, ["gia ban", "gia", "price"])),
-      compareAtPrice: sale > 0 ? sale : null,
+      price: usesVietnamesePricing ? (hasVietnameseDiscount ? salePrice : listPrice || salePrice) : englishPrice,
+      compareAtPrice: usesVietnamesePricing ? (hasVietnameseDiscount ? listPrice : null) : (hasEnglishDiscount ? englishCompareAtPrice : null),
       inventory: parseMoney(valueFor(row, headers, ["ton kho", "so luong", "inventory", "stock"])),
       status,
       rowNumber: index + 2,
@@ -186,7 +192,7 @@ export async function syncGoogleCatalog(connectionId?: string) {
 
   const sheetUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values/${encodeURIComponent(range)}`);
   const sheet = await googleJson<{ values?: unknown[][] }>(sheetUrl, token);
-  const products = parseCatalog(sheet.values ?? []);
+  const products = parseGoogleCatalogRows(sheet.values ?? []);
   const driveAssets = await loadDriveAssets(folderId, token);
   let mediaCount = 0;
   for (const product of products) {

@@ -105,6 +105,9 @@ export const mediaAssets = sqliteTable("media_assets", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   sourceConnectionId: text("source_connection_id").references(() => channelConnections.id),
+  channelId: text("channel_id", {
+    enum: ["google_drive", "google_sheets", "facebook", "zalo_personal", "tiktok_shop", "shopee", "website"],
+  }),
   mediaType: text("media_type", { enum: ["image", "video"] }).notNull(),
   origin: text("origin", { enum: ["source", "uploaded", "generated", "derived"] }).notNull(),
   storageProvider: text("storage_provider", { enum: ["google_drive", "r2", "external"] }).notNull(),
@@ -126,8 +129,24 @@ export const mediaAssets = sqliteTable("media_assets", {
   updatedAt: timestamp("updated_at").notNull(),
 }, (table) => [
   uniqueIndex("uq_media_assets_external").on(table.workspaceId, table.storageProvider, table.externalId),
+  index("idx_media_assets_workspace_channel_created").on(table.workspaceId, table.channelId, table.createdAt),
   index("idx_media_assets_workspace_status_created").on(table.workspaceId, table.status, table.createdAt),
   index("idx_media_assets_workspace_sha256").on(table.workspaceId, table.sha256),
+]);
+
+export const channelMediaLinks = sqliteTable("channel_media_links", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  channelId: text("channel_id", {
+    enum: ["google_drive", "google_sheets", "facebook", "zalo_personal", "tiktok_shop", "shopee", "website"],
+  }).notNull(),
+  mediaId: text("media_id").notNull().references(() => mediaAssets.id),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("uq_channel_media_links_workspace_channel_media").on(table.workspaceId, table.channelId, table.mediaId),
+  index("idx_channel_media_links_workspace_channel_created").on(table.workspaceId, table.channelId, table.createdAt),
+  index("idx_channel_media_links_media").on(table.mediaId),
 ]);
 
 export const productMedia = sqliteTable("product_media", {
