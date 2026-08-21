@@ -19,20 +19,36 @@ function isLocalDevelopmentRequest(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
 }
 
-function isAllowedSitesUser(request: Request, allowlistValue?: string) {
-  const userId = request.headers.get("oai-authenticated-user-id");
-  if (!userId || !allowlistValue) return false;
+function isAllowedValue(value: string | null, allowlistValue?: string, normalize = (input: string) => input) {
+  if (!value || !allowlistValue) return false;
+  const normalizedValue = normalize(value);
   const allowedIds = allowlistValue.split(",").map((value) => value.trim()).filter(Boolean);
   let matched = false;
-  for (const allowedId of allowedIds) matched = constantTimeEqual(userId, allowedId) || matched;
+  for (const allowedId of allowedIds) {
+    matched = constantTimeEqual(normalizedValue, normalize(allowedId)) || matched;
+  }
   return matched;
+}
+
+function isAllowedSitesUser(request: Request, userIds?: string, emails?: string) {
+  const userIdAllowed = isAllowedValue(request.headers.get("oai-authenticated-user-id"), userIds);
+  const emailAllowed = isAllowedValue(
+    request.headers.get("oai-authenticated-user-email"),
+    emails,
+    (value) => value.trim().toLowerCase(),
+  );
+  return userIdAllowed || emailAllowed;
 }
 
 export function isOperatorRequest(request: Request) {
   const url = new URL(request.url);
   if (isLocalDevelopmentRequest(url)) return true;
   const runtime = getRuntimeEnv();
-  const sitesUserAllowed = isAllowedSitesUser(request, runtime.SITES_OPERATOR_USER_IDS);
+  const sitesUserAllowed = isAllowedSitesUser(
+    request,
+    runtime.SITES_OPERATOR_USER_IDS,
+    runtime.SITES_OPERATOR_EMAILS,
+  );
   const secret = runtime.INTERNAL_API_SECRET;
   const authorization = request.headers.get("authorization");
   const bearerAllowed = Boolean(secret && authorization?.startsWith("Bearer ") && constantTimeEqual(authorization.slice(7), secret));

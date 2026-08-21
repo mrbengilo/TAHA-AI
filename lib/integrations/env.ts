@@ -8,6 +8,7 @@ export type RuntimeEnv = {
   INTEGRATION_TOKEN_ENCRYPTION_KEY?: string;
   INTERNAL_API_SECRET?: string;
   SITES_OPERATOR_USER_IDS?: string;
+  SITES_OPERATOR_EMAILS?: string;
   GOOGLE_AUTH_MODE?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
