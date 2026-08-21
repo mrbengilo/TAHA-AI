@@ -6,13 +6,6 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "sharp",
-      "workerd"
-    ]
-  },
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
