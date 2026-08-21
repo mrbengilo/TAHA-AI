@@ -5,12 +5,12 @@ import {
   normalizeListLimit,
   requireChannelId,
 } from "../../../../lib/channel-library";
-import { isOperatorRequest } from "../../../../lib/operator-auth";
+import { isViewerRequest } from "../../../../lib/operator-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request, context: { params: Promise<{ channel: string }> }) {
-  if (!isOperatorRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem kho nội dung.", 401);
+  if (!isViewerRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem kho nội dung.", 401);
   try {
     const { channel } = await context.params;
     const channelId = requireChannelId(channel);

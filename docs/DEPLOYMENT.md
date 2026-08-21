@@ -47,6 +47,7 @@ Endpoint nội bộ thực hiện cùng luồng scheduler và dispatcher, không
 ## Bảo vệ API quản trị
 
 - Trên OpenAI Sites, đặt `SITES_OPERATOR_USER_IDS` thành danh sách phân tách bằng dấu phẩy của đúng các giá trị `oai-authenticated-user-id` theo từng Site, hoặc đặt `SITES_OPERATOR_EMAILS` thành danh sách email ChatGPT đã xác thực được phép vận hành hệ thống. Không dùng account user ID trong chính sách chia sẻ thay cho header ID vì hai giá trị này không giống nhau.
+- Tài khoản kiểm duyệt chỉ đọc có thể đặt trong `SITES_VIEWER_USER_IDS` hoặc `SITES_VIEWER_EMAILS`. Viewer chỉ được gọi các API GET kho kênh, kết nối và tải media; mọi thao tác kết nối, đồng bộ, tạo nội dung hoặc xuất bản vẫn bắt buộc operator.
 - Ingress phải xóa mọi header `oai-authenticated-user-*` do client tự gửi và chỉ chuyển header danh tính do Sites đã xác thực. Allowlist không thay thế ranh giới tin cậy này.
 - Khi chạy độc lập trên VPS/reverse proxy, dùng `Authorization: Bearer <INTERNAL_API_SECRET>` từ một proxy/backend đã xác thực. Không đưa secret này vào JavaScript trình duyệt.
 - Bypass cho `localhost`, `127.0.0.1` và `::1` chỉ hoạt động ở build không phải production. Production luôn cần Sites user nằm trong allowlist hoặc Bearer secret hợp lệ.

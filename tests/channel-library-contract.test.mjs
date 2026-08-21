@@ -16,7 +16,12 @@ test("channel APIs are authenticated, workspace-scoped, and keep blobs private i
     readFile(new URL("drizzle/0002_same_domino.sql", root), "utf8"),
   ]);
 
-  for (const route of [collectionRoute, detailRoute, draftRoute, uploadRoute, importRoute]) {
+  for (const route of [collectionRoute, detailRoute]) {
+    assert.match(route, /isViewerRequest\(request\)/);
+    assert.match(route, /return fail\("UNAUTHORIZED"/);
+  }
+
+  for (const route of [draftRoute, uploadRoute, importRoute]) {
     assert.match(route, /isOperatorRequest\(request\)/);
     assert.match(route, /return fail\("UNAUTHORIZED"/);
   }

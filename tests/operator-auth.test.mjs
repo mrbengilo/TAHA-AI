@@ -56,3 +56,16 @@ test("keeps the stable Sites user ID and bearer alternatives", async () => {
     headers: { authorization: "Bearer internal-secret" },
   })), true);
 });
+
+test("allows reviewers to read without granting operator access", async () => {
+  const { isOperatorRequest, isViewerRequest } = await loadOperatorAuth({
+    SITES_OPERATOR_USER_IDS: "owner-id",
+    SITES_VIEWER_USER_IDS: "shopee-reviewer",
+  });
+  const reviewer = new Request("https://app.example.com/api/channels", {
+    headers: { "oai-authenticated-user-id": "shopee-reviewer" },
+  });
+
+  assert.equal(isViewerRequest(reviewer), true);
+  assert.equal(isOperatorRequest(reviewer), false);
+});

@@ -1,11 +1,11 @@
 import { fail, ok } from "../../../lib/api";
 import { ChannelLibraryError, listChannelSummaries } from "../../../lib/channel-library";
-import { isOperatorRequest } from "../../../lib/operator-auth";
+import { isViewerRequest } from "../../../lib/operator-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  if (!isOperatorRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem kho nội dung.", 401);
+  if (!isViewerRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem kho nội dung.", 401);
   try {
     return ok({ channels: await listChannelSummaries() }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {

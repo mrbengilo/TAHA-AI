@@ -1,9 +1,9 @@
 import { fail } from "../../../../../lib/api";
-import { isOperatorRequest } from "../../../../../lib/operator-auth";
+import { isViewerRequest } from "../../../../../lib/operator-auth";
 import { loadMedia } from "../../../../../lib/media";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!isOperatorRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để tải ảnh.", 401);
+  if (!isViewerRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để tải ảnh.", 401);
   try {
     const { id } = await context.params;
     const media = await loadMedia(id);

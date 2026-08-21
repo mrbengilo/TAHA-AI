@@ -9,6 +9,8 @@ export type RuntimeEnv = {
   INTERNAL_API_SECRET?: string;
   SITES_OPERATOR_USER_IDS?: string;
   SITES_OPERATOR_EMAILS?: string;
+  SITES_VIEWER_USER_IDS?: string;
+  SITES_VIEWER_EMAILS?: string;
   GOOGLE_AUTH_MODE?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;

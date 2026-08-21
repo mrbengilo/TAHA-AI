@@ -54,3 +54,13 @@ export function isOperatorRequest(request: Request) {
   const bearerAllowed = Boolean(secret && authorization?.startsWith("Bearer ") && constantTimeEqual(authorization.slice(7), secret));
   return sitesUserAllowed || bearerAllowed;
 }
+
+export function isViewerRequest(request: Request) {
+  if (isOperatorRequest(request)) return true;
+  const runtime = getRuntimeEnv();
+  return isAllowedSitesUser(
+    request,
+    runtime.SITES_VIEWER_USER_IDS,
+    runtime.SITES_VIEWER_EMAILS,
+  );
+}
