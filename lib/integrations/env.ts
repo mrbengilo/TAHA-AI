@@ -7,6 +7,7 @@ export type RuntimeEnv = {
   OAUTH_STATE_SECRET?: string;
   INTEGRATION_TOKEN_ENCRYPTION_KEY?: string;
   INTERNAL_API_SECRET?: string;
+  TRUSTED_PROXY_SECRET?: string;
   SITES_OPERATOR_USER_IDS?: string;
   SITES_OPERATOR_EMAILS?: string;
   SITES_VIEWER_USER_IDS?: string;
@@ -44,6 +45,10 @@ export type RuntimeEnv = {
   WEBSITE_BASE_URL?: string;
   WEBSITE_PUBLISH_ENDPOINT?: string;
   WEBSITE_WEBHOOK_SECRET?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_TEXT_MODEL?: string;
+  OPENAI_IMAGE_MODEL?: string;
+  OPENAI_IMAGE_QUALITY?: string;
 };
 
 export function getRuntimeEnv(): RuntimeEnv {

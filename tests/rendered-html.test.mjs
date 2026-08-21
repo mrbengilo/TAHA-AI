@@ -5,6 +5,11 @@ import test from "node:test";
 
 register(new URL("./cloudflare-workers-loader.mjs", import.meta.url), import.meta.url);
 
+globalThis.__TAHA_TEST_ENV__ = {
+  TRUSTED_PROXY_SECRET: "render-test-proxy-secret",
+  SITES_VIEWER_USER_IDS: "render-test",
+};
+
 const projectRoot = new URL("../", import.meta.url);
 const starterPreviewRoot = new URL("../app/_sites-preview/", import.meta.url);
 const starterMarkers =
@@ -17,9 +22,15 @@ async function render(pathname = "/") {
 
   return worker.fetch(
     new Request(new URL(pathname, "http://localhost"), {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        "oai-authenticated-user-id": "render-test",
+        "x-taha-proxy-secret": "render-test-proxy-secret",
+      },
     }),
     {
+      TRUSTED_PROXY_SECRET: "render-test-proxy-secret",
+      SITES_VIEWER_USER_IDS: "render-test",
       ASSETS: {
         fetch: async () => new Response("Not found", { status: 404 }),
       },

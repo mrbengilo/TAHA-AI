@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const timestamp = (name: string) => integer(name, { mode: "timestamp_ms" });
@@ -263,6 +264,66 @@ export const publishJobs = sqliteTable("publish_jobs", {
   index("idx_publish_jobs_status_available").on(table.status, table.availableAt),
   index("idx_publish_jobs_workspace_status_scheduled").on(table.workspaceId, table.status, table.scheduledFor),
   index("idx_publish_jobs_schedule_time").on(table.scheduleId, table.scheduledFor),
+]);
+
+export const automationRuns = sqliteTable("automation_runs", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  productId: text("product_id").notNull().references(() => products.id),
+  sourceMediaId: text("source_media_id").notNull().references(() => mediaAssets.id),
+  requestKey: text("request_key").notNull(),
+  status: text("status", {
+    enum: ["queued", "processing", "completed", "failed", "cancelled"],
+  }).notNull().default("queued"),
+  requestedImageCount: integer("requested_image_count").notNull().default(6),
+  completedImageCount: integer("completed_image_count").notNull().default(0),
+  targetProviders: jsonText<string[]>("target_providers_json").notNull().default([]),
+  content: jsonText<Record<string, unknown>>("content_json"),
+  outputMediaIds: jsonText<string[]>("output_media_ids_json").notNull().default([]),
+  textModel: text("text_model"),
+  imageModel: text("image_model"),
+  promptVersion: text("prompt_version").notNull().default("taha-product-v1"),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+}, (table) => [
+  uniqueIndex("uq_automation_runs_workspace_request_key").on(table.workspaceId, table.requestKey),
+  uniqueIndex("uq_automation_runs_active_product")
+    .on(table.workspaceId, table.productId)
+    .where(sql`${table.status} IN ('queued', 'processing')`),
+  index("idx_automation_runs_workspace_status_created").on(table.workspaceId, table.status, table.createdAt),
+  index("idx_automation_runs_product_created").on(table.productId, table.createdAt),
+]);
+
+export const automationSteps = sqliteTable("automation_steps", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  runId: text("run_id").notNull().references(() => automationRuns.id),
+  stepType: text("step_type", { enum: ["content", "image", "finalize"] }).notNull(),
+  ordinal: integer("ordinal").notNull().default(0),
+  status: text("status", {
+    enum: ["queued", "processing", "retry_wait", "completed", "failed", "cancelled"],
+  }).notNull().default("queued"),
+  availableAt: timestamp("available_at").notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  leaseOwner: text("lease_owner"),
+  leaseExpiresAt: timestamp("lease_expires_at"),
+  result: jsonText<Record<string, unknown>>("result_json").notNull().default({}),
+  errorCode: text("error_code"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+}, (table) => [
+  uniqueIndex("uq_automation_steps_run_type_ordinal").on(table.runId, table.stepType, table.ordinal),
+  index("idx_automation_steps_status_available").on(table.status, table.availableAt),
+  index("idx_automation_steps_run_status_ordinal").on(table.runId, table.status, table.ordinal),
 ]);
 
 export const channelMappings = sqliteTable("channel_mappings", {

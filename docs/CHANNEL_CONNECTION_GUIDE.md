@@ -2,8 +2,9 @@
 
 Tài liệu này áp dụng cho bản TAHA AI đang triển khai tại:
 
-- Hệ thống: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site`
-- Trung tâm kết nối: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/connections`
+- Hệ thống VPS: `https://tahashoes.store`
+- Trung tâm kết nối: `https://tahashoes.store/connections`
+- Website bán hàng: `https://tahashoes.vn`
 - Ngày đối chiếu tài liệu nền tảng: **21/08/2026**
 
 > Không gửi App Secret, Partner Key, access token, refresh token, mật khẩu, cookie, mã OTP hoặc mã QR qua chat. Chủ tài khoản tự đăng nhập và bấm chấp thuận trên trang chính thức. Bí mật phải được nhập trực tiếp vào secret manager của máy chủ/hosting.
@@ -13,10 +14,11 @@ Tài liệu này áp dụng cho bản TAHA AI đang triển khai tại:
 1. Google Drive: chuẩn bị thư mục ảnh đúng cấu trúc SKU.
 2. Google Sheets: chuẩn bị bảng sản phẩm và xác nhận quyền truy cập.
 3. Google OAuth: cấp quyền chung cho Drive và Sheets, sau đó chạy đồng bộ thử.
-4. Website: cung cấp nền tảng/repository để cài endpoint nhận bài.
-5. Facebook Page: tạo Meta App, cấp quyền Page và đăng một bài thử.
-6. Zalo cá nhân: bật trợ lý đăng thủ công có xác nhận.
-7. TikTok Shop và Shopee: hoàn tất hồ sơ đối tác, ứng dụng và quyền API trước; sau đó mới ủy quyền shop.
+4. OpenAI: lưu API key root-only trên VPS và chạy thử một ảnh.
+5. Website: cài endpoint nhận bài tại `tahashoes.vn`.
+6. Facebook Page: tạo Meta App, cấp quyền Page và đăng một bài thử.
+7. Zalo cá nhân: bật trợ lý đăng thủ công có xác nhận.
+8. TikTok Shop và Shopee: hoàn tất hồ sơ đối tác, ứng dụng và quyền API trước; sau đó mới ủy quyền shop.
 
 Google Drive và Google Sheets xuất hiện thành hai khu vực dữ liệu riêng, nhưng bản hiện tại dùng **một phiên Google OAuth** vì cùng một tài khoản Google cấp quyền cho cả hai API.
 
@@ -44,7 +46,7 @@ TAHA-AI-SAN-PHAM/                 ← GOOGLE_DRIVE_FOLDER_ID
     └── anh-chinh.webp
 ```
 
-TAHA AI hiện đọc tối đa 200 thư mục SKU và tối đa 20 ảnh cho mỗi sản phẩm. Ảnh đặt thẳng ở thư mục gốc không được tự gắn vào một SKU, vì vậy nên luôn dùng thư mục con theo SKU.
+TAHA AI gắn tối đa 20 ảnh nguồn cho mỗi sản phẩm. Thư mục con có tên SKU được ưu tiên. Nếu ảnh đặt thẳng ở thư mục gốc, tên file phải chứa SKU với ranh giới rõ ràng, ví dụ `SP-001-anh-chinh.jpg`; file không khớp duy nhất một SKU sẽ được bỏ qua.
 
 ### 2.2. Giá trị cần nhập trên máy chủ
 
@@ -54,8 +56,8 @@ GOOGLE_DRIVE_FOLDER_ID=<ID_THU_MUC_GOC>
 
 ### 2.3. Điểm cần chủ tài khoản xác nhận
 
-- Tài khoản Google dùng để bấm **Kết nối** phải xem được toàn bộ thư mục gốc và các thư mục con.
-- Nếu thư mục thuộc tài khoản khác hoặc Shared Drive, chủ thư mục phải cấp quyền xem cho tài khoản kết nối.
+- Tài khoản Google dùng để bấm **Kết nối** phải xem và chỉnh sửa được thư mục gốc/thư mục SKU, vì ảnh AI sẽ được lưu lại đúng vị trí nguồn.
+- Nếu thư mục thuộc tài khoản khác hoặc Shared Drive, chủ thư mục phải cấp quyền chỉnh sửa cho tài khoản kết nối.
 - Không đặt thông tin bí mật trong tên file hoặc metadata ảnh.
 
 ## 3. Google Sheets — kho dữ liệu sản phẩm và bài viết nguồn
@@ -103,7 +105,7 @@ GOOGLE_SHEET_RANGE=Products!A:Z
 ### 4.1. Callback phải đăng ký chính xác
 
 ```text
-https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/google/callback
+https://tahashoes.store/api/integrations/google/callback
 ```
 
 Không thêm dấu `/` ở cuối. Google yêu cầu redirect URI khớp chính xác cả giao thức, chữ hoa/thường và dấu gạch chéo.
@@ -118,35 +120,35 @@ Không thêm dấu `/` ở cuối. Google yêu cầu redirect URI khớp chính 
 4. Vào **Audience**:
    - nếu dùng Google Workspace cùng tổ chức, ưu tiên `Internal`;
    - nếu dùng Gmail cá nhân, chọn `External` và thêm chính email kết nối vào **Test users** để thử nghiệm.
-5. Vào **Data Access** và thêm các scope đọc:
+5. Vào **Data Access** và thêm các scope production:
    - `openid`
    - `email`
    - `profile`
-   - `https://www.googleapis.com/auth/drive.readonly`
+   - `https://www.googleapis.com/auth/drive`
    - `https://www.googleapis.com/auth/spreadsheets.readonly`
 6. Vào **Clients → Create Client → Web application**.
 7. Trong **Authorized redirect URIs**, dán đúng callback ở mục 4.1.
 8. Tạo client và lấy `Client ID` cùng `Client Secret`.
 
-Scope `drive.readonly` cho phép đọc/tải tất cả file Drive mà tài khoản có quyền truy cập và được Google xếp loại restricted. Dùng tài khoản ngoài tổ chức để vận hành lâu dài có thể phát sinh quy trình xác minh của Google. Phương án hẹp hơn là `drive.file` kết hợp Google Picker, nhưng bản TAHA AI hiện tại chưa có bước Picker nên chưa sử dụng phương án đó.
+Scope `drive` cho phép đọc ảnh nguồn và tạo file generated trong thư mục SKU hiện hữu, đồng thời được Google xếp loại restricted. Dùng tài khoản ngoài tổ chức để vận hành lâu dài có thể phát sinh quy trình xác minh. Phương án hẹp hơn là `drive.file` kết hợp Google Picker, nhưng TAHA AI hiện chưa có Picker nên cấu hình production phải khớp scope `drive` trong mã nguồn.
 
 ### 4.3. Giá trị cần nhập trên máy chủ
 
 ```dotenv
 GOOGLE_CLIENT_ID=<CLIENT_ID>
 GOOGLE_CLIENT_SECRET=<CLIENT_SECRET>
-GOOGLE_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/google/callback
-GOOGLE_OAUTH_SCOPES=openid email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly
+GOOGLE_REDIRECT_URI=https://tahashoes.store/api/integrations/google/callback
+GOOGLE_OAUTH_SCOPES=openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets.readonly
 ```
 
 Kết hợp với `GOOGLE_DRIVE_FOLDER_ID` và `GOOGLE_SHEET_ID` ở hai phần trước.
 
 ### 4.4. Bước chủ tài khoản bắt buộc tự thực hiện
 
-1. Sau khi các secret đã được nhập, mở [Trung tâm kết nối TAHA AI](https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/connections).
+1. Sau khi các secret đã được nhập, mở [Trung tâm kết nối TAHA AI](https://tahashoes.store/connections).
 2. Tại Google, bấm **Kết nối**.
 3. Tự chọn tài khoản Google đúng và đọc màn hình consent.
-4. Chấp thuận quyền đọc Drive và Sheets.
+4. Chấp thuận quyền đọc/ghi Drive và quyền chỉ đọc Sheets. Nếu trước đây đã cấp `drive.readonly`, bắt buộc kết nối lại; token cũ không tự nhận thêm quyền.
 5. Khi trở lại TAHA AI, bấm **Đồng bộ ngay**.
 
 ### 4.5. Kiểm tra hoàn tất
@@ -154,6 +156,20 @@ Kết hợp với `GOOGLE_DRIVE_FOLDER_ID` và `GOOGLE_SHEET_ID` ở hai phần 
 - Trạng thái Google chuyển thành đã kết nối.
 - Đồng bộ không báo `redirect_uri_mismatch` hoặc thiếu quyền.
 - Sản phẩm từ Sheet xuất hiện và mỗi SKU nhận đúng ảnh trong thư mục Drive tương ứng.
+- Tạo thử một ảnh và xác nhận file được lưu đúng thư mục SKU; gọi lại cùng media không tạo file trùng.
+
+### 4.6. Cấu hình OpenAI cho AI Automation
+
+Khóa OpenAI chỉ lưu trong file secret root-only của VPS, không commit GitHub và không nhập vào trình duyệt:
+
+```dotenv
+OPENAI_API_KEY=<SERVER_SECRET>
+OPENAI_TEXT_MODEL=gpt-5.6-luna
+OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_IMAGE_QUALITY=medium
+```
+
+Sau khi restart container, mở `https://tahashoes.store/automation`, chọn một SKU đã có ảnh nguồn và chạy thử `imageCount: 1`. Kiểm tra nội dung/hashtag, ảnh R2 và file Drive trước khi chạy đủ 6 ảnh. Sáu ảnh chỉ được thay bố cục, nền, ánh sáng và cách trình bày; cần kiểm tra thủ công nhận diện sản phẩm trước khi duyệt đăng.
 
 Tài liệu chính thức: [tạo OAuth client](https://developers.google.com/workspace/guides/create-credentials), [OAuth cho web server](https://developers.google.com/identity/protocols/oauth2/web-server), [scope Google Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth), [scope Google Sheets](https://developers.google.com/workspace/sheets/api/scopes).
 
@@ -166,7 +182,7 @@ Tài liệu chính thức: [tạo OAuth client](https://developers.google.com/wo
 ### 5.2. Callback phải đăng ký chính xác
 
 ```text
-https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/callback
+https://tahashoes.store/api/integrations/facebook/callback
 ```
 
 ### 5.3. Tạo Meta App
@@ -177,7 +193,7 @@ https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/
 4. Trong **App settings → Basic**:
    - ghi lại `App ID`;
    - mở và ghi lại `App Secret` vào secret manager;
-   - thêm app domain `taha-ai-commerce-vn.mrbengilo-76.chatgpt.site` nếu có trường tương ứng.
+   - thêm app domain `tahashoes.store` nếu có trường tương ứng.
 5. Trong **Use cases → Manage everything on your Page → Customize → Permissions and features**, bật/request đúng ba quyền:
    - `pages_show_list` — tìm danh sách Page mà người dùng quản lý;
    - `pages_read_engagement` — đọc thông tin/engagement cần cho Page;
@@ -206,7 +222,7 @@ META_APP_ID=<APP_ID>
 META_APP_SECRET=<APP_SECRET>
 META_LOGIN_CONFIG_ID=<FACEBOOK_LOGIN_FOR_BUSINESS_CONFIGURATION_ID>
 META_GRAPH_API_VERSION=<PHIEN_BAN_DANG_DUOC_APP_SU_DUNG,_VI_DU_vXX.X>
-META_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/callback
+META_REDIRECT_URI=https://tahashoes.store/api/integrations/facebook/callback
 ```
 
 ### 5.6. Bước chủ tài khoản bắt buộc tự thực hiện
@@ -250,7 +266,7 @@ Website dùng webhook do chính website cung cấp; không có OAuth callback.
 - Nền tảng: WooCommerce, Shopify, Haravan, Sapo hoặc website tự viết.
 - Repository hoặc quyền triển khai để thêm endpoint.
 - Cách ánh xạ sản phẩm: SKU, danh mục, biến thể, giá, tồn kho và thư viện ảnh.
-- Endpoint mong muốn, ví dụ `https://shop.example.vn/api/taha/publish`.
+- Endpoint production dự kiến: `https://tahashoes.vn/api/taha/publish` (website phải triển khai hợp đồng ở dưới).
 
 ### 7.2. Hợp đồng webhook hiện tại
 
@@ -276,8 +292,8 @@ Website phải:
 ### 7.3. Giá trị cần nhập trên máy chủ
 
 ```dotenv
-WEBSITE_BASE_URL=https://shop.example.vn
-WEBSITE_PUBLISH_ENDPOINT=https://shop.example.vn/api/taha/publish
+WEBSITE_BASE_URL=https://tahashoes.vn
+WEBSITE_PUBLISH_ENDPOINT=https://tahashoes.vn/api/taha/publish
 WEBSITE_WEBHOOK_SECRET=<SECRET_NGAU_NHIEN_MANH>
 ```
 
@@ -290,7 +306,7 @@ Chủ website cần cấp quyền repository/VPS hoặc đề nghị đội kỹ
 ### 8.1. Callback phải đăng ký chính xác
 
 ```text
-https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/tiktok-shop/callback
+https://tahashoes.store/api/integrations/tiktok-shop/callback
 ```
 
 ### 8.2. Tạo ứng dụng
@@ -319,7 +335,7 @@ TIKTOK_SHOP_MARKET=VN
 TIKTOK_SHOP_APP_KEY=<APP_KEY>
 TIKTOK_SHOP_APP_SECRET=<APP_SECRET>
 TIKTOK_SHOP_SERVICE_ID=<SERVICE_ID>
-TIKTOK_SHOP_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/tiktok-shop/callback
+TIKTOK_SHOP_REDIRECT_URI=https://tahashoes.store/api/integrations/tiktok-shop/callback
 TIKTOK_SHOP_API_BASE_URL=https://open-api.tiktokglobalshop.com
 TIKTOK_SHOP_AUTH_BASE_URL=https://auth.tiktok-shops.com
 TIKTOK_SHOP_AUTHORIZE_URL=https://services.tiktokshop.com/open/authorize
@@ -337,7 +353,7 @@ Mã ủy quyền có thời hạn ngắn và chỉ dùng một lần; không sao
 
 ### 8.5. Điều kiện trước khi đăng sản phẩm thật
 
-Kết nối thành công chưa đồng nghĩa đã có thể tạo listing. Còn phải kiểm tra khả năng nhận listing, upload ảnh vào TikTok Shop, xác định leaf category, lấy schema/thuộc tính bắt buộc, qualification và quy tắc ngành hàng. Bản TAHA AI hiện hoàn tất kết nối/token nhưng chưa bật thao tác ghi listing TikTok Shop.
+Kết nối thành công chưa đồng nghĩa đã có thể tạo listing. Hiện Partner registration/App/scopes của TAHA AI vẫn chờ TikTok Shop phê duyệt, nên chưa được coi là connection live. Sau phê duyệt còn phải kiểm tra upload ảnh, leaf category, schema/thuộc tính, warehouse, khối lượng, biến thể, qualification và quy tắc ngành hàng. Hệ thống có thể chuẩn bị listing draft nhưng chỉ xếp job khi connection thật và preflight đầy đủ; không báo “đã đăng” trước khi TikTok trả external product ID.
 
 Tài liệu chính thức: [tạo ứng dụng](https://partner.tiktokshop.com/docv2/page/create-your-app), [authorization overview](https://partner.tiktokshop.com/docv2/page/authorization-overview-202407), [Get Authorized Shops](https://partner.tiktokshop.com/docv2/page/call-get-authorized-shops), [upload ảnh sản phẩm](https://partner.tiktokshop.com/docv2/page/upload-product-image), [quy trình tạo sản phẩm](https://partner.tiktokshop.com/docv2/page/category-expansion-l7-migration-guide).
 
@@ -346,7 +362,7 @@ Tài liệu chính thức: [tạo ứng dụng](https://partner.tiktokshop.com/d
 ### 9.1. Callback phải đăng ký chính xác
 
 ```text
-https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/shopee/callback
+https://tahashoes.store/api/integrations/shopee/callback
 ```
 
 ### 9.2. Đăng ký đối tác và ứng dụng
@@ -371,7 +387,7 @@ SHOPEE_REGION=VN
 SHOPEE_BASE_URL=https://partner.shopeemobile.com
 SHOPEE_PARTNER_ID=<PARTNER_ID>
 SHOPEE_PARTNER_KEY=<PARTNER_KEY>
-SHOPEE_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/shopee/callback
+SHOPEE_REDIRECT_URI=https://tahashoes.store/api/integrations/shopee/callback
 ```
 
 ### 9.4. Bước chủ shop bắt buộc tự thực hiện
@@ -384,7 +400,7 @@ SHOPEE_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/in
 
 ### 9.5. Điều kiện trước khi đăng sản phẩm thật
 
-Sau khi kết nối, vẫn phải ánh xạ leaf category, thuộc tính bắt buộc, thương hiệu, logistics, biến thể, giá/tồn kho và upload ảnh qua API media của Shopee. Bản TAHA AI hiện hoàn tất luồng kết nối/token nhưng chưa bật thao tác ghi listing Shopee.
+Hồ sơ Shopee Open Platform của TAHA AI hiện vẫn đang xét duyệt; chưa có quyền production thì không có connection live và nút đăng trả `SHOPEE_APPROVAL_PENDING`. Sau phê duyệt vẫn phải ánh xạ leaf category, thuộc tính bắt buộc, thương hiệu, logistics, biến thể, giá/tồn kho và upload ảnh qua Media Space. Hệ thống có thể chuẩn bị listing draft nhưng chưa gọi `add_item`.
 
 Tài liệu chính thức: [Shopee Open Platform](https://open.shopee.com/), [hướng dẫn bắt đầu nền tảng Đối tác dịch vụ Shopee](https://help.shopee.vn/portal/4/article/158953-H%C6%B0%E1%BB%9Bng-d%E1%BA%ABn-B%E1%BA%AFt-%C4%91%E1%BA%A7u-s%E1%BB%AD-d%E1%BB%A5ng-n%E1%BB%81n-t%E1%BA%A3ng-%C4%90%E1%BB%91i-t%C3%A1c-d%E1%BB%8Bch-v%E1%BB%A5-Shopee).
 
@@ -394,7 +410,7 @@ Không dùng một thư mục chung để coi là “đã đăng ở mọi nơi�
 
 | Khu vực | Dữ liệu nguồn | Dữ liệu đầu ra cần lưu riêng |
 |---|---|---|
-| Google Drive | file ảnh và thư mục SKU | media ID, checksum, thời điểm đồng bộ |
+| Google Drive | file ảnh và thư mục SKU | media ID, checksum, ảnh generated đã upload, Drive file ID và thời điểm đồng bộ |
 | Google Sheets | SKU, mô tả, giá, tồn kho | product/variant và hàng nguồn |
 | Facebook | Page connection | caption Facebook, media, Page Post ID/URL |
 | Zalo cá nhân | trợ lý thủ công | caption Zalo, bộ ảnh, trạng thái chờ/xác nhận |
@@ -409,6 +425,7 @@ Một nội dung sửa cho Facebook không được tự ghi đè bản Zalo/Tik
 - [ ] Email Google sẽ cấp quyền và `GOOGLE_DRIVE_FOLDER_ID`.
 - [ ] `GOOGLE_SHEET_ID`, tên tab/range và xác nhận cột SKU.
 - [ ] Google OAuth Client ID; Client Secret nhập trực tiếp vào secret manager.
+- [ ] `OPENAI_API_KEY` đã lưu root-only trên VPS, không nằm trong Git; thử một ảnh thành công trước khi chạy 6 ảnh.
 - [ ] Meta App ID, Graph API version và xác nhận tài khoản Facebook có quyền Content trên Page; App Secret nhập trực tiếp vào secret manager.
 - [ ] Nền tảng/domain/repository của website bán hàng.
 - [ ] TikTok Shop App Key, Service ID và trạng thái app; App Secret nhập trực tiếp vào secret manager.

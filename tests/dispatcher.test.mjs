@@ -29,6 +29,21 @@ class FakeDispatcherD1 {
       bind: (...values) => ({
         all: async () => {
           if (!sql.includes("FROM publish_jobs j")) throw new Error(`Unexpected all: ${sql}`);
+          if (sql.includes("c.provider = 'tiktok_shop'") && sql.includes("j.external_post_id IS NOT NULL")) {
+            const [limit] = values;
+            const rows = [...this.jobs.values()]
+              .filter((job) => {
+                const connection = this.connections.get(job.connection_id);
+                return connection?.provider === "tiktok_shop"
+                  && job.product_id
+                  && job.external_post_id
+                  && ["blocked", "published"].includes(job.status)
+                  && !job.mapping_recorded;
+              })
+              .sort((left, right) => left.updated_at - right.updated_at)
+              .slice(0, limit);
+            return { results: rows };
+          }
           const [now, , limit] = values;
           const rows = [...this.jobs.values()]
             .filter((job) => ["queued", "retry_wait"].includes(job.status) && job.available_at <= now)
@@ -85,6 +100,30 @@ class FakeDispatcherD1 {
           throw new Error(`Unexpected first: ${sql}`);
         },
         run: async () => {
+          if (sql.includes("mapped.external_id = publish_jobs.external_post_id")) {
+            const [completedAt, updatedAt] = values;
+            let changes = 0;
+            for (const job of this.jobs.values()) {
+              const connection = this.connections.get(job.connection_id);
+              if (
+                job.status !== "blocked"
+                || !job.product_id
+                || !job.external_post_id
+                || connection?.provider !== "tiktok_shop"
+                || !job.mapping_recorded
+              ) continue;
+              Object.assign(job, {
+                status: "published",
+                error_code: null,
+                error_message: null,
+                completed_at: job.completed_at ?? completedAt,
+                updated_at: updatedAt,
+              });
+              changes += 1;
+            }
+            return this.result(changes);
+          }
+
           if (sql.includes("LEASE_EXPIRED_RETRY")) {
             const [availableAt, updatedAt, expiresAt] = values;
             let changes = 0;
@@ -104,7 +143,10 @@ class FakeDispatcherD1 {
             return this.result(changes);
           }
 
-          if (sql.includes("DELIVERY_OUTCOME_UNKNOWN")) {
+          if (
+            sql.includes("error_code = 'DELIVERY_OUTCOME_UNKNOWN'")
+            && sql.includes("WHERE status = 'publishing' AND lease_expires_at")
+          ) {
             const [updatedAt, expiresAt] = values;
             let changes = 0;
             for (const job of this.jobs.values()) {
@@ -119,6 +161,104 @@ class FakeDispatcherD1 {
               changes += 1;
             }
             return this.result(changes);
+          }
+
+          if (sql.includes("completed_at = COALESCE(completed_at")) {
+            const [completedAt, updatedAt, id, workspaceId, externalId] = values;
+            const job = this.jobs.get(id);
+            if (
+              !job
+              || job.workspace_id !== workspaceId
+              || job.external_post_id !== externalId
+              || !["blocked", "published"].includes(job.status)
+            ) return this.result(0);
+            Object.assign(job, {
+              status: "published",
+              error_code: null,
+              error_message: null,
+              completed_at: job.completed_at ?? completedAt,
+              updated_at: updatedAt,
+              mapping_recorded: true,
+            });
+            return this.result(1);
+          }
+
+          if (sql.includes("error_code = 'TIKTOK_MAPPING_PENDING'") && sql.includes("external_post_id = ?")) {
+            const [updatedAt, id, workspaceId, externalId] = values;
+            const job = this.jobs.get(id);
+            if (
+              !job
+              || job.workspace_id !== workspaceId
+              || job.external_post_id !== externalId
+              || !["blocked", "published"].includes(job.status)
+            ) return this.result(0);
+            Object.assign(job, {
+              status: "blocked",
+              error_code: "TIKTOK_MAPPING_PENDING",
+              updated_at: updatedAt,
+            });
+            return this.result(1);
+          }
+
+          if (sql.includes("UPDATE publish_jobs SET external_post_id = ?")) {
+            const [externalId, externalUrl, providerResponse, updatedAt, id, workspaceId, workerId] = values;
+            const job = this.jobs.get(id);
+            if (
+              !job
+              || job.workspace_id !== workspaceId
+              || !(
+                (job.status === "publishing" && job.lease_owner === workerId)
+                || (job.status === "blocked" && job.error_code === "DELIVERY_OUTCOME_UNKNOWN" && !job.external_post_id)
+              )
+            ) return this.result(0);
+            Object.assign(job, {
+              external_post_id: externalId,
+              external_url: externalUrl,
+              provider_response_json: providerResponse,
+              updated_at: updatedAt,
+            });
+            return this.result(1);
+          }
+
+          if (sql.includes("external_post_id = ?") && sql.includes("provider_response_json = ?")) {
+            const [
+              externalId,
+              externalUrl,
+              providerResponse,
+              errorCode,
+              errorMessage,
+              updatedAt,
+              id,
+              workspaceId,
+              workerId,
+              recoveredExternalId,
+            ] = values;
+            const job = this.jobs.get(id);
+            if (
+              !job
+              || job.workspace_id !== workspaceId
+              || !(
+                (job.status === "publishing" && job.lease_owner === workerId)
+                || (
+                  job.status === "blocked"
+                  && job.error_code === "DELIVERY_OUTCOME_UNKNOWN"
+                  && job.external_post_id === recoveredExternalId
+                )
+              )
+            ) return this.result(0);
+            Object.assign(job, {
+              status: "blocked",
+              external_post_id: externalId,
+              external_url: externalUrl,
+              provider_response_json: providerResponse,
+              error_code: errorCode,
+              error_message: errorMessage,
+              lease_owner: null,
+              lease_expires_at: null,
+              completed_at: null,
+              updated_at: updatedAt,
+            });
+            return this.result(1);
           }
 
           if (sql.includes("SET status = 'blocked'")) {
@@ -228,6 +368,10 @@ function job(id, connectionId, overrides = {}) {
     available_at: 1_000,
     attempt_count: 0,
     max_attempts: 5,
+    provider_response_json: "{}",
+    external_post_id: null,
+    external_url: null,
+    error_code: null,
     lease_owner: null,
     lease_expires_at: null,
     created_at: 1_000,
@@ -308,6 +452,18 @@ test("dispatches TikTok product drafts, blocks Shopee, and never touches Zalo co
         payload_snapshot_json: JSON.stringify({
           mediaIds: ["media-1"],
           platformData: { tiktokShop: { saveMode: "AS_DRAFT" } },
+          productSnapshot: {
+            id: "product-1",
+            name: "Giày thể thao TAHA chính hãng",
+            description: "Mô tả listing đã duyệt.",
+            currency: "VND",
+            variants: [{
+              id: "variant-1",
+              sku: "TAHA-001",
+              priceMinor: 490000,
+              inventoryQuantity: 12,
+            }],
+          },
         }),
       }),
       job("zalo", "zalo", { status: "awaiting_confirmation" }),
@@ -330,21 +486,212 @@ test("dispatches TikTok product drafts, blocks Shopee, and never touches Zalo co
       };
     },
     recordTikTokShop: async (input) => {
+      assert.equal(database.jobs.get("tiktok").status, "publishing", "mapping must be durable before the job is published");
+      assert.equal(database.jobs.get("tiktok").external_post_id, "tts-product-1", "remote receipt must be durable before mapping");
       mappedInput = input;
       return true;
     },
   });
 
   const result = await runPublishDispatcher({ database, publishers: configured, now: 2_000, workerId: "worker" });
-  assert.equal(result.blocked, 1);
+  assert.equal(result.blocked, 1, JSON.stringify({ result, tiktok: database.jobs.get("tiktok") }));
   assert.equal(result.published, 1);
   assert.equal(database.jobs.get("shop").status, "blocked");
   assert.equal(database.jobs.get("shop").error_code, "COMMERCE_PUBLISH_NOT_IMPLEMENTED");
   assert.equal(database.jobs.get("tiktok").status, "published");
   assert.equal(sentInput.productId, "product-1");
+  assert.equal(sentInput.workerId, "worker");
+  assert.equal(Object.keys(sentInput.progress).length, 0);
+  assert.equal(sentInput.externalId, null);
   assert.equal(sentInput.payload.platformData.tiktokShop.saveMode, "AS_DRAFT");
   assert.equal(mappedInput.externalId, "tts-product-1");
+  assert.equal(mappedInput.payload.productSnapshot.variants[0].sku, "TAHA-001");
   assert.equal(database.jobs.get("zalo").status, "awaiting_confirmation");
+});
+
+test("durably blocks a TikTok mapping failure and reconciles it without resending", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({
+    jobs: [job("tiktok-mapping", "tiktok", {
+      job_kind: "listing_upsert",
+      product_id: "product-1",
+      payload_snapshot_json: JSON.stringify({
+        mediaIds: ["media-1"],
+        productSnapshot: {
+          id: "product-1",
+          name: "Giày thể thao TAHA chính hãng",
+          description: "Mô tả listing đã duyệt.",
+          currency: "VND",
+          variants: [{ id: "variant-1", sku: "TAHA-001", priceMinor: 490000, inventoryQuantity: 12 }],
+        },
+      }),
+    })],
+    connections: [connection("tiktok", "tiktok_shop")],
+  });
+  let sendCalls = 0;
+  let mappingCalls = 0;
+  const configured = publishers({
+    tiktokShop: async () => {
+      sendCalls += 1;
+      return {
+        externalId: "tts-product-1",
+        externalUrl: null,
+        providerResponse: {
+          operation: "created",
+          skus: [{ id: "tts-sku-1", externalSkuId: "variant-1" }],
+        },
+      };
+    },
+    recordTikTokShop: async () => {
+      mappingCalls += 1;
+      return mappingCalls > 1;
+    },
+  });
+
+  const first = await runPublishDispatcher({ database, publishers: configured, now: 2_000, workerId: "worker-a" });
+  const pending = database.jobs.get("tiktok-mapping");
+  assert.equal(sendCalls, 1);
+  assert.equal(mappingCalls, 1);
+  assert.equal(first.published, 0);
+  assert.equal(first.blocked, 1, JSON.stringify({ first, pending }));
+  assert.equal(pending.status, "blocked");
+  assert.equal(pending.error_code, "TIKTOK_MAPPING_PENDING");
+  assert.equal(pending.external_post_id, "tts-product-1");
+  assert.equal(JSON.parse(pending.provider_response_json).operation, "created");
+
+  const second = await runPublishDispatcher({ database, publishers: configured, now: 3_000, workerId: "worker-b" });
+  assert.equal(sendCalls, 1, "reconciliation must never call Create Product again");
+  assert.equal(mappingCalls, 2);
+  assert.equal(second.reconciledMappings, 1);
+  assert.equal(database.jobs.get("tiktok-mapping").status, "published");
+  assert.equal(database.jobs.get("tiktok-mapping").error_code, null);
+  assert.equal(database.jobs.get("tiktok-mapping").completed_at, 3_000);
+});
+
+test("keeps the TikTok receipt reconcilable when lease recovery races remote acceptance", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({
+    jobs: [job("tiktok-lease-race", "tiktok", {
+      job_kind: "listing_upsert",
+      product_id: "product-1",
+      payload_snapshot_json: JSON.stringify({
+        mediaIds: ["media-1"],
+        productSnapshot: {
+          id: "product-1",
+          name: "Giày thể thao TAHA chính hãng",
+          description: "Mô tả listing đã duyệt.",
+          currency: "VND",
+          variants: [{ id: "variant-1", sku: "TAHA-001", priceMinor: 490000, inventoryQuantity: 12 }],
+        },
+      }),
+    })],
+    connections: [connection("tiktok", "tiktok_shop")],
+  });
+  let sendCalls = 0;
+  let mappingCalls = 0;
+  const configured = publishers({
+    tiktokShop: async () => {
+      sendCalls += 1;
+      Object.assign(database.jobs.get("tiktok-lease-race"), {
+        status: "blocked",
+        lease_owner: null,
+        lease_expires_at: null,
+        error_code: "DELIVERY_OUTCOME_UNKNOWN",
+      });
+      return {
+        externalId: "tts-product-race",
+        externalUrl: null,
+        providerResponse: {
+          operation: "created",
+          skus: [{ id: "tts-sku-race", externalSkuId: "variant-1" }],
+        },
+      };
+    },
+    recordTikTokShop: async () => {
+      mappingCalls += 1;
+      return mappingCalls > 1;
+    },
+  });
+
+  const first = await runPublishDispatcher({ database, publishers: configured, now: 2_000, workerId: "worker-a" });
+  const pending = database.jobs.get("tiktok-lease-race");
+  assert.equal(sendCalls, 1);
+  assert.equal(mappingCalls, 1);
+  assert.equal(first.blocked, 1);
+  assert.equal(pending.status, "blocked");
+  assert.equal(pending.error_code, "TIKTOK_MAPPING_PENDING");
+  assert.equal(pending.external_post_id, "tts-product-race");
+
+  const second = await runPublishDispatcher({ database, publishers: configured, now: 3_000, workerId: "worker-b" });
+  assert.equal(sendCalls, 1, "lease recovery reconciliation must not resend Create Product");
+  assert.equal(mappingCalls, 2);
+  assert.equal(second.reconciledMappings, 1);
+  assert.equal(database.jobs.get("tiktok-lease-race").status, "published");
+});
+
+test("finalizes a blocked TikTok job when its matching mapping was already committed", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({
+    jobs: [job("tiktok-confirmation", "tiktok", {
+      job_kind: "listing_upsert",
+      product_id: "product-1",
+      status: "blocked",
+      external_post_id: "tts-product-1",
+      error_code: "LOCAL_CONFIRMATION_FAILED",
+      mapping_recorded: true,
+    })],
+    connections: [connection("tiktok", "tiktok_shop")],
+  });
+  let remoteCalls = 0;
+  let mappingCalls = 0;
+  const configured = publishers({
+    tiktokShop: async () => { remoteCalls += 1; throw new Error("must not resend"); },
+    recordTikTokShop: async () => { mappingCalls += 1; return true; },
+  });
+
+  const result = await runPublishDispatcher({ database, publishers: configured, now: 4_000, workerId: "worker" });
+  assert.equal(remoteCalls, 0);
+  assert.equal(mappingCalls, 0);
+  assert.equal(result.reconciledMappings, 1);
+  assert.equal(database.jobs.get("tiktok-confirmation").status, "published");
+  assert.equal(database.jobs.get("tiktok-confirmation").error_code, null);
+});
+
+test("reconciles a persisted TikTok receipt recovered as an unknown delivery outcome", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({
+    jobs: [job("tiktok-recovered-receipt", "tiktok", {
+      job_kind: "listing_upsert",
+      product_id: "product-1",
+      status: "blocked",
+      external_post_id: "tts-product-recovered",
+      error_code: "DELIVERY_OUTCOME_UNKNOWN",
+      provider_response_json: JSON.stringify({ operation: "created", skus: [] }),
+      payload_snapshot_json: JSON.stringify({
+        productSnapshot: {
+          id: "product-1",
+          name: "Giày TAHA",
+          description: "Mô tả listing đã duyệt.",
+          currency: "VND",
+          variants: [{ id: "variant-1", sku: "TAHA-001", priceMinor: 490000, inventoryQuantity: 12 }],
+        },
+      }),
+    })],
+    connections: [connection("tiktok", "tiktok_shop")],
+  });
+  let sendCalls = 0;
+  let mappingCalls = 0;
+  const configured = publishers({
+    tiktokShop: async () => { sendCalls += 1; throw new Error("must not resend"); },
+    recordTikTokShop: async () => { mappingCalls += 1; return true; },
+  });
+
+  const result = await runPublishDispatcher({ database, publishers: configured, now: 4_000, workerId: "worker" });
+  assert.equal(sendCalls, 0);
+  assert.equal(mappingCalls, 1);
+  assert.equal(result.reconciledMappings, 1);
+  assert.equal(database.jobs.get("tiktok-recovered-receipt").status, "published");
+  assert.equal(database.jobs.get("tiktok-recovered-receipt").error_code, null);
 });
 
 test("blocks a TikTok listing missing operator configuration without retrying", async () => {

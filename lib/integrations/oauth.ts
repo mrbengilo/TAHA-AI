@@ -58,7 +58,7 @@ export async function buildAuthorizationUrl(provider: Exclude<ProviderId, "zalo_
     url.searchParams.set(
       "scope",
       runtime.GOOGLE_OAUTH_SCOPES?.trim()
-        || "openid email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly",
+        || "openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets.readonly",
     );
     url.searchParams.set("state", state);
     return url.toString();

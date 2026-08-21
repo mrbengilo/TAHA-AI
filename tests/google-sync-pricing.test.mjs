@@ -29,6 +29,15 @@ async function loadGoogleSync() {
           getGoogleAccessToken: async () => { throw new Error("Unexpected token access"); },
         };
       }
+      if (specifier === "../media") {
+        return { mediaBlob: async () => { throw new Error("Unexpected media access"); } };
+      }
+      if (specifier === "./google-drive") {
+        return {
+          GoogleDriveError: class GoogleDriveError extends Error {},
+          normalizeSkuKey: (value) => String(value ?? "").normalize("NFKC").replace(/[‐‑‒–—―]/g, "-").replace(/\s+/g, " ").trim().toUpperCase(),
+        };
+      }
       if (specifier === "./store") return { TAHA_WORKSPACE_ID: "workspace-test" };
       throw new Error(`Unexpected import: ${specifier}`);
     },
@@ -91,4 +100,17 @@ test("treats English price as current and compare at price as the higher list pr
   assert.equal(products[0].compareAtPrice, 450_000);
   assert.equal(products[1].price, 399_000);
   assert.equal(products[1].compareAtPrice, null);
+});
+
+test("normalizes SKU keys and reports duplicate Sheet rows before syncing", async () => {
+  const { duplicateCatalogSkus, parseGoogleCatalogRows } = await loadGoogleSync();
+  const products = plain(parseGoogleCatalogRows([
+    ["SKU", "Tên sản phẩm"],
+    ["  taha‑001  ", "Giày be"],
+    ["TAHA-001", "Giày đen"],
+  ]));
+
+  assert.equal(products[0].sku, products[0].sku.trim());
+  assert.equal(products[0].skuKey, "TAHA-001");
+  assert.deepEqual(plain(duplicateCatalogSkus(products)), [{ skuKey: "TAHA-001", rows: [2, 3] }]);
 });

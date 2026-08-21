@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { runAutomationWorker } from "../lib/automation";
 import { runPublishDispatcher } from "../lib/dispatcher";
 import { runSchedulerTick } from "../lib/scheduler";
 
@@ -50,6 +51,8 @@ const worker = {
     return handler.fetch(request, env, ctx);
   },
   scheduled(controller: SchedulerController, env: Env, ctx: ExecutionContext) {
+    // Publishing deadlines must not wait for an image generation request that
+    // can legitimately take several minutes.
     ctx.waitUntil((async () => {
       let schedulerError: unknown = null;
       try {
@@ -62,6 +65,10 @@ const worker = {
       await runPublishDispatcher({ database: env.DB, now: Date.now() });
       if (schedulerError) throw schedulerError;
     })());
+    ctx.waitUntil(
+      runAutomationWorker({ database: env.DB, now: controller.scheduledTime, limit: 1 })
+        .catch((error) => console.error("TAHA automation tick failed", error)),
+    );
   },
 };
 

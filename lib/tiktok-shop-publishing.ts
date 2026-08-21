@@ -19,21 +19,19 @@ import {
   type TikTokProductSnapshot,
 } from "./tiktok-shop-listing";
 
-type ProductRow = {
-  id: string;
-  name: string;
-  description: string;
-  currency: string;
-};
-
-type VariantRow = {
-  id: string;
-  sku: string;
-  price_minor: number;
-  inventory_quantity: number;
-};
-
 type ProductMappingRow = { external_id: string };
+
+type PublishConflictRow = {
+  id: string;
+  status: string;
+  error_code: string | null;
+  external_post_id: string | null;
+};
+
+type TikTokImageUploadState = {
+  mediaId: string;
+  uri: string;
+};
 
 type TikTokSkuResponse = {
   id: string;
@@ -43,8 +41,11 @@ type TikTokSkuResponse = {
 export type TikTokShopRemoteInput = {
   connectionId: string;
   jobId: string;
+  workerId: string;
   productId: string;
   payload: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  externalId?: string | null;
 };
 
 function database() {
@@ -67,29 +68,61 @@ function mediaIds(payload: Record<string, unknown>) {
     : [];
 }
 
-async function productSnapshot(productId: string): Promise<TikTokProductSnapshot> {
-  const product = await database().prepare(
-    `SELECT id, name, description, currency FROM products
-     WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL AND status != 'archived' LIMIT 1`,
-  ).bind(productId, TAHA_WORKSPACE_ID).first<ProductRow>();
-  if (!product) throw new PublishDeliveryError("TIKTOK_PRODUCT_NOT_FOUND");
-  const variants = await database().prepare(
-    `SELECT id, sku, price_minor, inventory_quantity FROM product_variants
-     WHERE product_id = ? AND workspace_id = ? AND status = 'active'
-     ORDER BY sort_order ASC, created_at ASC`,
-  ).bind(productId, TAHA_WORKSPACE_ID).all<VariantRow>();
+function productSnapshot(productId: string, payload: Record<string, unknown>): TikTokProductSnapshot {
+  const product = object(payload.productSnapshot);
+  const id = text(product.id);
+  if (!id || id !== productId || !Array.isArray(product.variants)) {
+    throw new PublishDeliveryError("TIKTOK_PRODUCT_SNAPSHOT_INVALID");
+  }
   return {
-    id: product.id,
-    name: product.name,
-    description: product.description,
-    currency: product.currency,
-    variants: (variants.results ?? []).map((variant) => ({
-      id: variant.id,
-      sku: variant.sku,
-      priceMinor: Number(variant.price_minor),
-      inventoryQuantity: Number(variant.inventory_quantity),
-    })),
+    id,
+    name: text(product.name),
+    description: text(product.description),
+    currency: text(product.currency).toUpperCase(),
+    variants: product.variants.map((value) => {
+      const variant = object(value);
+      return {
+        id: text(variant.id),
+        sku: text(variant.sku),
+        priceMinor: Number(variant.priceMinor),
+        inventoryQuantity: Number(variant.inventoryQuantity),
+      };
+    }),
   };
+}
+
+function imageUploadState(value: Record<string, unknown>) {
+  if (!Array.isArray(value.tiktokImageUploads)) return [];
+  const seen = new Set<string>();
+  return value.tiktokImageUploads.flatMap((entry): TikTokImageUploadState[] => {
+    const item = object(entry);
+    const mediaId = text(item.mediaId);
+    const uri = text(item.uri);
+    if (!mediaId || !uri || seen.has(mediaId)) return [];
+    seen.add(mediaId);
+    return [{ mediaId, uri }];
+  });
+}
+
+async function persistImageUploadState(input: TikTokShopRemoteInput, uploads: TikTokImageUploadState[]) {
+  const nextProgress = {
+    ...input.progress,
+    tiktokImageUploads: uploads,
+  };
+  const result = await database().prepare(
+    `UPDATE publish_jobs SET provider_response_json = ?, updated_at = ?
+     WHERE id = ? AND workspace_id = ? AND status = 'publishing' AND lease_owner = ?`,
+  ).bind(
+    JSON.stringify(nextProgress),
+    Date.now(),
+    input.jobId,
+    TAHA_WORKSPACE_ID,
+    input.workerId,
+  ).run();
+  if (Number(result.meta?.changes ?? 0) !== 1) {
+    throw new PublishDeliveryError("TIKTOK_IMAGE_STATE_PERSIST_FAILED", { outcomeUnknown: true });
+  }
+  input.progress = nextProgress;
 }
 
 function mapApiError(error: unknown): never {
@@ -111,6 +144,32 @@ async function existingProductMapping(connectionId: string, productId: string) {
   ).bind(TAHA_WORKSPACE_ID, connectionId, productId).first<ProductMappingRow>();
 }
 
+async function existingPublishConflict(input: TikTokShopRemoteInput) {
+  return database().prepare(
+    `SELECT existing.id, existing.status, existing.error_code, existing.external_post_id
+     FROM publish_jobs existing
+     WHERE existing.workspace_id = ? AND existing.connection_id = ?
+       AND existing.product_id = ? AND existing.job_kind = 'listing_upsert'
+       AND existing.id != ?
+       AND (
+         existing.status IN ('queued', 'retry_wait', 'publishing')
+         OR existing.error_code = 'TIKTOK_MAPPING_PENDING'
+         OR existing.error_code = 'DELIVERY_OUTCOME_UNKNOWN'
+         OR (
+           existing.external_post_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM channel_mappings mapped
+             WHERE mapped.workspace_id = existing.workspace_id
+               AND mapped.connection_id = existing.connection_id
+               AND mapped.entity_type = 'product'
+               AND mapped.entity_id = existing.product_id
+           )
+         )
+       )
+     ORDER BY existing.created_at ASC LIMIT 1`,
+  ).bind(TAHA_WORKSPACE_ID, input.connectionId, input.productId, input.jobId).first<PublishConflictRow>();
+}
+
 function responseSkus(value: unknown): TikTokSkuResponse[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
@@ -129,7 +188,7 @@ export async function sendTikTokShopListing(input: TikTokShopRemoteInput) {
     const connection = await getConnectedIntegration<RefreshableCredentials>("tiktok_shop", input.connectionId);
     const shopCipher = text(connection.config.shopCipher);
     if (!shopCipher) throw new PublishDeliveryError("TIKTOK_SHOP_CIPHER_MISSING");
-    const product = await productSnapshot(input.productId);
+    const product = productSnapshot(input.productId, input.payload);
     const config = parseTikTokListingConfig(object(input.payload.platformData));
     const selectedMediaIds = mediaIds(input.payload);
     const localIssues = preflightTikTokListing({
@@ -145,25 +204,46 @@ export async function sendTikTokShopListing(input: TikTokShopRemoteInput) {
     // flow is implemented, stop before uploading media or mutating TikTok.
     const existing = await existingProductMapping(input.connectionId, input.productId);
     if (existing) throw new PublishDeliveryError("TIKTOK_PRODUCT_UPDATE_REQUIRES_REMOTE_SNAPSHOT");
+    if (input.externalId) throw new PublishDeliveryError("TIKTOK_PRODUCT_RECONCILIATION_REQUIRED");
+    const conflict = await existingPublishConflict(input);
+    if (
+      conflict?.external_post_id
+      || conflict?.error_code === "TIKTOK_MAPPING_PENDING"
+      || conflict?.error_code === "DELIVERY_OUTCOME_UNKNOWN"
+    ) {
+      throw new PublishDeliveryError("TIKTOK_PRODUCT_RECONCILIATION_REQUIRED");
+    }
+    if (conflict) throw new PublishDeliveryError("TIKTOK_PRODUCT_PUBLISH_IN_FLIGHT");
 
     const accessToken = await getTikTokShopAccessToken(connection);
-    const uploadedImages: Awaited<ReturnType<typeof uploadTikTokShopProductImage>>[] = [];
+    const uploadedImages = imageUploadState(input.progress)
+      .filter((image) => selectedMediaIds.includes(image.mediaId));
     for (const mediaId of selectedMediaIds) {
+      if (uploadedImages.some((image) => image.mediaId === mediaId)) continue;
       const media = await mediaBlob(mediaId, 10 * 1024 * 1024);
       if (!["image/jpeg", "image/png", "image/webp"].includes(media.mimeType.toLowerCase())) {
         throw new PublishDeliveryError("TIKTOK_IMAGE_TYPE_UNSUPPORTED");
       }
-      uploadedImages.push(await uploadTikTokShopProductImage({
+      const uploaded = await uploadTikTokShopProductImage({
         accessToken,
         blob: media.blob,
         filename: media.filename,
-      }));
+      });
+      uploadedImages.push({ mediaId, uri: uploaded.uri });
+      await persistImageUploadState(input, uploadedImages);
+    }
+
+    const orderedImageUris = selectedMediaIds.map((mediaId) => (
+      uploadedImages.find((image) => image.mediaId === mediaId)?.uri ?? ""
+    ));
+    if (orderedImageUris.some((uri) => !uri)) {
+      throw new PublishDeliveryError("TIKTOK_IMAGE_STATE_INCOMPLETE", { outcomeUnknown: true });
     }
 
     const body = buildTikTokCreateProductBody({
       product,
       config,
-      imageUris: uploadedImages.map((image) => image.uri),
+      imageUris: orderedImageUris,
     });
     const response = await callTikTokShopJson({
       path: "/product/202309/products",
@@ -183,6 +263,7 @@ export async function sendTikTokShopListing(input: TikTokShopRemoteInput) {
         operation: "created",
         saveMode: config.saveMode ?? "AS_DRAFT",
         imageCount: uploadedImages.length,
+        tiktokImageUploads: uploadedImages,
         skus: responseSkus(response.data.skus),
       },
     };
@@ -196,8 +277,11 @@ export async function recordTikTokShopMappings(input: {
   productId: string;
   externalId: string;
   providerResponse: Record<string, unknown>;
+  payload: Record<string, unknown>;
 }) {
   const now = Date.now();
+  const product = productSnapshot(input.productId, input.payload);
+  const variantIds = new Set(product.variants.map((variant) => variant.id));
   const statements = [database().prepare(
     `INSERT INTO channel_mappings
      (id, workspace_id, connection_id, entity_type, entity_id, external_id, sync_status,
@@ -209,7 +293,7 @@ export async function recordTikTokShopMappings(input: {
   ).bind(crypto.randomUUID(), TAHA_WORKSPACE_ID, input.connectionId, input.productId, input.externalId, now, now, now)];
   const skus = responseSkus(input.providerResponse.skus);
   for (const sku of skus) {
-    if (!sku.externalSkuId) continue;
+    if (!sku.externalSkuId || !variantIds.has(sku.externalSkuId)) continue;
     statements.push(database().prepare(
       `INSERT INTO channel_mappings
        (id, workspace_id, connection_id, entity_type, entity_id, external_id, external_parent_id,

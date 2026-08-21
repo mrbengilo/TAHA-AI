@@ -30,7 +30,13 @@ function isAllowedValue(value: string | null, allowlistValue?: string, normalize
   return matched;
 }
 
-function isAllowedSitesUser(request: Request, userIds?: string, emails?: string) {
+function hasTrustedIdentityBoundary(request: Request, proxySecret?: string) {
+  const provided = request.headers.get("x-taha-proxy-secret");
+  return Boolean(proxySecret && provided && constantTimeEqual(provided, proxySecret));
+}
+
+function isAllowedSitesUser(request: Request, userIds?: string, emails?: string, proxySecret?: string) {
+  if (!hasTrustedIdentityBoundary(request, proxySecret)) return false;
   const userIdAllowed = isAllowedValue(request.headers.get("oai-authenticated-user-id"), userIds);
   const emailAllowed = isAllowedValue(
     request.headers.get("oai-authenticated-user-email"),
@@ -48,6 +54,7 @@ export function isOperatorRequest(request: Request) {
     request,
     runtime.SITES_OPERATOR_USER_IDS,
     runtime.SITES_OPERATOR_EMAILS,
+    runtime.TRUSTED_PROXY_SECRET,
   );
   const secret = runtime.INTERNAL_API_SECRET;
   const authorization = request.headers.get("authorization");
@@ -62,5 +69,6 @@ export function isViewerRequest(request: Request) {
     request,
     runtime.SITES_VIEWER_USER_IDS,
     runtime.SITES_VIEWER_EMAILS,
+    runtime.TRUSTED_PROXY_SECRET,
   );
 }

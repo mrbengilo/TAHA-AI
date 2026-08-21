@@ -1,4 +1,6 @@
 import { fail, ok } from "../../../../../lib/api";
+import { runAutomationWorker } from "../../../../../lib/automation";
+import { runPublishDispatcher } from "../../../../../lib/dispatcher";
 import { getRuntimeEnv } from "../../../../../lib/integrations/env";
 import { runSchedulerTick } from "../../../../../lib/scheduler";
 
@@ -32,14 +34,22 @@ export async function POST(request: Request) {
   }
 
   try {
-    return ok(await runSchedulerTick(), {
+    const scheduler = await runSchedulerTick();
+    const dispatcher = await runPublishDispatcher();
+    let automation: Awaited<ReturnType<typeof runAutomationWorker>> | { errorCode: string };
+    try {
+      automation = await runAutomationWorker({ limit: 1 });
+    } catch {
+      automation = { errorCode: "AUTOMATION_TICK_FAILED" };
+    }
+    return ok({ automation, scheduler, dispatcher }, {
       headers: { "cache-control": "no-store" },
     });
   } catch (error) {
-    const code = error instanceof Error ? error.message : "SCHEDULER_FAILED";
+    const code = error instanceof Error ? error.message : "CRON_TICK_FAILED";
     if (code === "DATABASE_UNAVAILABLE") {
       return fail(code, "Cơ sở dữ liệu lịch chạy nền chưa sẵn sàng.", 503);
     }
-    return fail("SCHEDULER_FAILED", "Không thể xử lý lịch đăng lúc này.", 500);
+    return fail("CRON_TICK_FAILED", "Không thể xử lý công việc nền lúc này.", 500);
   }
 }

@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+import { isViewerRequest } from "../lib/operator-auth";
 import "./globals.css";
 
 const publicAppUrl = process.env.PUBLIC_APP_URL || "http://localhost:3000";
@@ -28,11 +31,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("host") ?? "localhost";
+  const forwardedProtocol = requestHeaders.get("x-forwarded-proto");
+  const protocol = forwardedProtocol === "http" || forwardedProtocol === "https"
+    ? forwardedProtocol
+    : host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https";
+  if (!isViewerRequest(new Request(`${protocol}://${host}/`, { headers: requestHeaders }))) notFound();
+
   return (
     <html lang="vi">
       <body>{children}</body>

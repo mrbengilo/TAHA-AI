@@ -24,6 +24,10 @@ type CandidateJob = {
   job_kind: JobKind;
   dedupe_key: string;
   payload_snapshot_json: string;
+  provider_response_json: string;
+  external_post_id: string | null;
+  external_url: string | null;
+  error_code: string | null;
   attempt_count: number;
   max_attempts: number;
   provider: Provider;
@@ -34,6 +38,17 @@ type CandidateJob = {
 type LeasedAttempt = {
   attempt_count: number;
   max_attempts: number;
+};
+
+type TikTokMappingCandidate = {
+  id: string;
+  workspace_id: string;
+  connection_id: string;
+  product_id: string;
+  payload_snapshot_json: string;
+  provider_response_json: string;
+  external_post_id: string;
+  external_url: string | null;
 };
 
 type D1WriteResult = { meta?: { changes?: number } };
@@ -72,14 +87,18 @@ export type DispatcherPublishers = {
   tiktokShop(input: {
     connectionId: string;
     jobId: string;
+    workerId: string;
     productId: string;
     payload: Record<string, unknown>;
+    progress: Record<string, unknown>;
+    externalId: string | null;
   }): Promise<RemoteResult>;
   recordTikTokShop(input: {
     connectionId: string;
     productId: string;
     externalId: string;
     providerResponse: Record<string, unknown>;
+    payload: Record<string, unknown>;
   }): Promise<boolean>;
 };
 
@@ -102,6 +121,7 @@ export type DispatcherResult = {
   skipped: number;
   recoveredRetrying: number;
   recoveredBlocked: number;
+  reconciledMappings: number;
   errors: Array<{ jobId: string; code: string }>;
   dispatchedAt: number;
 };
@@ -184,6 +204,7 @@ function isTikTokOperatorBlock(code: string) {
   return code === "TIKTOK_JOB_KIND_UNSUPPORTED"
     || code === "TIKTOK_PRODUCT_ID_REQUIRED"
     || code === "TIKTOK_PRODUCT_NOT_FOUND"
+    || code === "TIKTOK_PRODUCT_SNAPSHOT_INVALID"
     || code === "TIKTOK_SHOP_CIPHER_MISSING"
     || code === "TIKTOK_LISTING_CONFIG_REQUIRED"
     || code === "TIKTOK_CATEGORY_REQUIRED"
@@ -200,6 +221,8 @@ function isTikTokOperatorBlock(code: string) {
     || code === "TIKTOK_INVENTORY_INVALID"
     || code === "TIKTOK_SALES_ATTRIBUTES_REQUIRED"
     || code === "TIKTOK_IMAGE_TYPE_UNSUPPORTED"
+    || code === "TIKTOK_PRODUCT_PUBLISH_IN_FLIGHT"
+    || code === "TIKTOK_PRODUCT_RECONCILIATION_REQUIRED"
     || code === "TIKTOK_PRODUCT_UPDATE_REQUIRES_REMOTE_SNAPSHOT";
 }
 
@@ -291,6 +314,141 @@ async function markBlocked(
   return resultChanges(result) > 0;
 }
 
+async function markAcceptedBlocked(
+  database: DispatcherDatabase,
+  job: CandidateJob,
+  workerId: string,
+  result: RemoteResult,
+  code: string,
+  message: string,
+  now: number,
+) {
+  const updated = await database.prepare(
+    `UPDATE publish_jobs SET status = 'blocked', external_post_id = ?, external_url = ?,
+     provider_response_json = ?, error_code = ?, error_message = ?, lease_owner = NULL,
+     lease_expires_at = NULL, completed_at = NULL, updated_at = ?
+     WHERE id = ? AND workspace_id = ?
+       AND (
+         (status = 'publishing' AND lease_owner = ?)
+         OR (status = 'blocked' AND error_code = 'DELIVERY_OUTCOME_UNKNOWN' AND external_post_id = ?)
+       )`,
+  ).bind(
+    result.externalId,
+    result.externalUrl,
+    JSON.stringify(result.providerResponse),
+    code,
+    message.slice(0, 500),
+    now,
+    job.id,
+    job.workspace_id,
+    workerId,
+    result.externalId,
+  ).run();
+  return resultChanges(updated) > 0;
+}
+
+async function persistAcceptedReceipt(
+  database: DispatcherDatabase,
+  job: CandidateJob,
+  workerId: string,
+  result: RemoteResult,
+  now: number,
+) {
+  const updated = await database.prepare(
+    `UPDATE publish_jobs SET external_post_id = ?, external_url = ?, provider_response_json = ?, updated_at = ?
+     WHERE id = ? AND workspace_id = ?
+       AND (
+         (status = 'publishing' AND lease_owner = ?)
+         OR (status = 'blocked' AND error_code = 'DELIVERY_OUTCOME_UNKNOWN' AND external_post_id IS NULL)
+       )`,
+  ).bind(
+    result.externalId,
+    result.externalUrl,
+    JSON.stringify(result.providerResponse),
+    now,
+    job.id,
+    job.workspace_id,
+    workerId,
+  ).run();
+  return resultChanges(updated) > 0;
+}
+
+async function reconcileTikTokMappings(
+  database: DispatcherDatabase,
+  publishers: DispatcherPublishers,
+  now: number,
+  limit: number,
+) {
+  const finalized = await database.prepare(
+    `UPDATE publish_jobs SET status = 'published', error_code = NULL, error_message = NULL,
+     completed_at = COALESCE(completed_at, ?), updated_at = ?
+     WHERE status = 'blocked' AND product_id IS NOT NULL AND external_post_id IS NOT NULL
+       AND connection_id IN (
+         SELECT id FROM channel_connections WHERE provider = 'tiktok_shop'
+       )
+       AND EXISTS (
+         SELECT 1 FROM channel_mappings mapped
+         WHERE mapped.workspace_id = publish_jobs.workspace_id
+           AND mapped.connection_id = publish_jobs.connection_id
+           AND mapped.entity_type = 'product' AND mapped.entity_id = publish_jobs.product_id
+           AND mapped.external_id = publish_jobs.external_post_id
+       )`,
+  ).bind(now, now).run();
+  const candidates = await database.prepare(
+    `SELECT j.id, j.workspace_id, j.connection_id, j.product_id, j.payload_snapshot_json,
+            j.provider_response_json, j.external_post_id, j.external_url
+     FROM publish_jobs j
+     JOIN channel_connections c ON c.id = j.connection_id AND c.workspace_id = j.workspace_id
+     WHERE c.provider = 'tiktok_shop' AND j.product_id IS NOT NULL
+       AND j.external_post_id IS NOT NULL AND j.status IN ('blocked', 'published')
+       AND NOT EXISTS (
+         SELECT 1 FROM channel_mappings mapped
+         WHERE mapped.workspace_id = j.workspace_id AND mapped.connection_id = j.connection_id
+           AND mapped.entity_type = 'product' AND mapped.entity_id = j.product_id
+       )
+     ORDER BY j.updated_at ASC LIMIT ?`,
+  ).bind(limit).all<TikTokMappingCandidate>();
+  let reconciled = resultChanges(finalized);
+  const errors: Array<{ jobId: string; code: string }> = [];
+
+  for (const job of candidates.results ?? []) {
+    let recorded = false;
+    try {
+      recorded = await publishers.recordTikTokShop({
+        connectionId: job.connection_id,
+        productId: job.product_id,
+        externalId: job.external_post_id,
+        providerResponse: parsePayload(job.provider_response_json),
+        payload: parsePayload(job.payload_snapshot_json),
+      });
+    } catch {
+      recorded = false;
+    }
+
+    if (recorded) {
+      const updated = await database.prepare(
+        `UPDATE publish_jobs SET status = 'published', error_code = NULL, error_message = NULL,
+         completed_at = COALESCE(completed_at, ?), updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND external_post_id = ?
+           AND status IN ('blocked', 'published')`,
+      ).bind(now, now, job.id, job.workspace_id, job.external_post_id).run();
+      if (resultChanges(updated) > 0) reconciled += 1;
+      else errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_RECONCILE_LOST" });
+      continue;
+    }
+
+    await database.prepare(
+      `UPDATE publish_jobs SET status = 'blocked', error_code = 'TIKTOK_MAPPING_PENDING',
+       error_message = 'TikTok đã nhận sản phẩm; hệ thống đang chờ ghi liên kết nội bộ.', updated_at = ?
+       WHERE id = ? AND workspace_id = ? AND external_post_id = ?
+         AND status IN ('blocked', 'published')`,
+    ).bind(now, job.id, job.workspace_id, job.external_post_id).run();
+    errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
+  }
+
+  return { reconciled, errors };
+}
+
 async function markRetryOrFailed(
   database: DispatcherDatabase,
   job: CandidateJob,
@@ -349,6 +507,7 @@ async function markRetryOrFailed(
 async function publishLeasedJob(
   job: CandidateJob,
   publishers: DispatcherPublishers,
+  workerId: string,
 ) {
   const payload = parsePayload(job.payload_snapshot_json);
   if (job.connection_status !== "connected") throw new PublishDeliveryError("CONNECTION_NOT_CONNECTED");
@@ -372,8 +531,11 @@ async function publishLeasedJob(
     return publishers.tiktokShop({
       connectionId: job.connection_id,
       jobId: job.id,
+      workerId,
       productId: job.product_id,
       payload,
+      progress: parsePayload(job.provider_response_json),
+      externalId: job.external_post_id,
     });
   }
   if (job.provider === "shopee") {
@@ -390,10 +552,12 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
   const leaseMs = Math.max(60_000, Math.floor(options.leaseMs ?? DEFAULT_LEASE_MS));
   const workerId = options.workerId ?? crypto.randomUUID();
   const recovered = await recoverExpiredLeases(database, now);
+  const reconciled = await reconcileTikTokMappings(database, publishers, now, limit);
   const due = await database.prepare(
     `SELECT j.id, j.workspace_id, j.connection_id, j.product_id, j.draft_id,
             j.job_kind, j.dedupe_key,
-            j.payload_snapshot_json, j.attempt_count, j.max_attempts,
+            j.payload_snapshot_json, j.provider_response_json, j.external_post_id,
+            j.external_url, j.error_code, j.attempt_count, j.max_attempts,
             c.provider, c.status AS connection_status, c.publish_mode
      FROM publish_jobs j
      JOIN channel_connections c ON c.id = j.connection_id AND c.workspace_id = j.workspace_id
@@ -413,7 +577,8 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
     skipped: 0,
     recoveredRetrying: recovered.retrying,
     recoveredBlocked: recovered.blocked,
-    errors: [],
+    reconciledMappings: reconciled.reconciled,
+    errors: [...reconciled.errors],
     dispatchedAt: now,
   };
 
@@ -427,8 +592,41 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
     summary.leased += 1;
 
     let accepted: RemoteResult | null = null;
+    let tiktokMappingRecorded = false;
     try {
-      accepted = await publishLeasedJob(job, publishers);
+      accepted = await publishLeasedJob(job, publishers, workerId);
+      if (job.provider === "tiktok_shop" && job.product_id) {
+        const receiptSaved = await persistAcceptedReceipt(database, job, workerId, accepted, now);
+        if (!receiptSaved) {
+          throw new PublishDeliveryError("TIKTOK_LOCAL_RECEIPT_PERSIST_FAILED", { outcomeUnknown: true });
+        }
+        try {
+          tiktokMappingRecorded = await publishers.recordTikTokShop({
+            connectionId: job.connection_id,
+            productId: job.product_id,
+            externalId: accepted.externalId,
+            providerResponse: accepted.providerResponse,
+            payload: parsePayload(job.payload_snapshot_json),
+          });
+        } catch {
+          tiktokMappingRecorded = false;
+        }
+        if (!tiktokMappingRecorded) {
+          const changed = await markAcceptedBlocked(
+            database,
+            job,
+            workerId,
+            accepted,
+            "TIKTOK_MAPPING_PENDING",
+            "TikTok đã nhận sản phẩm; hệ thống đang chờ ghi liên kết nội bộ.",
+            now,
+          );
+          if (changed) summary.blocked += 1;
+          else summary.skipped += 1;
+          summary.errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
+          continue;
+        }
+      }
       const saved = await markPublished(database, job, workerId, accepted, now);
       if (!saved) {
         summary.blocked += 1;
@@ -448,32 +646,31 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
           summary.errors.push({ jobId: job.id, code: "FACEBOOK_MAPPING_PENDING" });
         }
       }
-      if (job.provider === "tiktok_shop" && job.product_id) {
-        try {
-          const recorded = await publishers.recordTikTokShop({
-            connectionId: job.connection_id,
-            productId: job.product_id,
-            externalId: accepted.externalId,
-            providerResponse: accepted.providerResponse,
-          });
-          if (!recorded) summary.errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
-        } catch {
-          summary.errors.push({ jobId: job.id, code: "TIKTOK_MAPPING_PENDING" });
-        }
-      }
     } catch (error) {
       if (accepted) {
-        const changed = await markBlocked(
-          database,
-          job,
-          workerId,
-          "LOCAL_CONFIRMATION_FAILED",
-          "Kênh đã nhận nội dung nhưng hệ thống chưa lưu được kết quả; cần đối soát.",
-          now,
-        );
+        const mappingPending = job.provider === "tiktok_shop" && !tiktokMappingRecorded;
+        let changed = false;
+        try {
+          changed = await markAcceptedBlocked(
+            database,
+            job,
+            workerId,
+            accepted,
+            mappingPending ? "TIKTOK_MAPPING_PENDING" : "LOCAL_CONFIRMATION_FAILED",
+            mappingPending
+              ? "TikTok đã nhận sản phẩm; hệ thống đang chờ ghi liên kết nội bộ."
+              : "Kênh đã nhận nội dung nhưng hệ thống chưa lưu được kết quả; cần đối soát.",
+            now,
+          );
+        } catch {
+          changed = false;
+        }
         if (changed) summary.blocked += 1;
         else summary.skipped += 1;
-        summary.errors.push({ jobId: job.id, code: "LOCAL_CONFIRMATION_FAILED" });
+        summary.errors.push({
+          jobId: job.id,
+          code: mappingPending ? "TIKTOK_MAPPING_PENDING" : "LOCAL_CONFIRMATION_FAILED",
+        });
         continue;
       }
       const details = errorDetails(error);

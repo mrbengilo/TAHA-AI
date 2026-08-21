@@ -15,14 +15,40 @@ Google Cloud Project cần bật Drive API và Sheets API. OAuth callback:
 /api/integrations/google/callback
 ```
 
-Quyền đọc nguồn mặc định là `drive.readonly`; `openid`, `email` và `profile` chỉ dùng để đặt nhãn đúng tài khoản cho connection. Nếu endpoint profile tạm lỗi, token Drive vẫn được lưu và kết nối nguồn vẫn hoàn tất. Với mô hình một chủ sở hữu, có thể chuyển sang service account và chỉ chia sẻ đúng thư mục/Sheet nguồn ở giai đoạn sau.
+Scope production hiện tại phải khớp `.env.example` và code OAuth:
+
+```text
+openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets.readonly
+```
+
+`drive` được dùng để vừa đọc ảnh nguồn vừa tải ảnh generated về thư mục SKU hiện có; `spreadsheets.readonly` chỉ đọc bảng Products. `openid`, `email` và `profile` chỉ đặt nhãn đúng tài khoản cho connection. Nếu endpoint profile tạm lỗi, token Drive vẫn được lưu và kết nối nguồn vẫn có thể hoàn tất.
+
+Đây là thay đổi từ cấu hình `drive.readonly`. Token cũ không tự nhận thêm quyền: sau khi sửa consent screen và biến `GOOGLE_OAUTH_SCOPES`, phải ngắt/kết nối lại Google và chấp thuận màn hình consent mới. Nếu không, upload trả `GOOGLE_WRITE_SCOPE_REQUIRED` hoặc connection chuyển sang yêu cầu re-auth. Scope `drive` là restricted; ứng dụng External có thể phải hoàn tất Google verification. Không giảm xuống `drive.file` khi chưa bổ sung Google Picker và kiểm tra quyền với thư mục nguồn hiện hữu.
 
 Sau khi kết nối, gọi `POST /api/integrations/google/sync` để:
 
 1. Đọc bảng sản phẩm.
 2. Tạo/cập nhật sản phẩm và biến thể mặc định.
-3. Tìm thư mục Drive có tên trùng SKU.
-4. Lưu metadata ảnh và liên kết chúng với sản phẩm.
+3. Chuẩn hóa SKU (Unicode, khoảng trắng, dấu gạch ngang, chữ hoa), từ chối SKU trùng trong Sheet.
+4. Ưu tiên thư mục con có tên trùng SKU; nếu không có, khớp file ảnh ở thư mục gốc khi tên file chứa SKU với ranh giới rõ ràng.
+5. Lưu metadata ảnh và liên kết chúng với sản phẩm. Tối đa 20 ảnh nguồn được gắn cho mỗi sản phẩm trong một lần đồng bộ.
+
+Ảnh AI/derived được lưu bằng `POST /api/integrations/google/drive/import`. Hệ thống dùng thư mục đã ghi trong metadata lần sync, gắn app property `tahaMediaId` và không tạo bản sao khi gọi lại. Tài khoản phải có quyền chỉnh sửa thư mục SKU. Nếu không tìm thấy thư mục/ảnh nguồn để xác định vị trí đích, hệ thống giữ ảnh trong R2 và báo rõ lỗi thay vì tải sai chỗ.
+
+## OpenAI tạo nội dung và hình ảnh
+
+Các biến runtime:
+
+```dotenv
+OPENAI_API_KEY=<SERVER_SECRET>
+OPENAI_TEXT_MODEL=gpt-5.6-luna
+OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_IMAGE_QUALITY=medium
+```
+
+`OPENAI_API_KEY` chỉ lưu trong secret root-only của VPS, không commit, không đưa vào image Docker, trình duyệt, response hoặc log. Model text dùng Responses API với JSON Schema nghiêm ngặt để tạo mô tả, hashtag, sáu brief bố cục và nội dung riêng cho từng kênh. Model ảnh dùng Images Edits API với ảnh nguồn, tạo PNG vuông 1024×1024; prompt yêu cầu giữ nguyên hình dáng, tỷ lệ, màu, chất liệu, họa tiết, đường may, logo, nhãn và các chi tiết nhận diện sản phẩm, chỉ thay nền/bối cảnh/ánh sáng/cách trình bày.
+
+Mặc định UI yêu cầu 6 ảnh, nhưng API cho phép từ 1 đến 6. Ảnh hoàn tất được lưu R2 trước rồi mới xuất Drive, vì vậy lỗi Google tạm thời không làm mất kết quả AI.
 
 ## Facebook Page
 
@@ -57,17 +83,17 @@ Không thêm cookie, QR session, emulator hoặc browser bot.
 
 ## Shopee Seller
 
-Shopee live app tại thị trường Việt Nam cần module Shop/Auth, Product read/write, Media Space và Push Mechanism. Callback:
+Shopee live app tại thị trường Việt Nam cần module Shop/Auth, Product read/write, Media Space và Push Mechanism. Hồ sơ TAHA AI hiện vẫn **đang được Shopee xét duyệt**, nên không được đánh dấu kênh là live/connected và nút đăng trả `SHOPEE_APPROVAL_PENDING`. Callback dự kiến:
 
 ```text
 /api/integrations/shopee/callback
 ```
 
-TAHA AI đã tạo URL ký HMAC, đổi authorization code và lưu token/shop ID. Việc `add_item` chỉ bật sau khi live app được duyệt và sản phẩm có đủ leaf category, thuộc tính bắt buộc, vận chuyển, cân nặng/kích thước và image ID từ Media Space.
+TAHA AI đã có mã nguồn tạo URL ký HMAC, đổi authorization code và lưu token/shop ID. Việc `add_item` chỉ bật sau khi hồ sơ/live app được duyệt và sản phẩm có đủ leaf category, thuộc tính bắt buộc, vận chuyển, cân nặng/kích thước và image ID từ Media Space. Listing draft có thể được AI chuẩn bị trước, nhưng không đồng nghĩa đã đăng lên Shopee.
 
 ## TikTok Shop
 
-Phạm vi tối thiểu:
+Phạm vi tối thiểu (hiện còn chờ TikTok Shop xét duyệt/activate):
 
 - `seller.authorization.info`
 - `seller.product.basic`
@@ -79,7 +105,7 @@ Callback:
 /api/integrations/tiktok-shop/callback
 ```
 
-TAHA AI đổi code lấy token và lưu dữ liệu seller/shop. Việc tạo listing chỉ bật sau khi kiểm tra listing prerequisites, category/attributes, image upload URI và yêu cầu KYC/audit của shop Việt Nam.
+TAHA AI có mã nguồn đổi code lấy token và lưu dữ liệu seller/shop. Partner registration, app và scopes phải được TikTok phê duyệt trước khi có connection thật. Việc tạo listing chỉ xếp job sau khi có connection `connected`, draft đã duyệt, ảnh sẵn sàng và vượt qua kiểm tra category/attributes, warehouse, khối lượng, biến thể, image upload URI cùng yêu cầu KYC/audit của shop Việt Nam. Listing draft có thể được tạo trước; hệ thống không báo đã đăng khi app còn chờ duyệt.
 
 ## Website bán hàng
 

@@ -49,6 +49,56 @@ Body tùy chọn:
 { "connectionId": "google-connection-id" }
 ```
 
+Endpoint đọc Sheet, chuẩn hóa SKU, từ chối SKU trùng, tìm ảnh trong thư mục con có tên SKU hoặc tên file ở thư mục gốc có chứa SKU, rồi cập nhật sản phẩm/biến thể/media. Response gồm số sản phẩm, media, SKU folder khớp, file gốc khớp và sản phẩm chưa có ảnh.
+
+### Lưu ảnh generated về Google Drive
+
+- `POST /api/integrations/google/drive/import`
+- `Content-Type: application/json`
+- Request tối đa `16 KB`.
+
+```json
+{
+  "connectionId": "google-connection-id-tuy-chon",
+  "productId": "product-id",
+  "mediaId": "generated-media-id",
+  "filename": "SKU-001-AI-01.png"
+}
+```
+
+Chỉ media ảnh `generated` hoặc `derived`, ở trạng thái `ready` và đã gắn đúng sản phẩm mới được nhận. Sản phẩm phải đến từ lần đồng bộ Google và có thư mục Drive đích đã xác định. Hệ thống tải ảnh vào đúng thư mục SKU, lưu app property `tahaMediaId` để gọi lại không tạo bản sao, rồi cập nhật metadata/audit. HTTP `201` nghĩa là vừa upload; HTTP `200` với `alreadyUploaded: true` nghĩa là file đã tồn tại.
+
+Kết nối Google phải có quyền ghi `https://www.googleapis.com/auth/drive` hoặc `drive.file`. Cấu hình production hiện dùng quyền `drive`; connection cũ chỉ có `drive.readonly` nhận `GOOGLE_WRITE_SCOPE_REQUIRED`/`GOOGLE_REAUTH_REQUIRED` và phải kết nối lại.
+
+## AI Automation
+
+### Tạo và theo dõi công việc
+
+- `GET /api/automation-runs?limit=20` — viewer/operator xem tối đa 50 công việc gần nhất.
+- `POST /api/automation-runs` — operator tạo công việc, giới hạn body `32 KB`.
+- `GET /api/automation-runs/:id` — xem run, từng step và các draft đã tạo.
+- `POST /api/automation-runs/:id/cancel` — hủy run còn `queued` hoặc `processing`.
+
+```json
+{
+  "productId": "product-id",
+  "sourceMediaId": "media-id-tuy-chon",
+  "idempotencyKey": "ai:product-id:2026-08-21:v1",
+  "imageCount": 6,
+  "targetProviders": ["facebook", "zalo_personal", "website", "tiktok_shop", "shopee"]
+}
+```
+
+- `productId` và `idempotencyKey` là bắt buộc; khóa chống trùng phải dài ít nhất 8 ký tự.
+- `sourceMediaId` có thể bỏ; hệ thống chọn ảnh `primary`, rồi `source`, rồi ảnh sẵn sàng đầu tiên của sản phẩm.
+- `imageCount` mặc định `6`, nhận số nguyên từ `1` đến `6`.
+- `targetProviders` mặc định là cả năm kênh ở ví dụ. Hệ thống chỉ giữ năm identifier hợp lệ; nếu sau khi lọc không còn kênh nào thì request bị từ chối.
+- Lần đầu trả HTTP `202`; gửi lại đúng key và đúng payload trả HTTP `200` cùng run với `replayed: true`. Dùng lại key cho payload khác trả `409`.
+
+Mỗi run có step `content`, từ 1 đến 6 step `image`, rồi `finalize`. OpenAI Responses API tạo mô tả/hashtag/nội dung riêng theo kênh; Images Edits API tạo ảnh vuông 1024×1024 từ ảnh gốc. Ảnh được lưu R2 và gắn với sản phẩm/kênh trước, rồi thử xuất về Drive. Lỗi xuất Drive không làm mất ảnh R2; kết quả step ghi `driveExport.status = "pending"` để xử lý lại sau.
+
+Khi `finalize`, hệ thống tạo draft `approved` cho kênh đã chọn. Nếu có connection đang kết nối, Facebook, Zalo cá nhân và Website nhận lịch một lần ở khung giờ gần nhất tiếp theo lần lượt là 08:00, 09:00 và 12:00 giờ Việt Nam; Zalo luôn `assisted`. TikTok Shop/Shopee chỉ nhận `product_listing` draft, không tự đăng.
+
 ## Kho nội dung theo kênh
 
 ### Danh sách kênh
@@ -146,7 +196,7 @@ Mỗi lần nhận từ 1 đến 20 media ID. Đích hợp lệ là `facebook`, 
 
 ### Điều kiện cơ sở dữ liệu
 
-Trước khi dùng `/api/channels`, phải áp dụng **toàn bộ** migration trong `drizzle/` theo thứ tự `0000`, `0001`, `0002`, ... . Local D1 mới hoàn toàn không có các bảng nền nên không được chỉ chạy migration mới nhất. Gói triển khai Sites production chạy toàn bộ migration có trong package.
+Trước khi dùng `/api/channels`, phải áp dụng **toàn bộ** migration trong `drizzle/` theo thứ tự `0000`, `0001`, `0002`, ... . Local/VPS D1 mới hoàn toàn không có các bảng nền nên không được chỉ chạy migration mới nhất. Migration `0003_lazy_hellcat.sql` tạo `automation_runs` và `automation_steps`.
 
 ## Lịch đăng
 
@@ -209,7 +259,20 @@ Trạng thái thật của connector:
 
 - Facebook Page và Website: dispatcher đã gửi tự động các job hợp lệ đến hạn.
 - Zalo cá nhân: chỉ tạo gói nội dung `assisted`; chủ tài khoản tự đăng rồi xác nhận. Không có bot Zalo cá nhân.
-- TikTok Shop và Shopee: OAuth/token refresh đã có, nhưng dispatcher cố ý chặn listing write cho tới khi ứng dụng live được duyệt và ánh xạ dữ liệu thị trường hoàn chỉnh.
+- TikTok Shop và Shopee: connector OAuth/token refresh đã có trong mã nguồn, nhưng trạng thái live phụ thuộc phê duyệt bên ngoài. Không được coi app/connection là hoạt động chỉ vì đã tạo key hoặc draft.
+
+### Đăng sản phẩm lên sàn bằng một nút
+
+- `POST /api/commerce/:provider/products/:productId/publish`
+- `provider` chỉ nhận `tiktok_shop` hoặc `shopee`.
+
+Body tùy chọn:
+
+```json
+{ "connectionId": "commerce-connection-id" }
+```
+
+Shopee hiện trả `409 SHOPEE_APPROVAL_PENDING` vì hồ sơ Open Platform chưa được duyệt; không gọi `add_item`. TikTok Shop chỉ xếp job `listing_upsert` khi đồng thời có connection `connected`, draft `product_listing` đã duyệt, ảnh sẵn sàng, chưa có mapping sản phẩm từ xa và preflight đủ danh mục, kho, khối lượng/thuộc tính biến thể. Thiếu điều kiện trả lỗi `409` kèm danh sách `issues`; thành công trả HTTP `202` và job. Dedupe key dựa trên connection, product version và draft version nên bấm lại không tạo job trùng.
 
 Facebook:
 
@@ -244,3 +307,16 @@ Zalo cá nhân:
 ```
 
 Mọi lần xuất bản tạo một record `publish_jobs`. Cùng một idempotency key không được gửi lại âm thầm; lỗi không rõ kết quả phải đối soát trước khi retry.
+
+## Tick chạy nền
+
+- `POST /api/internal/cron/tick`
+- Bắt buộc `Authorization: Bearer <INTERNAL_API_SECRET>`.
+
+Mỗi tick chạy theo thứ tự:
+
+1. `runAutomationWorker({ limit: 1 })` — xử lý tối đa một step AI để tránh chiếm worker quá lâu;
+2. scheduler tạo publish job đến hạn;
+3. dispatcher phát các job đủ điều kiện.
+
+Response trả riêng `automation`, `scheduler` và `dispatcher`. Secret chỉ được đặt trong tiến trình cron/root-only trên VPS, không dùng trong JavaScript trình duyệt.
