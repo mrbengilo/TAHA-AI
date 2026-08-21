@@ -5,7 +5,12 @@ ENV PATH=/pnpm:$PATH
 ENV NODE_ENV=production
 ENV WRANGLER_SEND_METRICS=false
 
-RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && update-ca-certificates \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable \
+  && corepack prepare pnpm@11.19.0 --activate
 
 WORKDIR /app
 
