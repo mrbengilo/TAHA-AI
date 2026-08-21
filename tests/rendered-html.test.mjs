@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { register } from "node:module";
 import test from "node:test";
 
@@ -50,6 +50,17 @@ async function assertHtmlResponse(pathname) {
   return response.text();
 }
 
+async function collectAppSourceFiles(directory = new URL("../app/", import.meta.url)) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(entries.map(async (entry) => {
+    const entryUrl = new URL(entry.name + (entry.isDirectory() ? "/" : ""), directory);
+    if (entry.isDirectory()) return collectAppSourceFiles(entryUrl);
+    return /\.[cm]?[jt]sx?$/.test(entry.name) ? [entryUrl] : [];
+  }));
+
+  return files.flat();
+}
+
 test("server-renders the TAHA AI operations dashboard", async () => {
   const html = await assertHtmlResponse("/");
 
@@ -62,6 +73,10 @@ test("server-renders the TAHA AI operations dashboard", async () => {
   assert.match(html, /Nội dung của bạn/);
   assert.match(html, /Mọi kênh, một nhịp vận hành/);
   assert.match(html, /Kết nối kênh/);
+  assert.match(
+    html,
+    /<a(?=[^>]*\bhref=["']\/connections["'])(?=[^>]*\bclass=["'][^"']*\bnav-item\b)[^>]*>/i,
+  );
   assert.doesNotMatch(html, starterMarkers);
 
   assertMeta(
@@ -77,6 +92,20 @@ test("server-renders the TAHA AI operations dashboard", async () => {
     "Google Drive và Sheet đi vào một luồng duyệt, lên lịch và xuất bản đa kênh\\.",
   );
   assertMeta(html, "property", "og:image", "[^\"']*\\/og\\.png");
+});
+
+test("uses native anchors without loading the next/link prefetch runtime", async () => {
+  const sourceFiles = await collectAppSourceFiles();
+  const nextLinkImport = /(?:\bfrom\s*|\bimport\s*)["']next\/link["']|\brequire\(\s*["']next\/link["']\s*\)/;
+
+  assert.ok(sourceFiles.length > 0);
+  for (const sourceFile of sourceFiles) {
+    const source = await readFile(sourceFile, "utf8");
+    assert.doesNotMatch(source, nextLinkImport, `${sourceFile.pathname} must use SiteLink or a native anchor`);
+  }
+
+  const siteLink = await readFile(new URL("../app/SiteLink.tsx", import.meta.url), "utf8");
+  assert.match(siteLink, /return\s*<a\s+href=\{href\}\s+\{\.\.\.props\}>\{children\}<\/a>/);
 });
 
 test("server-renders the channel connection center", async () => {

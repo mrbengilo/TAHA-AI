@@ -172,19 +172,21 @@ https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/
 ### 5.3. Tạo Meta App
 
 1. Đăng nhập [Meta for Developers](https://developers.facebook.com/apps/) bằng Facebook cá nhân đang quản lý Page.
-2. Bấm **Create App** và chọn use case có Facebook Login/Pages API. Nếu giao diện hỏi loại ứng dụng, dùng loại `Business`.
+2. Bấm **Create App** và chọn use case **Manage everything on your Page**. Nếu giao diện hỏi loại ứng dụng, dùng loại `Business`.
 3. Liên kết Business Portfolio của doanh nghiệp nếu Meta yêu cầu.
 4. Trong **App settings → Basic**:
    - ghi lại `App ID`;
    - mở và ghi lại `App Secret` vào secret manager;
    - thêm app domain `taha-ai-commerce-vn.mrbengilo-76.chatgpt.site` nếu có trường tương ứng.
-5. Thêm sản phẩm/use case **Facebook Login** hoặc **Facebook Login for Business**.
-6. Trong phần OAuth client settings, thêm callback mục 5.2 vào **Valid OAuth Redirect URIs**.
-7. Chọn một Graph API version vẫn còn được Meta hỗ trợ cho ứng dụng và nhập nguyên dạng, ví dụ `vXX.X`; không tự đoán phiên bản.
-8. Bật/request đúng ba quyền:
+5. Trong **Use cases → Manage everything on your Page → Customize → Permissions and features**, bật/request đúng ba quyền:
    - `pages_show_list` — tìm danh sách Page mà người dùng quản lý;
    - `pages_read_engagement` — đọc thông tin/engagement cần cho Page;
    - `pages_manage_posts` — tạo, sửa và xóa bài của Page.
+6. Trong **Facebook Login for Business → Settings**, bật **Client OAuth Login**, **Web OAuth Login**, **Enforce HTTPS** và **Strict Mode for Redirect URIs**; thêm callback mục 5.2 vào **Valid OAuth Redirect URIs**.
+7. Trong **Facebook Login for Business → Configurations**, tạo configuration tên `TAHA AI Page OAuth`, chọn login variation `General`, chọn `User access token`, thêm đúng ba quyền ở bước 5 và lưu lại `Configuration ID`.
+8. Chọn một Graph API version vẫn còn được Meta hỗ trợ cho ứng dụng và nhập nguyên dạng, ví dụ `vXX.X`; không tự đoán phiên bản.
+
+Facebook Login for Business dùng `Configuration ID` qua tham số `config_id`; không truyền danh sách `scope` trong URL OAuth. Connector hiện tại là luồng redirect phía máy chủ nên không cần bật JavaScript SDK. Tạm để **Require App Secret** tắt cho đến khi mọi Graph API request của hệ thống gửi `appsecret_proof`.
 
 Nếu chỉ kết nối Page của chính chủ hệ thống trong giai đoạn thử nghiệm, tài khoản Facebook đó phải là Admin/Developer/Tester của Meta App. Nếu cho tài khoản bên ngoài kết nối, cần đưa app sang Live và hoàn tất các yêu cầu hiện hành của Meta như Business Verification, App Review/Advanced Access, privacy policy và data deletion instructions.
 
@@ -202,6 +204,7 @@ TAHA AI chỉ lưu những Page mà phản hồi Meta cho thấy tài khoản c�
 ```dotenv
 META_APP_ID=<APP_ID>
 META_APP_SECRET=<APP_SECRET>
+META_LOGIN_CONFIG_ID=<FACEBOOK_LOGIN_FOR_BUSINESS_CONFIGURATION_ID>
 META_GRAPH_API_VERSION=<PHIEN_BAN_DANG_DUOC_APP_SU_DUNG,_VI_DU_vXX.X>
 META_REDIRECT_URI=https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/callback
 ```

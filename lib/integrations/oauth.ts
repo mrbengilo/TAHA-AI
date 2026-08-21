@@ -69,8 +69,9 @@ export async function buildAuthorizationUrl(provider: Exclude<ProviderId, "zalo_
     const url = new URL(`https://www.facebook.com/${version}/dialog/oauth`);
     url.searchParams.set("client_id", requireEnv("META_APP_ID"));
     url.searchParams.set("redirect_uri", requireEnv("META_REDIRECT_URI"));
+    url.searchParams.set("config_id", requireEnv("META_LOGIN_CONFIG_ID"));
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", "pages_show_list,pages_read_engagement,pages_manage_posts");
+    url.searchParams.set("override_default_response_type", "true");
     url.searchParams.set("state", state);
     return url.toString();
   }

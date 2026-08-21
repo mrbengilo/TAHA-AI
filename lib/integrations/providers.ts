@@ -53,7 +53,7 @@ export const providerDefinitions: Record<ProviderId, ProviderDefinition> = {
     role: "publisher",
     publishMode: "api",
     capabilities: ["Đăng bài tự động", "Đăng nhiều ảnh", "Lưu Post ID"],
-    required: ["PUBLIC_APP_URL", "OAUTH_STATE_SECRET", "INTEGRATION_TOKEN_ENCRYPTION_KEY", "META_APP_ID", "META_APP_SECRET", "META_GRAPH_API_VERSION", "META_REDIRECT_URI"],
+    required: ["PUBLIC_APP_URL", "OAUTH_STATE_SECRET", "INTEGRATION_TOKEN_ENCRYPTION_KEY", "META_APP_ID", "META_APP_SECRET", "META_LOGIN_CONFIG_ID", "META_GRAPH_API_VERSION", "META_REDIRECT_URI"],
     callbackPath: "/api/integrations/facebook/callback",
     setupUrl: "https://developers.facebook.com/apps/",
     setupLabel: "Mở Meta for Developers",

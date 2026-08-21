@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "../SiteLink";
 import { useCallback, useEffect, useState } from "react";
 
 type Connection = {
@@ -58,6 +58,7 @@ function publicVariableName(value: string) {
     GOOGLE_CLIENT_ID: "Google Client ID", GOOGLE_CLIENT_SECRET: "Google Client Secret",
     GOOGLE_REDIRECT_URI: "Google callback URL", GOOGLE_DRIVE_FOLDER_ID: "Thư mục Google Drive",
     GOOGLE_SHEET_ID: "Google Sheet", META_APP_ID: "Meta App ID", META_APP_SECRET: "Meta App Secret",
+    META_LOGIN_CONFIG_ID: "Meta Login Configuration ID",
     META_GRAPH_API_VERSION: "Phiên bản Meta API", META_REDIRECT_URI: "Facebook callback URL",
     SHOPEE_BASE_URL: "Shopee API URL", SHOPEE_PARTNER_ID: "Shopee Partner ID",
     SHOPEE_PARTNER_KEY: "Shopee Partner Key", SHOPEE_REDIRECT_URI: "Shopee callback URL",

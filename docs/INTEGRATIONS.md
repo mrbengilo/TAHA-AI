@@ -26,17 +26,21 @@ Sau khi kết nối, gọi `POST /api/integrations/google/sync` để:
 
 ## Facebook Page
 
-Meta App cần các quyền:
+Tạo Meta App với use case **Manage everything on your Page**, sau đó thêm các quyền:
 
 - `pages_show_list`
 - `pages_read_engagement`
 - `pages_manage_posts`
+
+Trong **Facebook Login for Business → Configurations**, tạo một configuration loại `General`, chọn `User access token`, thêm đúng ba quyền trên và lưu `Configuration ID`. TAHA AI dùng ID này qua `META_LOGIN_CONFIG_ID`; luồng Facebook Login for Business truyền `config_id` thay cho danh sách `scope` trong URL OAuth.
 
 Callback:
 
 ```text
 /api/integrations/facebook/callback
 ```
+
+Thêm callback chính xác vào **Facebook Login for Business → Settings → Valid OAuth Redirect URIs**. Cấu hình máy chủ cần `META_APP_ID`, `META_APP_SECRET`, `META_LOGIN_CONFIG_ID`, `META_GRAPH_API_VERSION` và `META_REDIRECT_URI`.
 
 Người cấp quyền phải có quyền tạo nội dung trên Page. Khi OAuth hoàn tất, TAHA AI lưu từng Page như một connection riêng. Endpoint `POST /api/publish/facebook` nhận nội dung, media ID và idempotency key; ảnh Drive được tải bằng quyền Google rồi upload nhị phân lên Meta.
 

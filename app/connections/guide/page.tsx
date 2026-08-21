@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import Link from "../../SiteLink";
 import "./guide.css";
 
 type GuideStep = {
@@ -75,12 +75,13 @@ const channels: ChannelGuide[] = [
     officialUrl: "https://developers.facebook.com/apps/",
     officialLabel: "Mở Meta for Developers",
     callback: `${appOrigin}/api/integrations/facebook/callback`,
-    required: ["Meta App ID", "Meta App Secret", "Graph API version", "Quyền nội dung trên Page"],
+    required: ["Meta App ID", "Meta App Secret", "Login Configuration ID", "Graph API version", "Quyền nội dung trên Page"],
     steps: [
       { title: "Mở đúng cổng Meta", detail: "Vào Meta for Developers, không dùng work.meta.com hoặc màn hình Workplace.", owner: true },
-      { title: "Tạo Business App", detail: "Tạo app có Facebook Login/Pages API và liên kết Business Portfolio nếu Meta yêu cầu.", owner: true },
-      { title: "Khai báo callback", detail: "Thêm địa chỉ callback bên dưới vào Valid OAuth Redirect URIs." },
-      { title: "Bật ba quyền", detail: "Request pages_show_list, pages_read_engagement và pages_manage_posts." },
+      { title: "Tạo app quản lý Page", detail: "Chọn use case Manage everything on your Page và liên kết Business Portfolio nếu Meta yêu cầu.", owner: true },
+      { title: "Khai báo callback", detail: "Trong Facebook Login for Business → Settings, bật Web OAuth/HTTPS/Strict Mode và thêm callback bên dưới." },
+      { title: "Tạo Login Configuration", detail: "Tạo cấu hình General dùng User access token; lưu Configuration ID vào secret manager." },
+      { title: "Bật ba quyền", detail: "Thêm pages_show_list, pages_read_engagement và pages_manage_posts vào configuration." },
       { title: "Ủy quyền Page", detail: "Đăng nhập tài khoản có quyền Content trên Page, chọn đúng Page và chấp thuận quyền.", owner: true },
     ],
     checkpoint: "Đăng một bài chỉ có chữ, sau đó thử một bài có ảnh và kiểm tra Post URL được lưu.",

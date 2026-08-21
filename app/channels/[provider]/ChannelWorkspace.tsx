@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "../../SiteLink";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import {
   channelDefinitions,

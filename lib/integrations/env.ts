@@ -20,6 +20,7 @@ export type RuntimeEnv = {
   GOOGLE_SERVICE_ACCOUNT_JSON_B64?: string;
   META_APP_ID?: string;
   META_APP_SECRET?: string;
+  META_LOGIN_CONFIG_ID?: string;
   META_GRAPH_API_VERSION?: string;
   META_REDIRECT_URI?: string;
   SHOPEE_ENV?: string;
