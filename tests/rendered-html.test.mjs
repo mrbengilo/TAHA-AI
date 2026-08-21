@@ -69,13 +69,13 @@ test("server-renders the TAHA AI operations dashboard", async () => {
     html,
     /<title>TAHA AI (?:—|&#x2014;) Trung tâm vận hành bán hàng đa kênh<\/title>/i,
   );
-  assert.match(html, /Chào buổi sáng, TAHA\./);
-  assert.match(html, /Nội dung của bạn/);
-  assert.match(html, /Mọi kênh, một nhịp vận hành/);
-  assert.match(html, /Kết nối kênh/);
+  assert.match(html, /Xin chào, TaHa Team!/);
+  assert.match(html, /Kênh tích hợp/);
+  assert.match(html, /AI Automation đang hoạt động/);
+  assert.match(html, /Sức khỏe hệ thống/);
   assert.match(
     html,
-    /<a(?=[^>]*\bhref=["']\/connections["'])(?=[^>]*\bclass=["'][^"']*\bnav-item\b)[^>]*>/i,
+    /<nav[^>]*\bclass=["'][^"']*\bdash-nav\b[^>]*>[\s\S]*?<a[^>]*\bhref=["']\/connections["'][^>]*>/i,
   );
   assert.doesNotMatch(html, starterMarkers);
 
