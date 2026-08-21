@@ -51,3 +51,11 @@ Endpoint nội bộ thực hiện cùng luồng scheduler và dispatcher, không
 - Khi chạy độc lập trên VPS/reverse proxy, dùng `Authorization: Bearer <INTERNAL_API_SECRET>` từ một proxy/backend đã xác thực. Không đưa secret này vào JavaScript trình duyệt.
 - Bypass cho `localhost`, `127.0.0.1` và `::1` chỉ hoạt động ở build không phải production. Production luôn cần Sites user nằm trong allowlist hoặc Bearer secret hợp lệ.
 - Tạo `INTERNAL_API_SECRET`, `OAUTH_STATE_SECRET` và `INTEGRATION_TOKEN_ENCRYPTION_KEY` độc lập, ngẫu nhiên, rồi lưu bằng secret manager của môi trường triển khai.
+
+## Chạy độc lập trên VPS
+
+VPS dùng `deploy/vps/Dockerfile` và `wrangler.vps.jsonc` để chạy Worker cục bộ với D1/R2 được lưu bền vững trong volume `/data`. Mount file secret của máy chủ vào `/app/.dev.vars` ở chế độ chỉ đọc và không đưa file đó vào image hoặc Git.
+
+Đặt container sau reverse proxy HTTPS. Reverse proxy phải xác thực quản trị viên, xóa mọi header `oai-authenticated-user-*` do client gửi, rồi tự gắn `oai-authenticated-user-email` khớp `SITES_OPERATOR_EMAILS`. Route `/api/internal/cron/tick` có thể bỏ Basic Auth tại proxy vì bản thân route vẫn bắt buộc `Authorization: Bearer INTERNAL_API_SECRET`.
+
+Thư mục `/data` chứa database, media và trạng thái runtime. Phải sao lưu thư mục này trước khi thay máy chủ hoặc phục hồi phiên bản.
