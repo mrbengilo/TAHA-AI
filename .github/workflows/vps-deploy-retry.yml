@@ -1,0 +1,171 @@
+name: TAHA VPS production deploy retry
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-deploy-retry.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Build, smoke test, deploy and verify Google
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s -- "$TARGET_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          TARGET_SHA="$1"
+          REPO=/var/www/taha-ai
+          DATA=/var/lib/taha-ai
+          ENV_FILE=/etc/taha-ai/.dev.vars
+          IMAGE_REPO=tahashoes-taha-ai
+          NETWORK=tahashoes_default
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          OLD_SHA=$(git -C "$REPO" rev-parse HEAD)
+          OLD_SHORT=${OLD_SHA:0:12}
+          BACKUP_DIR="/var/backups/taha-ai/${STAMP}-${OLD_SHORT}"
+          NEW_IMAGE="${IMAGE_REPO}:${TARGET_SHA}"
+          CANDIDATE="taha-ai-candidate-${STAMP}"
+          STAGE_DATA="/var/lib/taha-ai-candidate-${STAMP}"
+          ROLLBACK="taha-ai-rollback-${STAMP}"
+          TIMER_WAS_ACTIVE=no
+
+          test -d "$REPO/.git" && test -d "$DATA" && test -f "$ENV_FILE"
+          docker inspect taha-ai >/dev/null
+          docker network inspect "$NETWORK" >/dev/null
+          install -d -m 700 /var/backups/taha-ai "$BACKUP_DIR"
+          tar -C /var/lib -czf "$BACKUP_DIR/data.tgz" taha-ai
+          cp "$ENV_FILE" "$BACKUP_DIR/.dev.vars" && chmod 600 "$BACKUP_DIR/.dev.vars"
+          docker inspect taha-ai > "$BACKUP_DIR/taha-ai.inspect.json"
+          echo "$OLD_SHA" > "$BACKUP_DIR/source-commit.txt"
+          current_image=$(docker inspect taha-ai -f '{{.Image}}')
+          docker tag "$current_image" "${IMAGE_REPO}:rollback-${OLD_SHORT}"
+          echo "BACKUP_OK=$BACKUP_DIR"
+
+          FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
+          [ "$FREE_KB" -ge 5242880 ] || { echo "LOW_DISK_KB=$FREE_KB"; exit 31; }
+
+          git -C "$REPO" fetch origin main --prune
+          git -C "$REPO" cat-file -e "${TARGET_SHA}^{commit}"
+          git -C "$REPO" checkout -q main
+          git -C "$REPO" reset --hard "$TARGET_SHA"
+          test -z "$(git -C "$REPO" status --porcelain)"
+          echo "SOURCE_READY=$TARGET_SHA"
+
+          cd "$REPO"
+          DOCKER_BUILDKIT=0 docker build -f deploy/vps/Dockerfile -t "$NEW_IMAGE" -t "${IMAGE_REPO}:latest" .
+          echo "IMAGE_READY=$NEW_IMAGE"
+
+          rm -rf "$STAGE_DATA"
+          cp -a "$DATA" "$STAGE_DATA"
+          docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
+          docker run -d --name "$CANDIDATE" --network "$NETWORK" -p 127.0.0.1:18787:8787 \
+            -v "$STAGE_DATA:/data" -v "$ENV_FILE:/app/.dev.vars:ro" "$NEW_IMAGE" >/dev/null
+          candidate_ok=no
+          for i in $(seq 1 75); do
+            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/ 2>/dev/null || true)
+            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/automation 2>/dev/null || true)
+            x=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/api/integrations 2>/dev/null || true)
+            if [ "$r" = 200 ] && [ "$a" = 200 ] && [ "$x" = 401 ]; then candidate_ok=yes; break; fi
+            sleep 2
+          done
+          if [ "$candidate_ok" != yes ]; then
+            echo "CANDIDATE_FAILED root=$r automation=$a api=$x"
+            docker logs --tail 160 "$CANDIDATE" 2>&1 || true
+            docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$STAGE_DATA"
+            exit 32
+          fi
+          echo 'CANDIDATE_OK=yes'
+          docker rm -f "$CANDIDATE" >/dev/null
+          rm -rf "$STAGE_DATA"
+
+          if systemctl is-active --quiet taha-ai-cron.timer; then TIMER_WAS_ACTIVE=yes; systemctl stop taha-ai-cron.timer; fi
+          restore() {
+            set +e
+            docker rm -f taha-ai >/dev/null 2>&1 || true
+            if docker inspect "$ROLLBACK" >/dev/null 2>&1; then
+              docker rename "$ROLLBACK" taha-ai >/dev/null 2>&1 || true
+              docker update --restart=always taha-ai >/dev/null 2>&1 || true
+              docker start taha-ai >/dev/null 2>&1 || true
+            fi
+            [ "$TIMER_WAS_ACTIVE" = yes ] && systemctl start taha-ai-cron.timer >/dev/null 2>&1 || true
+            set -e
+          }
+
+          docker stop --time 30 taha-ai >/dev/null
+          docker rename taha-ai "$ROLLBACK"
+          docker update --restart=no "$ROLLBACK" >/dev/null
+          if ! docker run -d --name taha-ai --restart always --network "$NETWORK" -p 127.0.0.1:8787:8787 \
+            -v "$DATA:/data" -v "$ENV_FILE:/app/.dev.vars:ro" "$NEW_IMAGE" >/dev/null; then restore; exit 33; fi
+
+          prod_ok=no
+          for i in $(seq 1 90); do
+            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/ 2>/dev/null || true)
+            c=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/connections 2>/dev/null || true)
+            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/automation 2>/dev/null || true)
+            x=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/api/integrations 2>/dev/null || true)
+            if [ "$r" = 200 ] && [ "$c" = 200 ] && [ "$a" = 200 ] && [ "$x" = 401 ]; then prod_ok=yes; break; fi
+            sleep 2
+          done
+          if [ "$prod_ok" != yes ]; then
+            echo "PROD_FAILED root=$r connections=$c automation=$a api=$x"
+            docker logs --tail 180 taha-ai 2>&1 || true
+            restore
+            exit 34
+          fi
+          echo 'PRODUCTION_OK=yes'
+
+          read_var() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -1 | tr -d '\r')
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          secret=$(read_var INTERNAL_API_SECRET)
+          [ -n "$secret" ] || { restore; exit 35; }
+          auth_code=$(curl -sS -o /tmp/integrations.json -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/api/integrations || true)
+          [ "$auth_code" = 200 ] || { echo "AUTH_API_FAILED=$auth_code"; restore; exit 36; }
+          echo 'AUTH_API_OK=yes'
+
+          sync_code=$(curl -sS -o /tmp/google-sync.json -w '%{http_code}' --max-time 120 -X POST \
+            -H "Authorization: Bearer $secret" -H 'Content-Type: application/json' -d '{}' \
+            http://127.0.0.1:8787/api/integrations/google/sync || true)
+          if [ "$sync_code" = 200 ]; then
+            python3 -c 'import json; p=json.load(open("/tmp/google-sync.json",encoding="utf-8")); d=p.get("data") or {}; k=["products","media","removedMediaLinks","skippedMedia","productsWithoutImages","matchedSkuFolders","matchedRootFiles","unmatchedRootImages"]; print("GOOGLE_SYNC_OK="+json.dumps({x:d.get(x) for x in k},ensure_ascii=False,separators=(",",":")))' || echo 'GOOGLE_SYNC_OK=yes'
+          else
+            python3 -c 'import json; p=json.load(open("/tmp/google-sync.json",encoding="utf-8")); print("GOOGLE_SYNC_FAILED_CODE="+str((p.get("error") or {}).get("code") or "unknown"))' || true
+            echo 'TIMER_LEFT_STOPPED=yes'
+            exit 37
+          fi
+
+          systemctl start taha-ai-cron.timer
+          systemctl is-active --quiet taha-ai-cron.timer
+          echo 'CRON_ACTIVE=yes'
+          echo "FINAL_REPO=$(git -C "$REPO" rev-parse HEAD)"
+          echo "FINAL_IMAGE=$(docker inspect taha-ai -f '{{.Config.Image}}')"
+          echo "FINAL_STATE=$(docker inspect taha-ai -f '{{.State.Status}}')"
+          df -h /
+          echo "ROLLBACK_CONTAINER=$ROLLBACK"
+          echo "BACKUP_DIR=$BACKUP_DIR"
+          REMOTE
