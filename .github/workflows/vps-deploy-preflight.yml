@@ -28,6 +28,22 @@ jobs:
           test -n "$VPS_KEY" || { echo 'TAHA_VPS_SSH_PRIVATE_KEY_MISSING'; exit 78; }
           echo 'VPS_SECRETS_READY'
 
+      - name: Classify host reachability
+        shell: bash
+        run: |
+          set -euo pipefail
+          if getent ahosts "$VPS_HOST" >/dev/null 2>&1; then echo 'HOST_RESOLVES=yes'; else echo 'HOST_RESOLVES=no'; fi
+          case "$VPS_HOST" in
+            *[A-Za-z]*) echo 'HOST_KIND=hostname' ;;
+            *:*) echo 'HOST_KIND=ipv6' ;;
+            *) echo 'HOST_KIND=ipv4_or_numeric' ;;
+          esac
+          for p in 80 443; do
+            if nc -z -w 4 "$VPS_HOST" "$p" >/dev/null 2>&1; then echo "WEB_TCP_OPEN_PORT=$p"; else echo "WEB_TCP_CLOSED_PORT=$p"; fi
+          done
+          http_code=$(curl -kLsS -o /dev/null -w '%{http_code}' --max-time 6 "https://$VPS_HOST/" 2>/dev/null || true)
+          [ -n "$http_code" ] && echo "HTTPS_RESPONSE_CODE=$http_code" || echo 'HTTPS_RESPONSE_CODE=none'
+
       - name: Configure ephemeral SSH
         shell: bash
         run: |
@@ -36,90 +52,14 @@ jobs:
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
 
-      - name: Discover reachable SSH port
-        id: port
+      - name: Test configured SSH endpoint
         shell: bash
         run: |
           set -euo pipefail
-          candidates="$VPS_PORT 22 2222 22022 2022 10022"
-          selected=''
-          seen=' '
-          for p in $candidates; do
-            case "$p" in *[!0-9]*|'') continue ;; esac
-            case "$seen" in *" $p "*) continue ;; esac
-            seen="$seen$p "
-            if nc -z -w 3 "$VPS_HOST" "$p" >/dev/null 2>&1; then
-              echo "SSH_TCP_OPEN_PORT=$p"
-              if ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 \
-                  -i ~/.ssh/id_taha_vps -p "$p" "$VPS_USER@$VPS_HOST" 'echo SSH_AUTH_OK' >/tmp/taha-ssh-test 2>&1; then
-                selected="$p"
-                echo "SSH_AUTH_OK_PORT=$p"
-                break
-              else
-                echo "SSH_AUTH_FAILED_PORT=$p"
-              fi
-            else
-              echo "SSH_TCP_CLOSED_PORT=$p"
-            fi
-          done
-          if [ -z "$selected" ]; then
-            echo 'NO_WORKING_SSH_ENDPOINT'
+          if ! nc -z -w 5 "$VPS_HOST" "$VPS_PORT" >/dev/null 2>&1; then
+            echo 'CONFIGURED_SSH_TCP=closed'
             exit 79
           fi
-          echo "selected=$selected" >> "$GITHUB_OUTPUT"
-
-      - name: Inspect current VPS deployment read-only
-        shell: bash
-        env:
-          SELECTED_PORT: ${{ steps.port.outputs.selected }}
-        run: |
-          set -euo pipefail
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 \
-            -i ~/.ssh/id_taha_vps -p "$SELECTED_PORT" "$VPS_USER@$VPS_HOST" 'sh -s' <<'REMOTE'
-          set -eu
-          echo 'VPS_CONNECTED'
-          echo "user=$(id -un)"
-          echo "host=$(hostname)"
-          for cmd in docker git curl nginx; do
-            if command -v "$cmd" >/dev/null 2>&1; then echo "$cmd=present"; else echo "$cmd=missing"; fi
-          done
-          echo '-- docker containers --'
-          if command -v docker >/dev/null 2>&1; then
-            docker ps -a --format 'name={{.Names}}|image={{.Image}}|status={{.Status}}|ports={{.Ports}}'
-            echo '-- docker mounts --'
-            for cid in $(docker ps -aq); do
-              docker inspect -f 'name={{.Name}}|mounts={{range .Mounts}}{{.Source}}=>{{.Destination}};{{end}}' "$cid" 2>/dev/null || true
-            done
-          fi
-          echo '-- TAHA git repositories --'
-          for rootdir in /root /opt /srv /var/www /home; do
-            [ -d "$rootdir" ] || continue
-            find "$rootdir" -maxdepth 5 -type d -name .git -print 2>/dev/null | while read -r gitdir; do
-              repo=${gitdir%/.git}
-              remote=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
-              case "$remote" in
-                *TAHA-AI*|*mrbengilo/TAHA-AI*)
-                  branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
-                  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
-                  echo "repo=$repo|branch=$branch|head=$head|remote=$remote"
-                  ;;
-              esac
-            done
-          done
-          echo '-- persistent paths --'
-          for path in /data /root/taha-ai /opt/taha-ai /srv/taha-ai /var/lib/taha-ai; do
-            [ -e "$path" ] && stat -c 'path=%n|type=%F|owner=%U:%G|mode=%a' "$path" 2>/dev/null || true
-          done
-          echo '-- env metadata --'
-          for path in /root/taha-ai/.dev.vars /opt/taha-ai/.dev.vars /srv/taha-ai/.dev.vars; do
-            [ -f "$path" ] && stat -c 'env=%n|owner=%U:%G|mode=%a|size=%s' "$path" || true
-          done
-          echo '-- nginx TAHA config --'
-          for path in /etc/nginx/sites-enabled/tahashoes.store /etc/nginx/sites-enabled/tahashoes.store.conf /etc/nginx/conf.d/tahashoes.store.conf; do
-            [ -e "$path" ] && echo "nginx_config=$path"
-          done
-          echo '-- timers --'
-          if command -v systemctl >/dev/null 2>&1; then
-            systemctl list-timers --all --no-pager 2>/dev/null | grep -Ei 'taha|cron' || true
-          fi
-          REMOTE
+          echo 'CONFIGURED_SSH_TCP=open'
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'echo VPS_CONNECTED && id -un && hostname'
