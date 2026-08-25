@@ -37,4 +37,7 @@ test("daily automation and website eight-image delivery are enabled", () => {
   assert.match(daily, /imageCount: 6/);
   assert.match(cron, /runAutomationWorker\(\{ limit: 8 \}\)/);
   assert.match(publishing, /slice\(0, 8\)/);
+  const automation = read("lib/automation.ts");
+  assert.match(automation, /publicationDayFromRequestKey/);
+  assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
 });
