@@ -1,0 +1,60 @@
+name: TAHA VPS preflight
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-preflight.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST || secrets.VPS_HOST || secrets.SSH_HOST || 'tahashoes.store' }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER || secrets.VPS_USER || secrets.SSH_USER || 'root' }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT || secrets.VPS_PORT || secrets.SSH_PORT || '22' }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY || secrets.VPS_SSH_PRIVATE_KEY || secrets.VPS_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+    steps:
+      - name: Check SSH authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VPS_KEY}" ]; then
+            echo "VPS_SSH_AUTH_NOT_CONFIGURED"
+            exit 78
+          fi
+          echo "VPS_SSH_AUTH_CONFIGURED"
+
+      - name: Configure ephemeral SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Discover current TAHA deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'sh -s' <<'REMOTE'
+          set -eu
+          echo "VPS_CONNECTED"
+          echo "-- containers --"
+          if command -v docker >/dev/null 2>&1; then
+            docker ps --format 'name={{.Names}} image={{.Image}} ports={{.Ports}}'
+          else
+            echo "docker-not-found"
+          fi
+          echo "-- candidate repositories --"
+          for root in /root /opt /srv /var/www /home; do
+            [ -d "$root" ] || continue
+            find "$root" -maxdepth 4 -type d -name .git -print 2>/dev/null | sed 's#/.git$##' | head -30
+          done
+          echo "-- cron/systemd TAHA hints --"
+          (systemctl list-timers --all --no-pager 2>/dev/null || true) | grep -i taha || true
+          REMOTE
