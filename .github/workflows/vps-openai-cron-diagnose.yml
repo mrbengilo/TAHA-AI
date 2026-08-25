@@ -1,0 +1,100 @@
+name: TAHA OpenAI and cron diagnose
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-openai-cron-diagnose.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Diagnose runtime safely
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'REMOTE'
+          set -Eeuo pipefail
+          ENV_FILE=/etc/taha-ai/.dev.vars
+          read_var() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -1 | tr -d '\r')
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          internal=$(read_var INTERNAL_API_SECRET)
+          openai_key=$(read_var OPENAI_API_KEY)
+          text_model=$(read_var OPENAI_TEXT_MODEL)
+          image_model=$(read_var OPENAI_IMAGE_MODEL)
+          echo "OPENAI_TEXT_MODEL=${text_model:-default}"
+          echo "OPENAI_IMAGE_MODEL=${image_model:-default}"
+          [ -n "$openai_key" ] || { echo 'OPENAI_KEY_MISSING=yes'; exit 50; }
+          [ -n "$internal" ] || { echo 'INTERNAL_KEY_MISSING=yes'; exit 51; }
+
+          echo '-- cron unit --'
+          systemctl cat taha-ai-cron.service taha-ai-cron.timer 2>/dev/null \
+            | sed -E 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g; s/(INTERNAL_API_SECRET=).*/\1***REDACTED***/g' \
+            | head -160 || true
+          echo '-- cron recent journal --'
+          journalctl -u taha-ai-cron.service --since '30 minutes ago' --no-pager -n 120 2>/dev/null \
+            | sed -E 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g; s/(Authorization: )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g' \
+            | tail -120 || true
+          echo "CRON_TIMER_STATE=$(systemctl is-active taha-ai-cron.timer || true)"
+          echo "CRON_SERVICE_STATE=$(systemctl is-active taha-ai-cron.service || true)"
+
+          echo '-- direct cron tick --'
+          cron_code=$(curl -sS -o /tmp/cron.json -w '%{http_code}' --max-time 240 -X POST \
+            -H "Authorization: Bearer $internal" http://127.0.0.1:8787/api/internal/cron/tick || true)
+          echo "DIRECT_CRON_HTTP=$cron_code"
+          if [ -s /tmp/cron.json ]; then
+            python3 -c 'import json; p=json.load(open("/tmp/cron.json",encoding="utf-8")); d=p.get("data") or {}; daily=d.get("daily") or {}; auto=d.get("automation") or {}; sched=d.get("scheduler") or {}; disp=d.get("dispatcher") or {}; print("CRON_DAILY="+json.dumps(daily,ensure_ascii=False,separators=(",",":"))); print("CRON_AUTOMATION="+json.dumps({k:auto.get(k) for k in ["checked","leased","completed","retrying","failed","skipped","errors"]} if isinstance(auto,dict) else auto,ensure_ascii=False,separators=(",",":"))); print("CRON_SCHEDULER="+json.dumps(sched,ensure_ascii=False,separators=(",",":"))); print("CRON_DISPATCHER="+json.dumps(disp,ensure_ascii=False,separators=(",",":")))' || true
+          fi
+
+          echo '-- OpenAI TCP/HTTPS reachability --'
+          if getent ahosts api.openai.com >/dev/null 2>&1; then echo 'OPENAI_DNS=yes'; else echo 'OPENAI_DNS=no'; fi
+          if nc -z -w 8 api.openai.com 443 >/dev/null 2>&1; then echo 'OPENAI_TCP443=yes'; else echo 'OPENAI_TCP443=no'; fi
+          unauth=$(curl -sS -o /tmp/openai-unauth.json -w '%{http_code}' --connect-timeout 10 --max-time 25 https://api.openai.com/v1/models || true)
+          echo "OPENAI_UNAUTH_HTTP=$unauth"
+          auth=$(curl -sS -o /tmp/openai-models.json -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+            -H "Authorization: Bearer $openai_key" https://api.openai.com/v1/models || true)
+          echo "OPENAI_AUTH_MODELS_HTTP=$auth"
+          if [ "$auth" != 200 ]; then
+            python3 -c 'import json; p=json.load(open("/tmp/openai-models.json",encoding="utf-8")); e=p.get("error") or {}; print("OPENAI_AUTH_ERROR_TYPE="+str(e.get("type") or "unknown")); print("OPENAI_AUTH_ERROR_CODE="+str(e.get("code") or "unknown"))' || true
+          fi
+
+          echo '-- minimal OpenAI Responses request --'
+          export OPENAI_TEST_MODEL="${text_model:-gpt-5.6-luna}"
+          python3 - <<'PY' >/tmp/openai-request.json
+import json, os
+print(json.dumps({
+  "model": os.environ["OPENAI_TEST_MODEL"],
+  "store": False,
+  "input": "Reply with exactly OK",
+  "max_output_tokens": 16
+}, separators=(",",":")))
+PY
+          resp=$(curl -sS -o /tmp/openai-response.json -w '%{http_code}' --connect-timeout 10 --max-time 70 \
+            -X POST -H "Authorization: Bearer $openai_key" -H 'Content-Type: application/json' \
+            --data-binary @/tmp/openai-request.json https://api.openai.com/v1/responses || true)
+          echo "OPENAI_RESPONSES_HTTP=$resp"
+          python3 -c 'import json; p=json.load(open("/tmp/openai-response.json",encoding="utf-8")); e=p.get("error"); print("OPENAI_RESPONSE_MODEL="+str(p.get("model") or "")); print("OPENAI_RESPONSE_STATUS="+str(p.get("status") or "")); print("OPENAI_RESPONSE_ERROR_TYPE="+str((e or {}).get("type") or "none")); print("OPENAI_RESPONSE_ERROR_CODE="+str((e or {}).get("code") or "none"))' || true
+
+          echo '-- automation state after direct tick --'
+          curl -sS -o /tmp/runs-after.json --max-time 15 -H "Authorization: Bearer $internal" 'http://127.0.0.1:8787/api/automation-runs?limit=5'
+          python3 -c 'import json; p=json.load(open("/tmp/runs-after.json",encoding="utf-8")); d=p.get("data") or {}; rows=d if isinstance(d,list) else d.get("runs",[]) if isinstance(d,dict) else []; [print("RUN_AFTER id=%s status=%s requested=%s completed=%s error=%s"%(r.get("id"),r.get("status"),r.get("requestedImageCount"),r.get("completedImageCount"),r.get("errorCode"))) for r in rows[:5]]'
+          REMOTE
