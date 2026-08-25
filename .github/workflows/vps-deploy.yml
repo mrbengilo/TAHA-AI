@@ -1,0 +1,250 @@
+name: TAHA VPS production deploy
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-deploy.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Verify deploy secrets
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Backup, build, validate and deploy
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s -- "$TARGET_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          TARGET_SHA="$1"
+          REPO=/var/www/taha-ai
+          DATA=/var/lib/taha-ai
+          ENV_FILE=/etc/taha-ai/.dev.vars
+          IMAGE_REPO=tahashoes-taha-ai
+          NETWORK=tahashoes_default
+          STAMP=$(date +%Y%m%d-%H%M%S)
+          OLD_SHA=$(git -C "$REPO" rev-parse HEAD)
+          OLD_SHORT=${OLD_SHA:0:12}
+          NEW_SHORT=${TARGET_SHA:0:12}
+          BACKUP_DIR="/var/backups/taha-ai/${STAMP}-${OLD_SHORT}"
+          ROLLBACK_CONTAINER="taha-ai-rollback-${STAMP}"
+          CANDIDATE_CONTAINER="taha-ai-candidate-${STAMP}"
+          STAGE_DATA="/var/lib/taha-ai-candidate-${STAMP}"
+          NEW_IMAGE="${IMAGE_REPO}:${TARGET_SHA}"
+          TIMER_WAS_ACTIVE=no
+
+          require_path() { [ -e "$1" ] || { echo "DEPLOY_REQUIRED_PATH_MISSING=$1"; exit 20; }; }
+          require_path "$REPO/.git"
+          require_path "$DATA"
+          require_path "$ENV_FILE"
+          docker inspect taha-ai >/dev/null
+          docker network inspect "$NETWORK" >/dev/null
+
+          echo "DEPLOY_TARGET_SHA=$TARGET_SHA"
+          echo "DEPLOY_OLD_SHA=$OLD_SHA"
+
+          echo '-- backup --'
+          install -d -m 700 /var/backups/taha-ai "$BACKUP_DIR"
+          tar -C /var/lib -czf "$BACKUP_DIR/data.tgz" taha-ai
+          cp "$ENV_FILE" "$BACKUP_DIR/.dev.vars"
+          chmod 600 "$BACKUP_DIR/.dev.vars"
+          docker inspect taha-ai > "$BACKUP_DIR/taha-ai.inspect.json"
+          echo "$OLD_SHA" > "$BACKUP_DIR/source-commit.txt"
+          docker tag "${IMAGE_REPO}:latest" "${IMAGE_REPO}:rollback-${OLD_SHORT}"
+          echo "backup=$BACKUP_DIR"
+
+          echo '-- reclaim safe Docker space --'
+          docker image prune -af
+          docker builder prune -af --filter 'until=24h' || true
+          df -h /
+          FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
+          if [ "$FREE_KB" -lt 5242880 ]; then
+            echo "DEPLOY_ABORT_LOW_DISK_KB=$FREE_KB"
+            exit 21
+          fi
+
+          echo '-- update source --'
+          git -C "$REPO" fetch origin main --prune
+          git -C "$REPO" cat-file -e "${TARGET_SHA}^{commit}"
+          git -C "$REPO" checkout -q main
+          git -C "$REPO" reset --hard "$TARGET_SHA"
+          test -z "$(git -C "$REPO" status --porcelain)"
+
+          echo '-- build new image --'
+          cd "$REPO"
+          DOCKER_BUILDKIT=1 docker build -f deploy/vps/Dockerfile -t "$NEW_IMAGE" -t "${IMAGE_REPO}:latest" .
+          echo "NEW_IMAGE_BUILT=$NEW_IMAGE"
+
+          echo '-- candidate smoke test --'
+          rm -rf "$STAGE_DATA"
+          cp -a "$DATA" "$STAGE_DATA"
+          docker rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+          docker run -d --name "$CANDIDATE_CONTAINER" \
+            --network "$NETWORK" \
+            -p 127.0.0.1:18787:8787 \
+            -v "$STAGE_DATA:/data" \
+            -v "$ENV_FILE:/app/.dev.vars:ro" \
+            "$NEW_IMAGE" >/dev/null
+
+          candidate_ok=no
+          for i in $(seq 1 60); do
+            root_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/ 2>/dev/null || true)
+            auto_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/automation 2>/dev/null || true)
+            api_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/api/integrations 2>/dev/null || true)
+            if [ "$root_code" = 200 ] && [ "$auto_code" = 200 ] && [ "$api_code" = 401 ]; then
+              candidate_ok=yes
+              break
+            fi
+            sleep 2
+          done
+          if [ "$candidate_ok" != yes ]; then
+            echo "CANDIDATE_HEALTH_FAILED root=$root_code automation=$auto_code api=$api_code"
+            docker logs --tail 120 "$CANDIDATE_CONTAINER" 2>&1 || true
+            docker rm -f "$CANDIDATE_CONTAINER" >/dev/null 2>&1 || true
+            rm -rf "$STAGE_DATA"
+            exit 22
+          fi
+          echo 'CANDIDATE_HEALTH_OK=yes'
+          docker rm -f "$CANDIDATE_CONTAINER" >/dev/null
+          rm -rf "$STAGE_DATA"
+
+          if systemctl is-active --quiet taha-ai-cron.timer; then
+            TIMER_WAS_ACTIVE=yes
+            systemctl stop taha-ai-cron.timer
+          fi
+
+          restore_old() {
+            set +e
+            docker rm -f taha-ai >/dev/null 2>&1 || true
+            if docker inspect "$ROLLBACK_CONTAINER" >/dev/null 2>&1; then
+              docker rename "$ROLLBACK_CONTAINER" taha-ai >/dev/null 2>&1 || true
+              docker update --restart=always taha-ai >/dev/null 2>&1 || true
+              docker start taha-ai >/dev/null 2>&1 || true
+            fi
+            [ "$TIMER_WAS_ACTIVE" = yes ] && systemctl start taha-ai-cron.timer >/dev/null 2>&1 || true
+            set -e
+          }
+
+          echo '-- switch production container --'
+          docker stop --time 30 taha-ai >/dev/null
+          docker rename taha-ai "$ROLLBACK_CONTAINER"
+          docker update --restart=no "$ROLLBACK_CONTAINER" >/dev/null
+
+          if ! docker run -d --name taha-ai \
+            --restart always \
+            --network "$NETWORK" \
+            -p 127.0.0.1:8787:8787 \
+            -v "$DATA:/data" \
+            -v "$ENV_FILE:/app/.dev.vars:ro" \
+            "$NEW_IMAGE" >/dev/null; then
+            echo 'NEW_CONTAINER_START_FAILED'
+            restore_old
+            exit 23
+          fi
+
+          prod_ok=no
+          for i in $(seq 1 75); do
+            root_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/ 2>/dev/null || true)
+            conn_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/connections 2>/dev/null || true)
+            auto_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/automation 2>/dev/null || true)
+            api_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/api/integrations 2>/dev/null || true)
+            if [ "$root_code" = 200 ] && [ "$conn_code" = 200 ] && [ "$auto_code" = 200 ] && [ "$api_code" = 401 ]; then
+              prod_ok=yes
+              break
+            fi
+            sleep 2
+          done
+          if [ "$prod_ok" != yes ]; then
+            echo "PRODUCTION_HEALTH_FAILED root=$root_code connections=$conn_code automation=$auto_code api=$api_code"
+            docker logs --tail 160 taha-ai 2>&1 || true
+            restore_old
+            exit 24
+          fi
+          echo 'PRODUCTION_HEALTH_OK=yes'
+
+          read_var() {
+            local key="$1" value
+            value=$(sed -n "s/^${key}=//p" "$ENV_FILE" | head -1 | tr -d '\r')
+            value=${value#\"}; value=${value%\"}
+            value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          INTERNAL_SECRET=$(read_var INTERNAL_API_SECRET)
+          if [ -z "$INTERNAL_SECRET" ]; then
+            echo 'INTERNAL_API_SECRET_MISSING'
+            restore_old
+            exit 25
+          fi
+          auth_code=$(curl -sS -o /tmp/taha-integrations.json -w '%{http_code}' --max-time 10 \
+            -H "Authorization: Bearer $INTERNAL_SECRET" http://127.0.0.1:8787/api/integrations || true)
+          if [ "$auth_code" != 200 ]; then
+            echo "AUTHENTICATED_API_FAILED code=$auth_code"
+            restore_old
+            exit 26
+          fi
+          echo 'AUTHENTICATED_API_OK=yes'
+
+          echo '-- Google Sheet/Drive production sync --'
+          sync_code=$(curl -sS -o /tmp/taha-google-sync.json -w '%{http_code}' --max-time 120 \
+            -X POST -H "Authorization: Bearer $INTERNAL_SECRET" -H 'Content-Type: application/json' \
+            -d '{}' http://127.0.0.1:8787/api/integrations/google/sync || true)
+          if command -v python3 >/dev/null 2>&1; then
+            python3 - "$sync_code" /tmp/taha-google-sync.json <<'PY'
+import json, sys
+code, path = sys.argv[1], sys.argv[2]
+try:
+    payload = json.load(open(path, encoding='utf-8'))
+except Exception:
+    payload = {}
+if code == '200':
+    data = payload.get('data') or {}
+    safe = {k: data.get(k) for k in ['products','media','removedMediaLinks','skippedMedia','productsWithoutImages','matchedSkuFolders','matchedRootFiles','unmatchedRootImages','syncedAt']}
+    print('GOOGLE_SYNC_OK=' + json.dumps(safe, ensure_ascii=False, separators=(',', ':')))
+else:
+    err = payload.get('error') or {}
+    print('GOOGLE_SYNC_FAILED_CODE=' + str(err.get('code') or code))
+PY
+          else
+            echo "GOOGLE_SYNC_HTTP=$sync_code"
+          fi
+
+          if [ "$sync_code" != 200 ]; then
+            echo 'GOOGLE_SYNC_NOT_READY_TIMER_LEFT_STOPPED=yes'
+            exit 27
+          fi
+
+          systemctl start taha-ai-cron.timer
+          systemctl is-active --quiet taha-ai-cron.timer
+          echo 'CRON_TIMER_ACTIVE=yes'
+
+          echo '-- final production checks --'
+          echo "repo_head=$(git -C "$REPO" rev-parse HEAD)"
+          echo "container_image=$(docker inspect taha-ai -f '{{.Config.Image}}')"
+          echo "container_status=$(docker inspect taha-ai -f '{{.State.Status}}')"
+          df -h /
+          echo "rollback_container=$ROLLBACK_CONTAINER"
+          echo "backup_dir=$BACKUP_DIR"
+          REMOTE
