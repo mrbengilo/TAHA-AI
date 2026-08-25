@@ -1,0 +1,96 @@
+name: TAHA VPS post-deploy verification
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-postdeploy-verify.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Verify live SKU mapping, media preview and automation
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'REMOTE'
+          set -Eeuo pipefail
+          ENV_FILE=/etc/taha-ai/.dev.vars
+          read_var() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -1 | tr -d '\r')
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+          secret=$(read_var INTERNAL_API_SECRET)
+          [ -n "$secret" ] || { echo 'INTERNAL_SECRET_MISSING'; exit 40; }
+
+          d1json() {
+            local sql="$1"
+            docker exec taha-ai sh -lc "pnpm exec wrangler d1 execute DB --local --persist-to=/data --config=/app/wrangler.vps.jsonc --json --command \"$sql\"" 2>/dev/null
+          }
+
+          echo '-- SKU -> Drive folder mapping --'
+          mapping=$(d1json "SELECT base_sku AS sku, json_extract(metadata_json,'$.googleSource.driveFolderName') AS folder_name, json_extract(metadata_json,'$.googleSource.driveFolderMatch') AS folder_match FROM products WHERE deleted_at IS NULL ORDER BY base_sku;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; print("SKU_FOLDER_ROWS="+str(len(rows))); [print(f"SKU_FOLDER sku={r.get(chr(115)+chr(107)+chr(117))} folder={r.get(chr(102)+chr(111)+chr(108)+chr(100)+chr(101)+chr(114)+chr(95)+chr(110)+chr(97)+chr(109)+chr(101))} match={r.get(chr(102)+chr(111)+chr(108)+chr(100)+chr(101)+chr(114)+chr(95)+chr(109)+chr(97)+chr(116)+chr(99)+chr(104))}") for r in rows]; bad=[r for r in rows if r.get("folder_name") != "SKU "+str(r.get("sku") or "").strip().upper() or r.get("folder_match")!="sku_folder"]; print("SKU_FOLDER_CANONICAL_BAD="+str(len(bad)))' <<< "$mapping"
+
+          echo '-- source/generated media counts per product --'
+          media_counts=$(d1json "SELECT p.base_sku AS sku, SUM(CASE WHEN m.origin='source' AND m.media_type='image' AND m.status='ready' THEN 1 ELSE 0 END) AS source_images, SUM(CASE WHEN m.origin='generated' AND m.media_type='image' AND m.status='ready' THEN 1 ELSE 0 END) AS generated_images, COUNT(m.id) AS total_linked FROM products p LEFT JOIN product_media pm ON pm.product_id=p.id AND pm.workspace_id=p.workspace_id LEFT JOIN media_assets m ON m.id=pm.media_id AND m.workspace_id=pm.workspace_id WHERE p.deleted_at IS NULL GROUP BY p.id,p.base_sku ORDER BY p.base_sku;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("MEDIA_COUNT sku=%s source=%s generated=%s linked=%s"%(r.get("sku"),r.get("source_images"),r.get("generated_images"),r.get("total_linked"))) for r in rows]; print("PRODUCTS_WITH_LT2_SOURCE="+str(sum(1 for r in rows if int(r.get("source_images") or 0)<2)))' <<< "$media_counts"
+
+          echo '-- one real media inline preview --'
+          media=$(d1json "SELECT m.id AS media_id, m.mime_type AS mime_type, p.base_sku AS sku FROM media_assets m JOIN product_media pm ON pm.media_id=m.id AND pm.workspace_id=m.workspace_id JOIN products p ON p.id=pm.product_id AND p.workspace_id=pm.workspace_id WHERE m.media_type='image' AND m.status='ready' AND p.deleted_at IS NULL ORDER BY CASE m.origin WHEN 'source' THEN 0 ELSE 1 END, pm.sort_order LIMIT 1;")
+          media_id=$(python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); r=((x[0].get("results") if isinstance(x,list) and x else []) or [{}])[0]; print(r.get("media_id") or "")' <<< "$media")
+          media_sku=$(python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); r=((x[0].get("results") if isinstance(x,list) and x else []) or [{}])[0]; print(r.get("sku") or "")' <<< "$media")
+          [ -n "$media_id" ] || { echo 'MEDIA_PREVIEW_NO_MEDIA'; exit 41; }
+          curl -sS -D /tmp/media.headers -o /tmp/media.bin --max-time 30 -H "Authorization: Bearer $secret" "http://127.0.0.1:8787/api/media/$media_id/download?disposition=inline"
+          status=$(head -1 /tmp/media.headers | awk '{print $2}')
+          ctype=$(grep -i '^content-type:' /tmp/media.headers | tail -1 | tr -d '\r' | cut -d' ' -f2-)
+          cdisp=$(grep -i '^content-disposition:' /tmp/media.headers | tail -1 | tr -d '\r' | cut -d' ' -f2-)
+          bytes=$(wc -c < /tmp/media.bin | tr -d ' ')
+          echo "MEDIA_PREVIEW sku=$media_sku status=$status type=$ctype disposition=$cdisp bytes=$bytes"
+          case "$ctype" in image/*) : ;; *) echo 'MEDIA_PREVIEW_NOT_IMAGE'; exit 42 ;; esac
+          [ "$status" = 200 ] && [ "$bytes" -gt 100 ] || exit 43
+
+          echo '-- automation API state --'
+          runs_code=$(curl -sS -o /tmp/runs.json -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $secret" 'http://127.0.0.1:8787/api/automation-runs?limit=10')
+          echo "AUTOMATION_API_HTTP=$runs_code"
+          python3 -c 'import json; p=json.load(open("/tmp/runs.json",encoding="utf-8")); d=p.get("data") or {}; rows=d if isinstance(d,list) else d.get("runs",[]) if isinstance(d,dict) else []; print("AUTOMATION_RUNS="+str(len(rows))); [print("RUN id=%s product=%s status=%s requested=%s completed=%s error=%s"%(r.get("id"),r.get("productId"),r.get("status"),r.get("requestedImageCount"),r.get("completedImageCount"),r.get("errorCode"))) for r in rows[:10]]'
+
+          echo '-- latest automation DB steps --'
+          runs_db=$(d1json "SELECT id, product_id, request_key, status, requested_image_count, completed_image_count, error_code, created_at, completed_at FROM automation_runs ORDER BY created_at DESC LIMIT 5;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("DB_RUN id=%s product=%s key=%s status=%s requested=%s completed=%s error=%s"%(r.get("id"),r.get("product_id"),r.get("request_key"),r.get("status"),r.get("requested_image_count"),r.get("completed_image_count"),r.get("error_code"))) for r in rows]' <<< "$runs_db"
+          steps=$(d1json "SELECT r.request_key, s.step_type, s.ordinal, s.status, s.error_code FROM automation_steps s JOIN automation_runs r ON r.id=s.run_id AND r.workspace_id=s.workspace_id WHERE r.id=(SELECT id FROM automation_runs ORDER BY created_at DESC LIMIT 1) ORDER BY CASE s.step_type WHEN 'content' THEN 0 WHEN 'image' THEN 1 ELSE 2 END,s.ordinal;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("STEP key=%s type=%s ordinal=%s status=%s error=%s"%(r.get("request_key"),r.get("step_type"),r.get("ordinal"),r.get("status"),r.get("error_code"))) for r in rows]' <<< "$steps"
+
+          echo '-- draft media and schedules for latest completed automation --'
+          drafts=$(d1json "SELECT d.id AS draft_id, d.target_provider, p.base_sku AS sku, COUNT(dm.media_id) AS media_count FROM content_drafts d JOIN products p ON p.id=d.product_id AND p.workspace_id=d.workspace_id LEFT JOIN content_draft_media dm ON dm.draft_id=d.id AND dm.workspace_id=d.workspace_id WHERE d.generation_meta_json LIKE '%automationRunId%' GROUP BY d.id,d.target_provider,p.base_sku ORDER BY d.created_at DESC LIMIT 12;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("DRAFT sku=%s provider=%s media_count=%s"%(r.get("sku"),r.get("target_provider"),r.get("media_count"))) for r in rows]' <<< "$drafts"
+          schedules=$(d1json "SELECT d.target_provider, p.base_sku AS sku, s.status, s.schedule_kind, s.run_at, s.timezone, s.execution_mode FROM schedules s JOIN content_drafts d ON d.id=s.draft_id AND d.workspace_id=s.workspace_id JOIN products p ON p.id=d.product_id AND p.workspace_id=d.workspace_id WHERE s.created_by GLOB 'automation:*' ORDER BY s.created_at DESC LIMIT 12;")
+          python3 -c 'import json,sys,datetime; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("SCHEDULE sku=%s provider=%s status=%s kind=%s run_at=%s timezone=%s mode=%s"%(r.get("sku"),r.get("target_provider"),r.get("status"),r.get("schedule_kind"),datetime.datetime.fromtimestamp(int(r.get("run_at") or 0)/1000,datetime.timezone(datetime.timedelta(hours=7))).isoformat() if r.get("run_at") else None,r.get("timezone"),r.get("execution_mode"))) for r in rows]' <<< "$schedules"
+
+          echo '-- generated Drive export state --'
+          exports=$(d1json "SELECT p.base_sku AS sku, COUNT(*) AS generated_media, SUM(CASE WHEN json_extract(m.metadata_json,'$.googleDriveExports') IS NOT NULL THEN 1 ELSE 0 END) AS exported_media FROM media_assets m JOIN product_media pm ON pm.media_id=m.id AND pm.workspace_id=m.workspace_id JOIN products p ON p.id=pm.product_id AND p.workspace_id=pm.workspace_id WHERE m.origin='generated' AND m.media_type='image' GROUP BY p.id,p.base_sku ORDER BY MAX(m.created_at) DESC LIMIT 10;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("DRIVE_EXPORT sku=%s generated=%s exported=%s"%(r.get("sku"),r.get("generated_media"),r.get("exported_media"))) for r in rows]' <<< "$exports"
+
+          echo '-- service state --'
+          echo "container=$(docker inspect taha-ai -f '{{.State.Status}}|{{.Config.Image}}')"
+          echo "cron_timer=$(systemctl is-active taha-ai-cron.timer || true)"
+          df -h /
+          REMOTE
