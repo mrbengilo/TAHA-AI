@@ -11,7 +11,7 @@ if old not in text:
     raise SystemExit('status parser anchor not found')
 helper_anchor = '''export function parseGoogleCatalogRows(rows: unknown[][]) {\n'''
 helper = '''function normalizeCatalogStatus(value: unknown): CatalogProduct["status"] {
-  const rawStatus = normalizeHeader(value).replace(/đ/g, "d");
+  const rawStatus = normalizeHeader(String(value ?? "").replace(/[đĐ]/g, "d"));
   // The existing TAHA Sheet may not have a status column. In that case the
   // catalog row is sellable by default; explicit stop/draft values still win.
   if (!rawStatus) return "active";
