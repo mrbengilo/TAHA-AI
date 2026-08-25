@@ -1,0 +1,60 @@
+name: TAHA VPS runtime routing diagnose
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-runtime-diagnose.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Inspect built Vinext runtime and public routing
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^tahashoes-taha-ai:2502cb64' | head -1 || true)
+          if [ -z "$IMAGE" ]; then IMAGE=tahashoes-taha-ai:latest; fi
+          echo "IMAGE=$IMAGE"
+          echo '-- build output paths --'
+          docker run --rm --entrypoint sh "$IMAGE" -lc 'find /app/dist -maxdepth 3 -type f | sort | head -160'
+          echo '-- generated wrangler candidates --'
+          docker run --rm --entrypoint sh "$IMAGE" -lc 'for f in /app/dist/server/wrangler.json /app/dist/server/wrangler.jsonc /app/dist/wrangler.json /app/dist/wrangler.jsonc; do if [ -f "$f" ]; then echo FILE=$f; sed -E "s/(client_secret|secret|token|key)[^,}]*/\1=REDACTED/Ig" "$f" | head -160; fi; done'
+          echo '-- server entry signatures --'
+          docker run --rm --entrypoint sh "$IMAGE" -lc 'for f in /app/dist/server/index.js /app/dist/server/entry.js; do if [ -f "$f" ]; then echo FILE=$f; head -30 "$f"; fi; done' | sed -E 's/(Bearer |api[_-]?key[^[:space:]]*)[^[:space:]]+/\1REDACTED/Ig'
+          echo '-- repo runtime config --'
+          sed -n '1,160p' /var/www/taha-ai/wrangler.vps.jsonc
+          echo '-- public nginx routing lines --'
+          if [ -f /var/www/tahashoes/nginx.conf ]; then
+            grep -nE 'server_name|location|proxy_pass|upstream|8787|taha-ai|tahashoes.store' /var/www/tahashoes/nginx.conf | head -180 || true
+          fi
+          echo '-- host nginx routing lines --'
+          for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$f" ] || continue
+            grep -HnE 'server_name|proxy_pass|8787|tahashoes.store' "$f" 2>/dev/null | head -120 || true
+          done
+          echo '-- public response headers --'
+          curl -kIsS --max-time 8 https://tahashoes.store/ | sed -n '1,30p' || true
+          echo '-- local host header probes --'
+          for port in 80 443; do
+            code=$(curl -k -sS -o /dev/null -w '%{http_code}' --max-time 5 -H 'Host: tahashoes.store' "http://127.0.0.1:${port}/" 2>/dev/null || true)
+            echo "port=$port code=${code:-none}"
+          done
+          REMOTE
