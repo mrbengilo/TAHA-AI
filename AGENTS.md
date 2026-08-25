@@ -1,25 +1,31 @@
 # TAHA-AI Codex Operating Rules
 
 ## Goal
-Build TAHA-AI quickly and safely while minimizing unnecessary model cost. The primary Codex thread is a cheap router/coordinator. It must classify each task before implementation and use the lowest model tier that can complete the task reliably.
+Build TAHA-AI quickly and safely with completion speed and correctness as the primary priorities. Control cost, but never use a model or reasoning tier below GPT-5.6 Terra with medium reasoning for user-requested implementation work.
+
+## Minimum execution floor
+- Every user task starts at **GPT-5.6 Terra / medium reasoning** or stronger.
+- Do not route user work to Luna or low reasoning.
+- Small tasks may be handled directly by the primary Terra Medium thread to avoid delegation overhead.
+- Escalate proactively when task characteristics already justify Sol; do not deliberately try a weaker tier first just to save tokens.
 
 ## Automatic task routing
-Classify by actual engineering risk and changed surfaces, not by how long the user prompt is.
+Classify by actual engineering risk and changed surfaces, not by prompt length.
 
-### T0 — FAST
-Use the primary thread directly, or the `fast` agent for a parallel low-risk subtask.
+### T0 — QUICK
+Use the primary thread directly, or the `fast` agent for an independent quick subtask.
 Typical work:
 - copy/text/icon changes
-- CSS, spacing, simple responsive fixes
-- tiny isolated component changes
+- CSS, spacing, responsive fixes
+- isolated component changes
 - simple validation
-- small tests or docs
+- small tests/docs
 - mechanical rename with no behavior change
 
-Model target: GPT-5.6 Luna, low reasoning.
+Model target: GPT-5.6 Terra, medium reasoning.
 
 ### T1 — STANDARD (default)
-Spawn `standard` for normal implementation.
+Use `standard` for normal implementation.
 Typical work:
 - React/TypeScript screens and components
 - CRUD
@@ -33,7 +39,7 @@ Typical work:
 Model target: GPT-5.6 Terra, medium reasoning.
 
 ### T2 — DEEP
-Spawn `deep` when the core task includes one or more of:
+Use `deep` immediately when the core task includes one or more of:
 - OAuth or token refresh
 - webhook verification/processing
 - queue, worker, retry, backoff, rate limiting
@@ -48,7 +54,7 @@ Spawn `deep` when the core task includes one or more of:
 Model target: GPT-5.6 Sol, high reasoning.
 
 ### T3 — CRITICAL
-Spawn `critical` only for:
+Use `critical` for:
 - security/auth boundary changes
 - possible data corruption
 - irreversible/dangerous migrations
@@ -60,14 +66,15 @@ Spawn `critical` only for:
 Model target: GPT-5.6 Sol, xhigh reasoning.
 
 ## Routing rules
-1. Default to T1 when uncertain between T0 and T1.
-2. Use T2/T3 only when the task actually contains the listed risk; do not escalate because the prompt is long.
-3. If an agent returns `ESCALATION_REQUIRED`, escalate exactly one tier and pass forward its findings. Do not restart investigation from zero.
-4. Do not make more than two materially identical failed attempts at the same tier.
-5. Never use a stronger model merely to rewrite, reformat, rename, or perform a mechanical edit.
-6. Use at most two subagents concurrently, and only for independent workstreams that will not edit the same files.
-7. Prefer one capable agent over many agents when the work is tightly coupled; parallelism is for wall-clock savings, not brainstorming.
-8. Stop when acceptance criteria and validation pass. Do not continue opportunistic refactoring.
+1. Terra Medium is the hard minimum for all user-requested work.
+2. Default to T1 for ordinary implementation; T0 is only a low-overhead path using the same Terra Medium capability.
+3. If T2/T3 criteria are visible from the task or inspected code, route there before implementation instead of waiting for a lower tier to fail.
+4. If an agent returns `ESCALATION_REQUIRED`, escalate exactly one tier and pass forward its findings. Do not restart investigation from zero.
+5. Do not make more than two materially identical failed attempts at the same tier.
+6. Use up to three subagents concurrently only for genuinely independent workstreams that will not edit the same files or depend on each other's unfinished changes.
+7. For tightly coupled work, prefer one stronger agent over multiple agents; avoid coordination overhead.
+8. Parallelize repository inspection, independent channel adapters, independent tests, or independent UI surfaces when doing so reduces wall-clock time.
+9. Stop as soon as acceptance criteria and validation pass. Do not continue opportunistic refactoring.
 
 ## TAHA-AI invariants
 Preserve these unless an explicit product requirement changes them:
@@ -79,23 +86,27 @@ Preserve these unless an explicit product requirement changes them:
 - Store credentials, OAuth refresh tokens, and secrets server-side only; never expose or log them in client code.
 - External channel behavior must come from existing repository contracts or current official API documentation; never invent API fields/endpoints.
 
-## Implementation workflow
-1. Read the task and inspect only the repository areas needed to classify it.
-2. State the internal tier decision briefly, then execute without asking for confirmation unless a genuinely missing requirement blocks correctness.
-3. Reuse existing architecture and utilities before adding abstractions.
-4. Keep diffs focused and backward-compatible where practical.
-5. Add/update regression coverage for behavior changes when practical.
-6. Validate with the cheapest meaningful checks first.
-7. For substantial T1/T2/T3 code changes, run `pnpm lint` and `pnpm test` unless the environment prevents it. Note that `pnpm test` already runs the project build before Node tests.
-8. Report changed behavior, validation performed, and any remaining risk. Do not dump long reasoning.
+## Fast implementation workflow
+1. Read the task and inspect only repository areas needed to classify and implement it.
+2. Choose T0/T1/T2/T3 immediately; do not spend a separate long planning pass when the scope is clear.
+3. Execute without asking for confirmation unless a genuinely missing requirement blocks correctness.
+4. Reuse existing architecture, utilities, types, adapters, and tests before creating new abstractions.
+5. Keep diffs focused and backward-compatible where practical.
+6. For independent subproblems, run up to three agents in parallel. For coupled changes, keep one owner agent.
+7. Add/update regression coverage for behavior changes when practical.
+8. Run the cheapest meaningful checks first. For substantial T1/T2/T3 code changes, run `pnpm lint` and `pnpm test` unless the environment prevents it. `pnpm test` already runs the build before Node tests.
+9. If validation fails, use the failure output directly; do not repeat repository discovery unnecessarily.
+10. Report changed behavior, validation performed, and remaining risk concisely. Do not dump long reasoning.
 
-## Cost and speed policy
-- Luna: routing and low-risk mechanical work.
-- Terra: default implementation tier.
-- Sol High: difficult integration/engineering work.
-- Sol XHigh: rare critical work only.
-- Keep output concise; spend tokens on inspection, implementation, and validation rather than narration.
+## Speed and cost policy
+- Minimum floor: Terra Medium.
+- Default: Terra Medium.
+- Sol High: use proactively for difficult integration/engineering work.
+- Sol XHigh: use for critical-risk work.
+- Never use Luna/Low for user-requested tasks in this repository.
+- Keep output concise and spend tokens on inspection, implementation, and validation rather than narration.
 - Reuse findings and context when escalating instead of re-reading the whole repository.
+- Avoid unnecessary agent delegation for tiny tasks because delegation itself adds latency.
 
 ## Scope discipline
 Do not change unrelated business rules, UI, database schema, APIs, deployment configuration, or dependencies unless necessary for the requested task. If an unrelated defect is discovered, record it separately instead of expanding the current task.
