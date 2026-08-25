@@ -24,19 +24,22 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Read channel readiness from live D1
+      - name: Read channel and product readiness from live D1
         run: |
           set -euo pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s <<'REMOTE'
           set -Eeuo pipefail
+          WS='00000000-0000-4000-8000-000000000001'
           d1json() {
             docker exec taha-ai sh -lc "pnpm exec wrangler d1 execute DB --local --persist-to=/data --config=/app/wrangler.vps.jsonc --json --command \"$1\"" 2>/dev/null
           }
-          connections=$(d1json "SELECT provider, display_name, status, publish_mode, CASE WHEN last_error IS NULL OR last_error='' THEN NULL ELSE last_error END AS last_error, last_synced_at FROM channel_connections ORDER BY provider, updated_at DESC;")
+          connections=$(d1json "SELECT provider, display_name, status, publish_mode, CASE WHEN last_error IS NULL OR last_error='' THEN NULL ELSE last_error END AS last_error FROM channel_connections WHERE workspace_id='$WS' ORDER BY provider, updated_at DESC;")
           python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("CONNECTION provider=%s status=%s mode=%s name=%s error=%s"%(r.get("provider"),r.get("status"),r.get("publish_mode"),r.get("display_name"),r.get("last_error"))) for r in rows]; wanted={"facebook","zalo_personal","website"}; live={r.get("provider") for r in rows if r.get("provider") in wanted and r.get("status")=="connected"}; print("DAILY_CONNECTED_TARGETS="+",".join(sorted(live))); print("DAILY_MISSING_TARGETS="+",".join(sorted(wanted-live)))' <<< "$connections"
-          daily=$(d1json "SELECT id, request_key, status, error_code, created_at FROM automation_runs WHERE request_key LIKE 'daily:%' ORDER BY created_at DESC LIMIT 10;")
+          statuses=$(d1json "SELECT status, COUNT(*) AS total FROM products WHERE workspace_id='$WS' AND deleted_at IS NULL GROUP BY status ORDER BY status;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("PRODUCT_STATUS status=%s count=%s"%(r.get("status"),r.get("total"))) for r in rows]' <<< "$statuses"
+          products=$(d1json "SELECT p.base_sku AS sku,p.status,COUNT(DISTINCT CASE WHEN m.origin='source' AND m.media_type='image' AND m.status='ready' THEN m.id END) AS source_images FROM products p LEFT JOIN product_media pm ON pm.product_id=p.id AND pm.workspace_id=p.workspace_id LEFT JOIN media_assets m ON m.id=pm.media_id AND m.workspace_id=pm.workspace_id WHERE p.workspace_id='$WS' AND p.deleted_at IS NULL GROUP BY p.id,p.base_sku,p.status ORDER BY p.base_sku;")
+          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; [print("PRODUCT_READY sku=%s status=%s source=%s eligible=%s"%(r.get("sku"),r.get("status"),r.get("source_images"),"yes" if r.get("status")=="active" and int(r.get("source_images") or 0)>=2 else "no")) for r in rows]; print("DAILY_READY_PRODUCTS="+str(sum(1 for r in rows if r.get("status")=="active" and int(r.get("source_images") or 0)>=2)))' <<< "$products"
+          daily=$(d1json "SELECT request_key,status,error_code FROM automation_runs WHERE workspace_id='$WS' AND request_key LIKE 'daily:%' ORDER BY created_at DESC LIMIT 10;")
           python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); rows=(x[0].get("results") if isinstance(x,list) and x else []) or []; print("DAILY_RUN_COUNT="+str(len(rows))); [print("DAILY_RUN key=%s status=%s error=%s"%(r.get("request_key"),r.get("status"),r.get("error_code"))) for r in rows]' <<< "$daily"
-          ready=$(d1json "SELECT COUNT(*) AS ready_products FROM products p WHERE p.workspace_id='taha-main' AND p.deleted_at IS NULL AND p.status='active' AND (SELECT COUNT(DISTINCT m.id) FROM product_media pm JOIN media_assets m ON m.id=pm.media_id AND m.workspace_id=pm.workspace_id WHERE pm.workspace_id=p.workspace_id AND pm.product_id=p.id AND m.media_type='image' AND m.origin='source' AND m.status='ready') >= 2;")
-          python3 -c 'import json,sys; x=json.loads(sys.stdin.read()); r=((x[0].get("results") if isinstance(x,list) and x else []) or [{}])[0]; print("DAILY_READY_PRODUCTS="+str(r.get("ready_products") or 0))' <<< "$ready"
           REMOTE
