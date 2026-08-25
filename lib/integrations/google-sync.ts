@@ -97,6 +97,20 @@ function valueFor(row: unknown[], headers: Map<string, number>, names: string[])
   return "";
 }
 
+function normalizeCatalogStatus(value: unknown): CatalogProduct["status"] {
+  const rawStatus = normalizeHeader(String(value ?? "").replace(/[đĐ]/g, "d"));
+  // The existing TAHA Sheet may not have a status column. In that case the
+  // catalog row is sellable by default; explicit stop/draft values still win.
+  if (!rawStatus) return "active";
+  const pausedSignals = ["pause", "paused", "tam dung", "ngung ban", "inactive", "disabled", "stop", "stopped", "het hang", "sold out"];
+  if (pausedSignals.some((signal) => rawStatus.includes(signal))) return "paused";
+  const draftSignals = ["draft", "nhap", "chua san sang", "chua ban"];
+  if (draftSignals.some((signal) => rawStatus.includes(signal))) return "draft";
+  const activeSignals = ["ready", "active", "san sang", "dang ban", "con hang", "available", "published", "hoat dong", "dang kinh doanh", "on sale"];
+  if (activeSignals.some((signal) => rawStatus.includes(signal))) return "active";
+  return "draft";
+}
+
 export function parseGoogleCatalogRows(rows: unknown[][]) {
   if (rows.length < 2) return [];
   const headers = new Map(rows[0].map((cell, index) => [normalizeHeader(cell), index]));
@@ -105,8 +119,7 @@ export function parseGoogleCatalogRows(rows: unknown[][]) {
     const skuKey = normalizeSkuKey(sku);
     const name = String(valueFor(row, headers, ["ten san pham", "san pham", "name", "product name"])).trim();
     if (!skuKey || !name) return [];
-    const rawStatus = normalizeHeader(valueFor(row, headers, ["trang thai", "status"]));
-    const status = rawStatus.includes("ready") || rawStatus.includes("active") || rawStatus.includes("san sang") ? "active" : rawStatus.includes("pause") || rawStatus.includes("tam dung") ? "paused" : "draft";
+    const status = normalizeCatalogStatus(valueFor(row, headers, ["trang thai", "status"]));
     const listPrice = parseMoney(valueFor(row, headers, ["gia ban", "gia"]));
     const salePrice = parseMoney(valueFor(row, headers, ["gia sale", "gia khuyen mai", "sale price", "discount price"]));
     const englishPrice = parseMoney(valueFor(row, headers, ["price"]));

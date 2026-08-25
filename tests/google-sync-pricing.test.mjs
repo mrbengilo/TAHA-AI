@@ -114,3 +114,30 @@ test("normalizes SKU keys and reports duplicate Sheet rows before syncing", asyn
   assert.equal(products[0].skuKey, "TAHA-001");
   assert.deepEqual(plain(duplicateCatalogSkus(products)), [{ skuKey: "TAHA-001", rows: [2, 3] }]);
 });
+
+
+test("defaults missing status and common selling statuses to active", async () => {
+  const { parseGoogleCatalogRows } = await loadGoogleSync();
+  const products = plain(parseGoogleCatalogRows([
+    ["SKU", "Tên sản phẩm", "Trạng thái"],
+    ["TAHA-NO-STATUS", "Không ghi trạng thái", ""],
+    ["TAHA-SELLING", "Đang bán", "Đang bán"],
+    ["TAHA-STOCK", "Còn hàng", "Còn hàng"],
+    ["TAHA-READY", "Sẵn sàng", "Sẵn sàng"],
+  ]));
+  assert.deepEqual(products.map((item) => item.status), ["active", "active", "active", "active"]);
+});
+
+test("honors explicit paused and draft product statuses", async () => {
+  const { parseGoogleCatalogRows } = await loadGoogleSync();
+  const products = plain(parseGoogleCatalogRows([
+    ["SKU", "Tên sản phẩm", "Trạng thái"],
+    ["TAHA-PAUSE", "Tạm dừng", "Tạm dừng"],
+    ["TAHA-STOP", "Ngừng bán", "Ngừng bán"],
+    ["TAHA-SOLDOUT", "Hết hàng", "Hết hàng"],
+    ["TAHA-DRAFT", "Bản nháp", "Nháp"],
+    ["TAHA-NOTREADY", "Chưa sẵn sàng", "Chưa sẵn sàng"],
+    ["TAHA-UNKNOWN", "Trạng thái lạ", "Chờ duyệt nội bộ"],
+  ]));
+  assert.deepEqual(products.map((item) => item.status), ["paused", "paused", "paused", "draft", "draft", "draft"]);
+});
