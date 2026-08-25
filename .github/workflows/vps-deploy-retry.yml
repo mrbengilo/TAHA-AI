@@ -26,7 +26,7 @@ jobs:
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
 
-      - name: Build, smoke test, deploy and verify Google
+      - name: Build, authenticated smoke test, deploy and verify Google
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |
@@ -50,9 +50,19 @@ jobs:
           ROLLBACK="taha-ai-rollback-${STAMP}"
           TIMER_WAS_ACTIVE=no
 
+          read_var() {
+            local value
+            value=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -1 | tr -d '\r')
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            printf '%s' "$value"
+          }
+
           test -d "$REPO/.git" && test -d "$DATA" && test -f "$ENV_FILE"
           docker inspect taha-ai >/dev/null
           docker network inspect "$NETWORK" >/dev/null
+          secret=$(read_var INTERNAL_API_SECRET)
+          [ -n "$secret" ] || { echo 'INTERNAL_API_SECRET_MISSING'; exit 30; }
+
           install -d -m 700 /var/backups/taha-ai "$BACKUP_DIR"
           tar -C /var/lib -czf "$BACKUP_DIR/data.tgz" taha-ai
           cp "$ENV_FILE" "$BACKUP_DIR/.dev.vars" && chmod 600 "$BACKUP_DIR/.dev.vars"
@@ -83,20 +93,22 @@ jobs:
             -v "$STAGE_DATA:/data" -v "$ENV_FILE:/app/.dev.vars:ro" "$NEW_IMAGE" >/dev/null
           candidate_ok=no
           for i in $(seq 1 75); do
-            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/ 2>/dev/null || true)
-            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/automation 2>/dev/null || true)
+            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:18787/ 2>/dev/null || true)
+            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:18787/automation 2>/dev/null || true)
+            c=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:18787/connections 2>/dev/null || true)
             x=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:18787/api/integrations 2>/dev/null || true)
-            if [ "$r" = 200 ] && [ "$a" = 200 ] && [ "$x" = 401 ]; then candidate_ok=yes; break; fi
+            y=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:18787/api/integrations 2>/dev/null || true)
+            if [ "$r" = 200 ] && [ "$a" = 200 ] && [ "$c" = 200 ] && [ "$x" = 401 ] && [ "$y" = 200 ]; then candidate_ok=yes; break; fi
             sleep 2
           done
           if [ "$candidate_ok" != yes ]; then
-            echo "CANDIDATE_FAILED root=$r automation=$a api=$x"
+            echo "CANDIDATE_FAILED root=$r automation=$a connections=$c api_unauth=$x api_auth=$y"
             docker logs --tail 160 "$CANDIDATE" 2>&1 || true
             docker rm -f "$CANDIDATE" >/dev/null 2>&1 || true
             rm -rf "$STAGE_DATA"
             exit 32
           fi
-          echo 'CANDIDATE_OK=yes'
+          echo 'CANDIDATE_AUTHENTICATED_UI_OK=yes'
           docker rm -f "$CANDIDATE" >/dev/null
           rm -rf "$STAGE_DATA"
 
@@ -121,32 +133,21 @@ jobs:
 
           prod_ok=no
           for i in $(seq 1 90); do
-            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/ 2>/dev/null || true)
-            c=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/connections 2>/dev/null || true)
-            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/automation 2>/dev/null || true)
+            r=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/ 2>/dev/null || true)
+            c=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/connections 2>/dev/null || true)
+            a=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/automation 2>/dev/null || true)
             x=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:8787/api/integrations 2>/dev/null || true)
-            if [ "$r" = 200 ] && [ "$c" = 200 ] && [ "$a" = 200 ] && [ "$x" = 401 ]; then prod_ok=yes; break; fi
+            y=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/api/integrations 2>/dev/null || true)
+            if [ "$r" = 200 ] && [ "$c" = 200 ] && [ "$a" = 200 ] && [ "$x" = 401 ] && [ "$y" = 200 ]; then prod_ok=yes; break; fi
             sleep 2
           done
           if [ "$prod_ok" != yes ]; then
-            echo "PROD_FAILED root=$r connections=$c automation=$a api=$x"
+            echo "PROD_FAILED root=$r connections=$c automation=$a api_unauth=$x api_auth=$y"
             docker logs --tail 180 taha-ai 2>&1 || true
             restore
             exit 34
           fi
-          echo 'PRODUCTION_OK=yes'
-
-          read_var() {
-            local value
-            value=$(sed -n "s/^$1=//p" "$ENV_FILE" | head -1 | tr -d '\r')
-            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
-            printf '%s' "$value"
-          }
-          secret=$(read_var INTERNAL_API_SECRET)
-          [ -n "$secret" ] || { restore; exit 35; }
-          auth_code=$(curl -sS -o /tmp/integrations.json -w '%{http_code}' --max-time 15 -H "Authorization: Bearer $secret" http://127.0.0.1:8787/api/integrations || true)
-          [ "$auth_code" = 200 ] || { echo "AUTH_API_FAILED=$auth_code"; restore; exit 36; }
-          echo 'AUTH_API_OK=yes'
+          echo 'PRODUCTION_AUTHENTICATED_UI_OK=yes'
 
           sync_code=$(curl -sS -o /tmp/google-sync.json -w '%{http_code}' --max-time 120 -X POST \
             -H "Authorization: Bearer $secret" -H 'Content-Type: application/json' -d '{}' \
@@ -155,7 +156,7 @@ jobs:
             python3 -c 'import json; p=json.load(open("/tmp/google-sync.json",encoding="utf-8")); d=p.get("data") or {}; k=["products","media","removedMediaLinks","skippedMedia","productsWithoutImages","matchedSkuFolders","matchedRootFiles","unmatchedRootImages"]; print("GOOGLE_SYNC_OK="+json.dumps({x:d.get(x) for x in k},ensure_ascii=False,separators=(",",":")))' || echo 'GOOGLE_SYNC_OK=yes'
           else
             python3 -c 'import json; p=json.load(open("/tmp/google-sync.json",encoding="utf-8")); print("GOOGLE_SYNC_FAILED_CODE="+str((p.get("error") or {}).get("code") or "unknown"))' || true
-            echo 'TIMER_LEFT_STOPPED=yes'
+            echo 'GOOGLE_SYNC_NOT_READY_TIMER_LEFT_STOPPED=yes'
             exit 37
           fi
 
