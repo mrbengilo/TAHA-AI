@@ -392,10 +392,18 @@ export async function getChannelLibrary(channelId: ChannelId, limit = 50) {
        LIMIT ?`,
     ).bind(TAHA_WORKSPACE_ID, channelId, definition.connectionProvider, limit).all<Record<string, unknown>>(),
     db.prepare(
-      `SELECT id, name, base_sku, status, updated_at
-       FROM products
-       WHERE workspace_id = ? AND deleted_at IS NULL AND status != 'archived'
-       ORDER BY updated_at DESC
+      `SELECT p.id, p.name, p.base_sku, p.status, p.updated_at,
+              (SELECT pm.media_id
+               FROM product_media pm
+               JOIN media_assets media ON media.id = pm.media_id AND media.workspace_id = pm.workspace_id
+               WHERE pm.workspace_id = p.workspace_id AND pm.product_id = p.id
+                 AND media.media_type = 'image' AND media.status = 'ready'
+               ORDER BY CASE pm.role WHEN 'primary' THEN 0 WHEN 'source' THEN 1 WHEN 'generated' THEN 2 ELSE 3 END,
+                        pm.sort_order, pm.created_at
+               LIMIT 1) AS primary_media_id
+       FROM products p
+       WHERE p.workspace_id = ? AND p.deleted_at IS NULL AND p.status != 'archived'
+       ORDER BY p.updated_at DESC
        LIMIT ?`,
     ).bind(TAHA_WORKSPACE_ID, limit).all<Record<string, unknown>>(),
     summariesPromise,
@@ -454,6 +462,9 @@ export async function getChannelLibrary(channelId: ChannelId, limit = 50) {
     name: String(row.name),
     baseSku: String(row.base_sku),
     status: String(row.status),
+    previewUrl: row.primary_media_id
+      ? `/api/media/${encodeURIComponent(String(row.primary_media_id))}/download?inline=1`
+      : null,
     updatedAt: asIso(row.updated_at),
   }));
 

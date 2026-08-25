@@ -41,3 +41,12 @@ test("daily automation and website eight-image delivery are enabled", () => {
   assert.match(automation, /publicationDayFromRequestKey/);
   assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
 });
+
+test("product tables expose real primary-image thumbnails", () => {
+  const library = read("lib/channel-library.ts");
+  const ui = read("app/channels/[provider]/ChannelWorkspace.tsx");
+  assert.match(library, /primary_media_id/);
+  assert.match(library, /previewUrl:/);
+  assert.match(ui, /ch-product-thumb/);
+  assert.match(ui, /product\.previewUrl/);
+});

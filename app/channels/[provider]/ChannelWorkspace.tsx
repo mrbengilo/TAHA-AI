@@ -55,7 +55,7 @@ type ChannelJob = {
   errorMessage: string | null;
   payload: { message: string; mediaIds: string[] } | null;
 };
-type ChannelProduct = { id: string; name: string; baseSku: string; status: string };
+type ChannelProduct = { id: string; name: string; baseSku: string; status: string; previewUrl: string | null };
 type ChannelDetail = {
   channel: ChannelSummary;
   stats: ChannelCounts;
@@ -517,7 +517,7 @@ export function ChannelWorkspace({
               <article className="ch-product-panel">
                 <div className="ch-panel-heading"><div><span className="ch-eyebrow">DỮ LIỆU ĐÃ ĐỌC</span><h2>Sản phẩm từ Google Sheets</h2></div><button type="button" onClick={() => void syncSource()} disabled={busy === "sync"}>Cập nhật</button></div>
                 {products.length === 0 ? <div className="ch-inline-empty"><strong>Chưa có dòng sản phẩm</strong><p>Kết nối Google và bấm Đồng bộ để đọc bảng tính.</p></div> : (
-                  <div className="ch-table-wrap"><table><thead><tr><th>Sản phẩm</th><th>SKU</th><th>Trạng thái</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.name}</td><td><code>{product.baseSku}</code></td><td><span className={`ch-content-status is-${product.status}`}>{contentStatusLabel(product.status)}</span></td></tr>)}</tbody></table></div>
+                  <div className="ch-table-wrap"><table><thead><tr><th>Ảnh</th><th>Sản phẩm</th><th>SKU</th><th>Trạng thái</th></tr></thead><tbody>{products.map((product) => <tr key={product.id}><td>{product.previewUrl ? <img className="ch-product-thumb" src={product.previewUrl} alt={product.name} loading="lazy" /> : <span className="ch-product-thumb-empty">—</span>}</td><td>{product.name}</td><td><code>{product.baseSku}</code></td><td><span className={`ch-content-status is-${product.status}`}>{contentStatusLabel(product.status)}</span></td></tr>)}</tbody></table></div>
                 )}
               </article>
             ) : null}
