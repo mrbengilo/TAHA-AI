@@ -27,6 +27,7 @@ jobs:
           test -n "$VPS_PORT" || { echo 'TAHA_VPS_PORT_MISSING'; exit 78; }
           test -n "$VPS_KEY" || { echo 'TAHA_VPS_SSH_PRIVATE_KEY_MISSING'; exit 78; }
           echo 'VPS_SECRETS_READY'
+          if [ "$VPS_USER" = 'root' ]; then echo 'VPS_USER_IS_ROOT=yes'; else echo 'VPS_USER_IS_ROOT=no'; fi
 
       - name: Classify host reachability
         shell: bash
@@ -51,6 +52,9 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
+          ssh-keygen -y -f ~/.ssh/id_taha_vps > ~/.ssh/id_taha_vps.pub
+          echo "DEPLOY_KEY_FINGERPRINT=$(ssh-keygen -lf ~/.ssh/id_taha_vps.pub -E sha256 | awk '{print $2}')"
+          echo "DEPLOY_KEY_TYPE=$(awk '{print $1}' ~/.ssh/id_taha_vps.pub)"
 
       - name: Test configured SSH endpoint
         shell: bash
@@ -61,5 +65,5 @@ jobs:
             exit 79
           fi
           echo 'CONFIGURED_SSH_TCP=open'
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 \
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'echo VPS_CONNECTED && id -un && hostname'
