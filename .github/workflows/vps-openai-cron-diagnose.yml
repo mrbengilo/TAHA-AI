@@ -49,21 +49,13 @@ jobs:
           echo '-- cron unit --'
           systemctl cat taha-ai-cron.service taha-ai-cron.timer 2>/dev/null \
             | sed -E 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g; s/(INTERNAL_API_SECRET=).*/\1***REDACTED***/g' \
-            | head -160 || true
+            | head -180 || true
           echo '-- cron recent journal --'
-          journalctl -u taha-ai-cron.service --since '30 minutes ago' --no-pager -n 120 2>/dev/null \
+          journalctl -u taha-ai-cron.service --since '30 minutes ago' --no-pager -n 160 2>/dev/null \
             | sed -E 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g; s/(Authorization: )[A-Za-z0-9._~+\/=-]+/\1***REDACTED***/g' \
-            | tail -120 || true
+            | tail -160 || true
           echo "CRON_TIMER_STATE=$(systemctl is-active taha-ai-cron.timer || true)"
           echo "CRON_SERVICE_STATE=$(systemctl is-active taha-ai-cron.service || true)"
-
-          echo '-- direct cron tick --'
-          cron_code=$(curl -sS -o /tmp/cron.json -w '%{http_code}' --max-time 240 -X POST \
-            -H "Authorization: Bearer $internal" http://127.0.0.1:8787/api/internal/cron/tick || true)
-          echo "DIRECT_CRON_HTTP=$cron_code"
-          if [ -s /tmp/cron.json ]; then
-            python3 -c 'import json; p=json.load(open("/tmp/cron.json",encoding="utf-8")); d=p.get("data") or {}; daily=d.get("daily") or {}; auto=d.get("automation") or {}; sched=d.get("scheduler") or {}; disp=d.get("dispatcher") or {}; print("CRON_DAILY="+json.dumps(daily,ensure_ascii=False,separators=(",",":"))); print("CRON_AUTOMATION="+json.dumps({k:auto.get(k) for k in ["checked","leased","completed","retrying","failed","skipped","errors"]} if isinstance(auto,dict) else auto,ensure_ascii=False,separators=(",",":"))); print("CRON_SCHEDULER="+json.dumps(sched,ensure_ascii=False,separators=(",",":"))); print("CRON_DISPATCHER="+json.dumps(disp,ensure_ascii=False,separators=(",",":")))' || true
-          fi
 
           echo '-- OpenAI TCP/HTTPS reachability --'
           if getent ahosts api.openai.com >/dev/null 2>&1; then echo 'OPENAI_DNS=yes'; else echo 'OPENAI_DNS=no'; fi
@@ -79,22 +71,18 @@ jobs:
 
           echo '-- minimal OpenAI Responses request --'
           export OPENAI_TEST_MODEL="${text_model:-gpt-5.6-luna}"
-          python3 - <<'PY' >/tmp/openai-request.json
-import json, os
-print(json.dumps({
-  "model": os.environ["OPENAI_TEST_MODEL"],
-  "store": False,
-  "input": "Reply with exactly OK",
-  "max_output_tokens": 16
-}, separators=(",",":")))
-PY
+          python3 -c 'import json,os; print(json.dumps({"model":os.environ["OPENAI_TEST_MODEL"],"store":False,"input":"Reply with exactly OK","max_output_tokens":16},separators=(",",":")))' > /tmp/openai-request.json
           resp=$(curl -sS -o /tmp/openai-response.json -w '%{http_code}' --connect-timeout 10 --max-time 70 \
             -X POST -H "Authorization: Bearer $openai_key" -H 'Content-Type: application/json' \
             --data-binary @/tmp/openai-request.json https://api.openai.com/v1/responses || true)
           echo "OPENAI_RESPONSES_HTTP=$resp"
           python3 -c 'import json; p=json.load(open("/tmp/openai-response.json",encoding="utf-8")); e=p.get("error"); print("OPENAI_RESPONSE_MODEL="+str(p.get("model") or "")); print("OPENAI_RESPONSE_STATUS="+str(p.get("status") or "")); print("OPENAI_RESPONSE_ERROR_TYPE="+str((e or {}).get("type") or "none")); print("OPENAI_RESPONSE_ERROR_CODE="+str((e or {}).get("code") or "none"))' || true
 
-          echo '-- automation state after direct tick --'
+          echo '-- local cron endpoint auth-only probe --'
+          bad=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Authorization: Bearer intentionally-wrong' http://127.0.0.1:8787/api/internal/cron/tick || true)
+          echo "CRON_BAD_BEARER_HTTP=$bad"
+
+          echo '-- automation state --'
           curl -sS -o /tmp/runs-after.json --max-time 15 -H "Authorization: Bearer $internal" 'http://127.0.0.1:8787/api/automation-runs?limit=5'
-          python3 -c 'import json; p=json.load(open("/tmp/runs-after.json",encoding="utf-8")); d=p.get("data") or {}; rows=d if isinstance(d,list) else d.get("runs",[]) if isinstance(d,dict) else []; [print("RUN_AFTER id=%s status=%s requested=%s completed=%s error=%s"%(r.get("id"),r.get("status"),r.get("requestedImageCount"),r.get("completedImageCount"),r.get("errorCode"))) for r in rows[:5]]'
+          python3 -c 'import json; p=json.load(open("/tmp/runs-after.json",encoding="utf-8")); d=p.get("data") or {}; rows=d if isinstance(d,list) else d.get("runs",[]) if isinstance(d,dict) else []; [print("RUN_NOW id=%s status=%s requested=%s completed=%s error=%s"%(r.get("id"),r.get("status"),r.get("requestedImageCount"),r.get("completedImageCount"),r.get("errorCode"))) for r in rows[:5]]'
           REMOTE
