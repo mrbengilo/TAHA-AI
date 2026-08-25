@@ -1,0 +1,28 @@
+# TAHA-AI project-scoped Codex routing configuration.
+# The primary thread stays cheap/fast and escalates implementation to stronger subagents only when needed.
+
+model = "gpt-5.6-luna"
+model_reasoning_effort = "low"
+model_verbosity = "low"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"
+
+[agents.fast]
+description = "Low-risk, narrow TAHA-AI work: copy/text, CSS, spacing, small responsive fixes, simple validation, tiny tests, documentation, or an isolated mechanical edit. Never use for auth, database schema, integrations, queue/retry, security, or multi-module bugs."
+config_file = "agents/fast.toml"
+
+[agents.standard]
+description = "Default TAHA-AI implementation agent for normal product work: UI screens, React/TypeScript features, CRUD, ordinary API endpoints, product/media flows, Google Drive or Sheets integration work, scheduler logic, and contained refactors. Escalate if security, OAuth lifecycle, migrations, concurrency, cross-channel consistency, or a difficult multi-module bug becomes central."
+config_file = "agents/standard.toml"
+
+[agents.deep]
+description = "Complex TAHA-AI engineering: OAuth/token refresh, webhooks, queues, retries, rate limits, idempotency, database migrations, complex channel adapters, cross-channel publishing, concurrency, difficult multi-module bugs, or production-sensitive integration behavior."
+config_file = "agents/deep.toml"
+
+[agents.critical]
+description = "Highest-risk TAHA-AI work: security/auth boundaries, data corruption, irreversible migrations, production incidents, architecture-wide refactors, cross-channel correctness failures, or bugs that survived a deep-agent attempt. Use sparingly."
+config_file = "agents/critical.toml"
