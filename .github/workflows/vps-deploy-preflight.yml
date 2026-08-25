@@ -1,0 +1,100 @@
+name: TAHA VPS deploy preflight
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-deploy-preflight.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Verify deploy secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" || { echo 'TAHA_VPS_HOST_MISSING'; exit 78; }
+          test -n "$VPS_USER" || { echo 'TAHA_VPS_USER_MISSING'; exit 78; }
+          test -n "$VPS_PORT" || { echo 'TAHA_VPS_PORT_MISSING'; exit 78; }
+          test -n "$VPS_KEY" || { echo 'TAHA_VPS_SSH_PRIVATE_KEY_MISSING'; exit 78; }
+          echo 'VPS_SECRETS_READY'
+
+      - name: Configure ephemeral SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Inspect current VPS deployment read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'sh -s' <<'REMOTE'
+          set -eu
+          echo 'VPS_CONNECTED'
+          echo "user=$(id -un)"
+          echo "host=$(hostname)"
+
+          for cmd in docker git curl nginx; do
+            if command -v "$cmd" >/dev/null 2>&1; then echo "$cmd=present"; else echo "$cmd=missing"; fi
+          done
+
+          echo '-- docker containers --'
+          if command -v docker >/dev/null 2>&1; then
+            docker ps -a --format 'name={{.Names}}|image={{.Image}}|status={{.Status}}|ports={{.Ports}}'
+            echo '-- docker mounts --'
+            for cid in $(docker ps -aq); do
+              docker inspect -f 'name={{.Name}}|mounts={{range .Mounts}}{{.Source}}=>{{.Destination}};{{end}}' "$cid" 2>/dev/null || true
+            done
+          fi
+
+          echo '-- TAHA git repositories --'
+          for root in /root /opt /srv /var/www /home; do
+            [ -d "$root" ] || continue
+            find "$root" -maxdepth 5 -type d -name .git -print 2>/dev/null | while read -r gitdir; do
+              repo=${gitdir%/.git}
+              remote=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
+              case "$remote" in
+                *TAHA-AI*|*mrbengilo/TAHA-AI*)
+                  branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
+                  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
+                  echo "repo=$repo|branch=$branch|head=$head|remote=$remote"
+                  ;;
+              esac
+            done
+          done
+
+          echo '-- candidate persistent data --'
+          for path in /data /root/taha-ai /opt/taha-ai /srv/taha-ai /var/lib/taha-ai; do
+            if [ -e "$path" ]; then
+              stat -c 'path=%n|type=%F|owner=%U:%G|mode=%a' "$path" 2>/dev/null || true
+            fi
+          done
+
+          echo '-- root-only env candidates (metadata only) --'
+          for path in /root/taha-ai/.dev.vars /opt/taha-ai/.dev.vars /srv/taha-ai/.dev.vars; do
+            if [ -f "$path" ]; then stat -c 'env=%n|owner=%U:%G|mode=%a|size=%s' "$path"; fi
+          done
+
+          echo '-- nginx TAHA config --'
+          for path in /etc/nginx/sites-enabled/tahashoes.store /etc/nginx/sites-enabled/tahashoes.store.conf /etc/nginx/conf.d/tahashoes.store.conf; do
+            [ -e "$path" ] && echo "nginx_config=$path"
+          done
+
+          echo '-- timers --'
+          if command -v systemctl >/dev/null 2>&1; then
+            systemctl list-timers --all --no-pager 2>/dev/null | grep -Ei 'taha|cron' || true
+          fi
+          REMOTE
