@@ -31,6 +31,7 @@ type ChannelMedia = {
   status: string;
   origin: string;
   createdAt: number | string;
+  previewUrl: string;
   downloadUrl: string;
 };
 type ChannelDraft = {
@@ -592,7 +593,7 @@ export function ChannelWorkspace({
                       const linked = targetMediaIds.has(item.id);
                       return (
                         <button type="button" className={selected ? "is-selected" : ""} aria-pressed={selected} key={item.id} onClick={() => toggleSourceMedia(item.id)}>
-                          <span className="ch-source-thumb"><i>{item.filename.split(".").pop()?.toUpperCase() || "ẢNH"}</i><b>{selected ? "✓" : "+"}</b></span>
+                          <span className="ch-source-thumb"><img src={item.previewUrl} alt={item.altText || item.filename} loading="lazy" /><b>{selected ? "✓" : "+"}</b></span>
                           <span className="ch-source-name" title={item.filename}>{item.filename}</span>
                           <small>{linked ? "Đã có trong kênh" : bytesLabel(item.byteSize)}</small>
                         </button>
@@ -612,7 +613,9 @@ export function ChannelWorkspace({
                   return (
                     <article className={selected ? "is-selected" : ""} key={item.id}>
                       <button type="button" className="ch-media-select" onClick={() => toggleMedia(item.id)} aria-pressed={selected} aria-label={`${selected ? "Bỏ chọn" : "Chọn"} ${item.filename}`}><span>{selected ? "✓" : "+"}</span></button>
-                      <div className={`ch-media-placeholder is-${item.mediaType}`}><span>{item.mediaType === "video" ? "VIDEO" : item.filename.split(".").pop()?.toUpperCase() || "ẢNH"}</span></div>
+                      {item.mediaType === "image"
+                        ? <img className="ch-media-preview" src={item.previewUrl} alt={item.altText || item.filename} loading="lazy" />
+                        : <div className={`ch-media-placeholder is-${item.mediaType}`}><span>VIDEO</span></div>}
                       <div className="ch-media-meta"><div><strong title={item.filename}>{item.filename}</strong><span>{bytesLabel(item.byteSize)} · {contentStatusLabel(item.status)}</span></div><a href={item.downloadUrl} download aria-label={`Tải ${item.filename}`}>↓</a></div>
                     </article>
                   );

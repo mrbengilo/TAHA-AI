@@ -104,6 +104,10 @@ class AutomationStatement {
   }
 
   async all() {
+    const q = this.query;
+    if (q.includes("SELECT m.id FROM product_media") && q.includes("m.origin = 'source'")) {
+      return { results: [{ id: "media-source-1" }, { id: "media-source-2" }] };
+    }
     return { results: [] };
   }
 

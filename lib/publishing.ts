@@ -134,7 +134,7 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   if (!secret || !endpoint) throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
 
   const mediaIds = Array.isArray(input.payload.mediaIds)
-    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, 4)
+    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, 8)
     : [];
   const media: Array<{ filename: string; mimeType: string; dataBase64: string }> = [];
   for (const mediaId of mediaIds) {

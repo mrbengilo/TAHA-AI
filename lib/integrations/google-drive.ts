@@ -80,7 +80,13 @@ export function normalizeSkuKey(value: unknown) {
     .replace(/[‐‑‒–—―]/g, "-")
     .replace(/\s+/g, " ")
     .trim()
+    .replace(/^SKU\s+/i, "")
     .toUpperCase();
+}
+
+export function canonicalGoogleDriveSkuFolderName(value: unknown) {
+  const skuKey = normalizeSkuKey(value);
+  return skuKey ? `SKU ${skuKey}` : "";
 }
 
 function isWordCharacter(value: string | undefined) {

@@ -181,18 +181,33 @@ async function productSnapshot(db: AutomationDatabase, productId: string) {
   return product;
 }
 
+async function originalMediaIdsForProduct(db: AutomationDatabase, productId: string, limit = 2) {
+  const rows = await db.prepare(
+    `SELECT m.id FROM product_media pm JOIN media_assets m ON m.id = pm.media_id
+     WHERE pm.product_id = ? AND pm.workspace_id = ? AND m.media_type = 'image'
+       AND m.status = 'ready' AND m.origin = 'source'
+     ORDER BY CASE pm.role WHEN 'primary' THEN 0 WHEN 'source' THEN 1 ELSE 2 END,
+              pm.sort_order, pm.created_at LIMIT ?`,
+  ).bind(productId, TAHA_WORKSPACE_ID, limit).all<{ id: string }>();
+  return (rows.results ?? []).map((row) => row.id);
+}
+
 async function sourceMediaId(db: AutomationDatabase, productId: string, requested: string | null) {
-  const row = requested
-    ? await db.prepare(
-      `SELECT m.id FROM media_assets m JOIN product_media pm ON pm.media_id = m.id
-       WHERE m.id = ? AND pm.product_id = ? AND m.workspace_id = ? AND m.media_type = 'image' AND m.status = 'ready' LIMIT 1`,
-    ).bind(requested, productId, TAHA_WORKSPACE_ID).first<{ id: string }>()
-    : await db.prepare(
-      `SELECT m.id FROM product_media pm JOIN media_assets m ON m.id = pm.media_id
-       WHERE pm.product_id = ? AND pm.workspace_id = ? AND m.media_type = 'image' AND m.status = 'ready'
-       ORDER BY CASE pm.role WHEN 'primary' THEN 0 WHEN 'source' THEN 1 ELSE 2 END, pm.sort_order, pm.created_at LIMIT 1`,
-    ).bind(productId, TAHA_WORKSPACE_ID).first<{ id: string }>();
-  if (!row) throw new AutomationError("SOURCE_IMAGE_REQUIRED", "Sản phẩm chưa có ảnh gốc hợp lệ.", 409);
+  const originals = await originalMediaIdsForProduct(db, productId, 2);
+  if (originals.length < 2) {
+    throw new AutomationError(
+      "TWO_SOURCE_IMAGES_REQUIRED",
+      "Sản phẩm cần ít nhất 2 ảnh gốc trong đúng thư mục SKU trên Google Drive trước khi chạy AI.",
+      409,
+    );
+  }
+  if (!requested) return originals[0];
+  const row = await db.prepare(
+    `SELECT m.id FROM media_assets m JOIN product_media pm ON pm.media_id = m.id
+     WHERE m.id = ? AND pm.product_id = ? AND m.workspace_id = ? AND m.media_type = 'image'
+       AND m.status = 'ready' AND m.origin = 'source' LIMIT 1`,
+  ).bind(requested, productId, TAHA_WORKSPACE_ID).first<{ id: string }>();
+  if (!row) throw new AutomationError("SOURCE_IMAGE_REQUIRED", "Ảnh nguồn đã chọn không phải ảnh gốc hợp lệ của sản phẩm.", 409);
   return row.id;
 }
 
@@ -582,11 +597,14 @@ async function processImage(db: AutomationDatabase, run: RunRow, step: StepRow, 
     });
     return;
   }
-  const source = await mediaBlob(run.source_media_id, 20 * 1024 * 1024);
+  const referenceIds = await originalMediaIdsForProduct(db, run.product_id, 2);
+  if (referenceIds.length < 2) throw new AutomationError("TWO_SOURCE_IMAGES_REQUIRED", "Sản phẩm cần đủ 2 ảnh gốc trước khi tạo ảnh AI.", 409);
+  const [source, secondSource] = await Promise.all(referenceIds.map((id) => mediaBlob(id, 20 * 1024 * 1024)));
   const edited = await editProductImage({
     source: source.blob,
     filename: source.filename,
     mimeType: source.mimeType,
+    referenceSources: [{ source: secondSource.blob, filename: secondSource.filename, mimeType: secondSource.mimeType }],
     product: { sku: product.base_sku, name: product.name },
     layoutIndex: step.ordinal,
   });
@@ -751,6 +769,9 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
   if (!Object.keys(content).length || mediaIds.length !== current.requested_image_count) {
     throw new Error("AUTOMATION_PREREQUISITES_PENDING");
   }
+  const originalMediaIds = await originalMediaIdsForProduct(db, run.product_id, 2);
+  if (originalMediaIds.length < 2) throw new Error("TWO_SOURCE_IMAGES_REQUIRED");
+  const draftMediaIds = [...originalMediaIds, ...mediaIds];
   const finalizedAt = Date.now();
   const statements: AutomationStatement[] = [];
   const draftIds: string[] = [];
@@ -764,7 +785,9 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       ...generated.platformData,
       automationRunId: run.id,
       sku: (await productSnapshot(db, run.product_id)).base_sku,
+      sourceImageCount: originalMediaIds.length,
       generatedImageCount: mediaIds.length,
+      totalImageCount: draftMediaIds.length,
     };
     statements.push(db.prepare(
       `INSERT INTO content_drafts
@@ -792,7 +815,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       JSON.stringify(platformData),
       current.text_model,
       current.prompt_version,
-      JSON.stringify({ automationRunId: run.id, sourceMediaId: run.source_media_id, outputMediaIds: mediaIds }),
+      JSON.stringify({ automationRunId: run.id, sourceMediaIds: originalMediaIds, outputMediaIds: mediaIds, allMediaIds: draftMediaIds }),
       `automation:${run.id}`,
       finalizedAt,
       finalizedAt,
@@ -803,7 +826,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       workerId,
       finalizedAt,
     ));
-    for (let index = 0; index < mediaIds.length; index += 1) {
+    for (let index = 0; index < draftMediaIds.length; index += 1) {
       statements.push(db.prepare(
         `INSERT OR IGNORE INTO content_draft_media
          (id, workspace_id, draft_id, media_id, role, sort_order, created_at)
@@ -816,11 +839,11 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
              AND s.lease_expires_at > ?
          )`,
       ).bind(
-        await stableId("cdm", `${draftId}:${mediaIds[index]}`),
+        await stableId("cdm", `${draftId}:${draftMediaIds[index]}`),
         TAHA_WORKSPACE_ID,
         draftId,
-        mediaIds[index],
-        index === 0 ? "primary" : "attachment",
+        draftMediaIds[index],
+        index === 0 ? "primary" : index < originalMediaIds.length ? "source" : "attachment",
         index,
         finalizedAt,
         run.id,
@@ -1048,7 +1071,7 @@ export async function runAutomationWorker(options: {
 } = {}): Promise<AutomationWorkerResult> {
   const db = database(options.database);
   const now = Math.floor(options.now ?? Date.now());
-  const limit = Math.max(1, Math.min(3, Math.floor(options.limit ?? 1)));
+  const limit = Math.max(1, Math.min(8, Math.floor(options.limit ?? 4)));
   const workerId = options.workerId ?? crypto.randomUUID();
   await db.prepare(
     `UPDATE automation_steps SET status = 'retry_wait', available_at = ?, lease_owner = NULL,
@@ -1074,8 +1097,9 @@ export async function runAutomationWorker(options: {
     errors: [],
     processedAt: now,
   };
+  const claimed: Array<{ step: StepRow; lease: { attempt_count: number; max_attempts: number } }> = [];
   for (const step of candidates.results ?? []) {
-    if (summary.leased >= limit) break;
+    if (claimed.length >= limit) break;
     summary.checked += 1;
     if (step.step_type === "finalize") {
       const pending = await db.prepare(
@@ -1087,23 +1111,27 @@ export async function runAutomationWorker(options: {
         continue;
       }
     }
-    const lease = await claimStep(db, step, workerId, now);
+    const lease = await claimStep(db, step, `${workerId}:${step.id}`, now);
     if (!lease) {
       summary.skipped += 1;
       continue;
     }
+    claimed.push({ step, lease });
     summary.leased += 1;
+  }
+  await Promise.all(claimed.map(async ({ step, lease }) => {
+    const stepWorkerId = `${workerId}:${step.id}`;
     try {
       const run = await loadRun(db, step.run_id);
-      if (step.step_type === "content") await processContent(db, run, step, workerId, now);
-      else if (step.step_type === "image") await processImage(db, run, step, workerId);
-      else await processFinalize(db, run, step, workerId, now);
+      if (step.step_type === "content") await processContent(db, run, step, stepWorkerId, now);
+      else if (step.step_type === "image") await processImage(db, run, step, stepWorkerId);
+      else await processFinalize(db, run, step, stepWorkerId, now);
       summary.completed += 1;
     } catch (error) {
-      const transition = await retryOrFail(db, step, lease, workerId, error, Date.now());
+      const transition = await retryOrFail(db, step, lease, stepWorkerId, error, Date.now());
       summary[transition.state] += 1;
       summary.errors.push({ stepId: step.id, code: transition.code });
     }
-  }
+  }));
   return summary;
 }

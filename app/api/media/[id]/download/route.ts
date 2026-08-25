@@ -7,11 +7,13 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   try {
     const { id } = await context.params;
     const media = await loadMedia(id);
+    const inline = new URL(request.url).searchParams.get("inline") === "1";
     return new Response(media.body, {
       headers: {
         "content-type": media.mimeType,
-        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(media.filename)}`,
-        "cache-control": "private, no-store",
+        "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(media.filename)}`,
+        "cache-control": inline ? "private, max-age=300" : "private, no-store",
+        "x-content-type-options": "nosniff",
         ...(media.size ? { "content-length": String(media.size) } : {}),
       },
     });

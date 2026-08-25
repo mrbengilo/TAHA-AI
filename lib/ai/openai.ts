@@ -54,6 +54,7 @@ export type EditProductImageInput = {
   source: Blob;
   filename: string;
   mimeType: string;
+  referenceSources?: Array<{ source: Blob; filename: string; mimeType: string }>;
   product: { sku: string; name: string };
   layoutIndex: number;
 };
@@ -403,6 +404,7 @@ function imageEditPrompt(input: {
     `Bố cục mong muốn: ${input.layoutBrief}`,
     "Giữ sản phẩm giống hệt ảnh nguồn: không đổi hình dáng, tỷ lệ, màu sắc, chất liệu, hoa văn, đường may, logo, nhãn, đế, phụ kiện hoặc bất kỳ chi tiết nhận diện nào.",
     "Chỉ thay đổi nền, bối cảnh, ánh sáng, đạo cụ xung quanh và vị trí trình bày. Không thêm chữ, logo mới, watermark, người hoặc sản phẩm khác.",
+    "Nếu có hai ảnh nguồn, phải đối chiếu cả hai để giữ chính xác hình dáng, logo, vật liệu, màu sắc, đế, gót và các chi tiết nhận diện ở nhiều góc nhìn.",
     "Nếu không chắc về một chi tiết sản phẩm, phải giữ nguyên chi tiết trong ảnh nguồn.",
   ].join("\n");
 }
@@ -431,6 +433,17 @@ export async function editProductImage(
     || (input.source.type && input.source.type.toLowerCase() !== mimeType)) {
     throw new OpenAiClientError("OPENAI_IMAGE_INPUT_INVALID");
   }
+  const referenceSources = (input.referenceSources ?? []).slice(0, 1);
+  for (const reference of referenceSources) {
+    const referenceMimeType = typeof reference.mimeType === "string" ? reference.mimeType.trim().toLowerCase() : "";
+    if (!(reference.source instanceof Blob)
+      || reference.source.size <= 0
+      || reference.source.size > MAX_SOURCE_IMAGE_BYTES
+      || !SUPPORTED_IMAGE_MIME_TYPES.has(referenceMimeType)
+      || (reference.source.type && reference.source.type.toLowerCase() !== referenceMimeType)) {
+      throw new OpenAiClientError("OPENAI_IMAGE_INPUT_INVALID");
+    }
+  }
   const sku = requiredString(input.product?.sku, 128, "OPENAI_IMAGE_INPUT_INVALID");
   const productName = requiredString(input.product?.name, 300, "OPENAI_IMAGE_INPUT_INVALID");
   const filename = requiredString(input.filename, 200, "OPENAI_IMAGE_INPUT_INVALID");
@@ -442,6 +455,9 @@ export async function editProductImage(
   const form = new FormData();
   form.append("model", model);
   form.append("image[]", input.source, safeFilename(filename));
+  for (const reference of referenceSources) {
+    form.append("image[]", reference.source, safeFilename(reference.filename));
+  }
   form.append("prompt", imageEditPrompt({
     sku,
     productName,

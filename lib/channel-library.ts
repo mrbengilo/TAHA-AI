@@ -418,6 +418,7 @@ export async function getChannelLibrary(channelId: ChannelId, limit = 50) {
       status: String(row.status),
       createdAt: asIso(row.created_at),
       updatedAt: asIso(row.updated_at),
+      previewUrl: `/api/media/${encodeURIComponent(String(row.id))}/download?inline=1`,
       downloadUrl: `/api/media/${encodeURIComponent(String(row.id))}/download`,
     };
   });

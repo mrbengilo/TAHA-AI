@@ -89,7 +89,7 @@ Không nhập access token cố định vào source code. Access/refresh token p
 - Google Sheet dùng hàng đầu tiên làm tiêu đề.
 - Cột tối thiểu: `SKU`, `Tên sản phẩm`, `Giá bán`, `Tồn kho`, `Trạng thái`.
 - Cột nên có thêm: `Thương hiệu`, `Danh mục`, `Mô tả`, `Giá sale`.
-- Trong thư mục Drive nguồn, mỗi sản phẩm là một thư mục con có tên đúng bằng SKU.
+- Trong thư mục Drive nguồn, mỗi sản phẩm dùng thư mục chuẩn `SKU <mã SKU>`, ví dụ Sheet `PH0006` ↔ Drive `SKU PH0006`. Hệ thống vẫn nhận thư mục cũ chỉ có `PH0006` để tương thích ngược.
 - Nếu ảnh nằm trực tiếp ở thư mục gốc, tên file phải chứa SKU với ranh giới rõ ràng, ví dụ `NIKE-PG41-WHITE-01.jpg`. Thư mục SKU được ưu tiên khi cả hai cách cùng tồn tại.
 - Tài khoản Google phải có quyền chỉnh sửa thư mục đích. Cấu hình hiện dùng `https://www.googleapis.com/auth/drive` và `spreadsheets.readonly`; sau khi đổi từ quyền chỉ đọc phải ngắt/kết nối lại để Google cấp consent mới.
 
@@ -102,7 +102,7 @@ Ví dụ:
     02-goc-nghieng.jpg
 ```
 
-Ảnh AI được đặt tên dạng `<SKU>-AI-01.png` đến `<SKU>-AI-06.png`. Việc tải lại cùng media là idempotent nhờ app property trên Drive, nên không tạo bản sao ngoài ý muốn.
+Mỗi sản phẩm phải có tối thiểu 2 ảnh gốc. AI dùng đồng thời 2 ảnh gốc làm tham chiếu và tạo 6 ảnh mới; bộ media chuẩn của một lượt automation là 2 ảnh gốc + 6 ảnh AI. Ảnh AI được đặt tên dạng `<SKU>-AI-01.png` đến `<SKU>-AI-06.png` và ghi trở lại đúng thư mục `SKU <SKU>`. Việc tải lại cùng media là idempotent nhờ app property trên Drive, nên không tạo bản sao ngoài ý muốn.
 
 ## Nguyên tắc Zalo cá nhân
 
