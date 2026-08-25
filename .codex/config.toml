@@ -1,28 +1,28 @@
 # TAHA-AI project-scoped Codex routing configuration.
-# The primary thread stays cheap/fast and escalates implementation to stronger subagents only when needed.
+# Speed/correctness first: every user task starts at Terra Medium or stronger.
 
-model = "gpt-5.6-luna"
-model_reasoning_effort = "low"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
 model_verbosity = "low"
 
 [agents]
 enabled = true
-max_concurrent_threads_per_session = 2
+max_concurrent_threads_per_session = 3
 default_subagent_model = "gpt-5.6-terra"
 default_subagent_reasoning_effort = "medium"
 
 [agents.fast]
-description = "Low-risk, narrow TAHA-AI work: copy/text, CSS, spacing, small responsive fixes, simple validation, tiny tests, documentation, or an isolated mechanical edit. Never use for auth, database schema, integrations, queue/retry, security, or multi-module bugs."
+description = "Quick, low-risk TAHA-AI work that should finish with minimal latency: copy/text, CSS, spacing, responsive fixes, simple validation, small tests/docs, or isolated mechanical edits. Minimum tier is still GPT-5.6 Terra with medium reasoning. Never use a lower model/reasoning tier."
 config_file = "agents/fast.toml"
 
 [agents.standard]
-description = "Default TAHA-AI implementation agent for normal product work: UI screens, React/TypeScript features, CRUD, ordinary API endpoints, product/media flows, Google Drive or Sheets integration work, scheduler logic, and contained refactors. Escalate if security, OAuth lifecycle, migrations, concurrency, cross-channel consistency, or a difficult multi-module bug becomes central."
+description = "Default TAHA-AI implementation agent for normal product work: UI screens, React/TypeScript features, CRUD, ordinary API endpoints, product/media flows, Google Drive or Sheets integration work, scheduler logic, and contained refactors. Use immediately for normal implementation rather than trying a weaker tier first."
 config_file = "agents/standard.toml"
 
 [agents.deep]
-description = "Complex TAHA-AI engineering: OAuth/token refresh, webhooks, queues, retries, rate limits, idempotency, database migrations, complex channel adapters, cross-channel publishing, concurrency, difficult multi-module bugs, or production-sensitive integration behavior."
+description = "Complex TAHA-AI engineering: OAuth/token refresh, webhooks, queues, retries, rate limits, idempotency, database migrations, complex channel adapters, cross-channel publishing, concurrency, difficult multi-module bugs, or production-sensitive integration behavior. Route here proactively when these risks are central; do not wait for Terra to fail first."
 config_file = "agents/deep.toml"
 
 [agents.critical]
-description = "Highest-risk TAHA-AI work: security/auth boundaries, data corruption, irreversible migrations, production incidents, architecture-wide refactors, cross-channel correctness failures, or bugs that survived a deep-agent attempt. Use sparingly."
+description = "Highest-risk TAHA-AI work: security/auth boundaries, data corruption, irreversible migrations, production incidents, architecture-wide refactors, cross-channel correctness failures, or bugs that survived a deep-agent attempt. Use when critical risk is present."
 config_file = "agents/critical.toml"
