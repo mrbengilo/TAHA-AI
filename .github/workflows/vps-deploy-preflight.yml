@@ -22,10 +22,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$VPS_HOST" || { echo 'TAHA_VPS_HOST_MISSING'; exit 78; }
-          test -n "$VPS_USER" || { echo 'TAHA_VPS_USER_MISSING'; exit 78; }
-          test -n "$VPS_PORT" || { echo 'TAHA_VPS_PORT_MISSING'; exit 78; }
-          test -n "$VPS_KEY" || { echo 'TAHA_VPS_SSH_PRIVATE_KEY_MISSING'; exit 78; }
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_PORT"
+          test -n "$VPS_KEY"
           echo 'VPS_SECRETS_READY'
 
       - name: Configure ephemeral SSH
@@ -36,7 +36,7 @@ jobs:
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
 
-      - name: Inspect current VPS deployment read-only
+      - name: Inspect deploy capacity and runtime metadata read-only
         shell: bash
         run: |
           set -euo pipefail
@@ -44,69 +44,44 @@ jobs:
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'sh -s' <<'REMOTE'
           set -eu
           echo 'VPS_CONNECTED=yes'
-          echo "user=$(id -un)"
-          echo "host=$(hostname)"
-          echo "kernel=$(uname -sr)"
-          if [ -r /etc/os-release ]; then . /etc/os-release; echo "os=${PRETTY_NAME:-unknown}"; fi
-          echo '-- tools --'
-          for cmd in docker git curl nginx tar systemctl; do
-            if command -v "$cmd" >/dev/null 2>&1; then echo "$cmd=present"; else echo "$cmd=missing"; fi
-          done
           echo '-- disk --'
-          df -h / /data 2>/dev/null || df -h /
-          echo '-- docker containers --'
-          if command -v docker >/dev/null 2>&1; then
-            docker ps -a --format 'name={{.Names}}|image={{.Image}}|status={{.Status}}|ports={{.Ports}}'
-            echo '-- docker mounts --'
-            for cid in $(docker ps -aq); do
-              docker inspect -f 'name={{.Name}}|image={{.Config.Image}}|mounts={{range .Mounts}}{{.Source}}=>{{.Destination}}:{{.Mode}};{{end}}' "$cid" 2>/dev/null || true
-            done
+          df -h /
+          echo '-- top filesystem consumers --'
+          du -xhd1 /var /var/lib /var/lib/docker /var/www 2>/dev/null | sort -h | tail -20 || true
+          echo '-- docker system df --'
+          docker system df 2>/dev/null || true
+          echo '-- docker images --'
+          docker images --format 'repo={{.Repository}}|tag={{.Tag}}|id={{.ID}}|size={{.Size}}' | head -40 || true
+          echo '-- dangling images --'
+          docker images -f dangling=true --format 'id={{.ID}}|size={{.Size}}' || true
+          echo '-- exited containers --'
+          docker ps -a --filter status=exited --format 'name={{.Names}}|image={{.Image}}|status={{.Status}}' || true
+          echo '-- taha-ai container config --'
+          docker inspect taha-ai -f 'image={{.Config.Image}}|restart={{.HostConfig.RestartPolicy.Name}}|network={{.HostConfig.NetworkMode}}|ports={{json .HostConfig.PortBindings}}|entrypoint={{json .Config.Entrypoint}}|cmd={{json .Config.Cmd}}' 2>/dev/null || true
+          echo '-- taha-ai mounts --'
+          docker inspect taha-ai -f '{{range .Mounts}}{{.Source}}=>{{.Destination}}|mode={{.Mode}}|rw={{.RW}}{{println}}{{end}}' 2>/dev/null || true
+          echo '-- env metadata --'
+          if [ -f /etc/taha-ai/.dev.vars ]; then
+            stat -c 'env=/etc/taha-ai/.dev.vars|owner=%U:%G|mode=%a|size=%s' /etc/taha-ai/.dev.vars
+            echo 'env_keys_begin'
+            sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' /etc/taha-ai/.dev.vars | sort -u
+            echo 'env_keys_end'
+          else
+            echo 'env=/etc/taha-ai/.dev.vars|missing=yes'
           fi
-          echo '-- TAHA repositories --'
-          found_repo=0
-          for rootdir in /root /opt /srv /var/www /home; do
-            [ -d "$rootdir" ] || continue
-            find "$rootdir" -maxdepth 5 -type d -name .git -print 2>/dev/null | while read -r gitdir; do
-              repo=${gitdir%/.git}
-              remote=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
-              case "$remote" in
-                *mrbengilo/TAHA-AI*|*TAHA-AI.git*)
-                  branch=$(git -C "$repo" branch --show-current 2>/dev/null || true)
-                  head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
-                  dirty=$(git -C "$repo" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-                  echo "repo=$repo|branch=$branch|head=$head|dirty=$dirty"
-                  ;;
-              esac
-            done
-          done
-          echo '-- persistent paths --'
-          for path in /data /root/taha-ai /opt/taha-ai /srv/taha-ai /var/lib/taha-ai; do
-            if [ -e "$path" ]; then
-              stat -c 'path=%n|type=%F|owner=%U:%G|mode=%a' "$path" 2>/dev/null || true
-              du -sh "$path" 2>/dev/null || true
-            fi
-          done
-          echo '-- environment metadata --'
-          for path in /root/taha-ai/.dev.vars /opt/taha-ai/.dev.vars /srv/taha-ai/.dev.vars; do
-            if [ -f "$path" ]; then
-              stat -c 'env=%n|owner=%U:%G|mode=%a|size=%s' "$path"
-              echo 'env_keys_begin'
-              sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$path" | sort -u
-              echo 'env_keys_end'
-            fi
-          done
-          echo '-- nginx --'
-          if command -v nginx >/dev/null 2>&1; then
-            nginx -t 2>&1 | tail -5 || true
-            for path in /etc/nginx/sites-enabled/tahashoes.store /etc/nginx/sites-enabled/tahashoes.store.conf /etc/nginx/conf.d/tahashoes.store.conf; do
-              [ -e "$path" ] && echo "nginx_config=$path"
-            done
+          echo '-- cron service metadata --'
+          systemctl show taha-ai-cron.service -p FragmentPath -p ActiveState -p SubState -p ExecStart --no-pager 2>/dev/null | sed -E 's/(Bearer|Authorization:)[^ ;]+/***REDACTED***/g' || true
+          systemctl show taha-ai-cron.timer -p FragmentPath -p ActiveState -p SubState -p NextElapseUSecRealtime --no-pager 2>/dev/null || true
+          echo '-- repo --'
+          if [ -d /var/www/taha-ai/.git ]; then
+            echo "head=$(git -C /var/www/taha-ai rev-parse HEAD)"
+            echo "branch=$(git -C /var/www/taha-ai branch --show-current)"
+            echo "dirty=$(git -C /var/www/taha-ai status --porcelain | wc -l | tr -d ' ')"
+            git -C /var/www/taha-ai remote -v | sed -E 's#https://[^@]+@github.com/#https://github.com/#' | head -4
           fi
-          echo '-- timers and cron --'
-          if command -v systemctl >/dev/null 2>&1; then
-            systemctl list-timers --all --no-pager 2>/dev/null | grep -Ei 'taha|cron' || true
-          fi
-          crontab -l 2>/dev/null | sed -E 's/(Bearer|Authorization:)[^ ]+/***REDACTED***/g' | grep -Ei 'taha|cron|tick|curl' || true
-          echo '-- local health --'
-          curl -sS -o /dev/null -w 'local_8787_http=%{http_code}\n' --max-time 5 http://127.0.0.1:8787/ 2>/dev/null || echo 'local_8787_http=unreachable'
+          echo '-- app local probe --'
+          for path in / /connections /automation /api/integrations; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8787$path" 2>/dev/null || true)
+            echo "path=$path|code=${code:-none}"
+          done
           REMOTE
