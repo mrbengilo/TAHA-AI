@@ -1,0 +1,114 @@
+.taha-shell .ch-page {
+  min-height: auto;
+  padding: 0;
+  color: var(--app-ink);
+  background: transparent;
+}
+
+.taha-shell .ch-topbar,
+.taha-shell .ch-detail-nav {
+  display: none;
+}
+
+.taha-shell .ch-hero {
+  min-height: 0;
+  margin: 0 0 24px;
+  padding: 0;
+  align-items: end;
+  gap: 24px;
+  background: transparent;
+}
+
+.taha-shell .ch-hero-copy h1,
+.taha-shell .ch-detail-identity h1 {
+  font-family: inherit !important;
+  color: var(--app-ink);
+}
+
+.taha-shell .ch-hero-copy h1 {
+  max-width: 760px;
+  margin: 8px 0 10px;
+  font-size: clamp(30px, 4vw, 44px);
+  letter-spacing: -0.045em;
+}
+
+.taha-shell .ch-hero-copy p {
+  max-width: 760px;
+  color: var(--app-muted);
+  font-size: 14px;
+}
+
+.taha-shell .ch-health-card,
+.taha-shell .ch-channel-card,
+.taha-shell .ch-state-card,
+.taha-shell .ch-flow-note,
+.taha-shell .ch-info-panel,
+.taha-shell .ch-product-panel,
+.taha-shell .ch-content-card,
+.taha-shell .ch-media-card,
+.taha-shell .ch-activity-card {
+  border-color: var(--app-line);
+  box-shadow: none;
+}
+
+.taha-shell .ch-content-section,
+.taha-shell .ch-detail-header,
+.taha-shell .ch-detail-content {
+  padding-inline: 0;
+}
+
+.taha-shell .ch-detail-header {
+  position: static;
+  margin: 0 0 20px;
+  padding-top: 0;
+  background: transparent;
+  border: 0;
+}
+
+.taha-shell .ch-detail-identity {
+  padding: 0;
+}
+
+.taha-shell .ch-detail-tabs {
+  position: static;
+  top: auto;
+  margin: 0 0 20px;
+  padding-inline: 0;
+  background: transparent;
+}
+
+.taha-shell .ch-detail-content {
+  padding-top: 0;
+}
+
+.taha-shell .ch-primary-button,
+.taha-shell .ch-state-card button,
+.taha-shell .ch-filter button,
+.taha-shell .ch-icon-button {
+  min-height: 42px;
+}
+
+.taha-shell .ch-card-copy p,
+.taha-shell .ch-info-panel p,
+.taha-shell .ch-product-panel p,
+.taha-shell .ch-detail-identity p {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (max-width: 760px) {
+  .taha-shell .ch-hero,
+  .taha-shell .ch-detail-identity {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .taha-shell .ch-health-card {
+    width: 100%;
+  }
+
+  .taha-shell .ch-content-section,
+  .taha-shell .ch-detail-content {
+    padding-inline: 0;
+  }
+}

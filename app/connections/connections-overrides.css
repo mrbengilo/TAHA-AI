@@ -1,0 +1,75 @@
+.taha-shell .connections-page {
+  min-height: auto;
+  display: block;
+  color: var(--app-ink);
+  background: transparent;
+}
+
+.taha-shell .connections-aside {
+  display: none;
+}
+
+.taha-shell .connections-workspace {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.taha-shell .connections-header {
+  margin: 0 0 24px;
+  padding: 0;
+}
+
+.taha-shell .connections-header h1,
+.taha-shell .provider-section-heading h2 {
+  font-family: inherit !important;
+  color: var(--app-ink);
+}
+
+.taha-shell .connections-header h1 {
+  margin: 7px 0 9px;
+  font-size: clamp(30px, 4vw, 44px);
+  letter-spacing: -0.045em;
+}
+
+.taha-shell .connections-header p,
+.taha-shell .provider-section-heading p,
+.taha-shell .provider-card p,
+.taha-shell .connection-guidance p {
+  color: var(--app-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.taha-shell .flow-strip,
+.taha-shell .provider-card,
+.taha-shell .connection-guidance,
+.taha-shell .connection-notice {
+  border-color: var(--app-line);
+  box-shadow: none;
+}
+
+.taha-shell .provider-card {
+  border-radius: 16px;
+}
+
+.taha-shell .provider-actions button,
+.taha-shell .provider-actions a,
+.taha-shell .channel-shortcuts a {
+  min-height: 42px;
+}
+
+@media (max-width: 760px) {
+  .taha-shell .connections-header,
+  .taha-shell .provider-section-heading,
+  .taha-shell .connection-guidance {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .taha-shell .flow-strip {
+    overflow-x: auto;
+  }
+}

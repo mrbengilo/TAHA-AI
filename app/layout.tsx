@@ -3,6 +3,8 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { isViewerRequest } from "../lib/operator-auth";
 import "./globals.css";
+import "./ui/app-shell.css";
+import "./ui/domain.css";
 
 const publicAppUrl = process.env.PUBLIC_APP_URL || "http://localhost:3000";
 
