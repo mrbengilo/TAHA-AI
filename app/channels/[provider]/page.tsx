@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Link from "../../SiteLink";
 import { notFound } from "next/navigation";
+import { AppIcon } from "../../ui/AppIcon";
+import { AppShell } from "../../ui/AppShell";
 import { channelDefinitions, isChannelId } from "../channel-data";
 import { ChannelWorkspace } from "./ChannelWorkspace";
 
@@ -23,6 +26,15 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function ChannelPage({ params, searchParams }: PageProps) {
   const [{ provider }, query] = await Promise.all([params, searchParams]);
   if (!isChannelId(provider)) notFound();
+  const channel = channelDefinitions[provider];
   const openContent = query.compose === "1" || typeof query.draft === "string";
-  return <ChannelWorkspace provider={provider} initialTab={openContent ? "content" : undefined} openComposer={query.compose === "1"} />;
+  return (
+    <AppShell
+      active="connections"
+      contextTitle={channel.name}
+      headerActions={<Link className="ui-button" href="/channels"><AppIcon name="arrow-right" size={17} /> Tất cả connector</Link>}
+    >
+      <ChannelWorkspace provider={provider} initialTab={openContent ? "content" : undefined} openComposer={query.compose === "1"} />
+    </AppShell>
+  );
 }

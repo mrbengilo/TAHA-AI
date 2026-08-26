@@ -1,187 +1,256 @@
-import type { CSSProperties, ReactNode } from "react";
 import Link from "./SiteLink";
-import "./dashboard/dashboard.css";
+import { AppIcon } from "./ui/AppIcon";
+import { AppShell } from "./ui/AppShell";
 import { getDashboardSnapshot } from "../lib/dashboard";
 
-const channelDefinitions = [
-  { id: "google_drive", provider: "google", name: "Google Drive", mark: "△", tone: "drive" },
-  { id: "google_sheets", provider: "google", name: "Google Sheets", mark: "▦", tone: "sheets" },
-  { id: "facebook", provider: "facebook", name: "Facebook", mark: "f", tone: "facebook" },
-  { id: "zalo_personal", provider: "zalo_personal", name: "Zalo cá nhân", mark: "Z", tone: "zalo" },
-  { id: "tiktok_shop", provider: "tiktok_shop", name: "TikTok Shop", mark: "♪", tone: "tiktok" },
-  { id: "shopee", provider: "shopee", name: "Shopee Seller", mark: "S", tone: "shopee" },
-  { id: "website", provider: "website", name: "Website", mark: "◎", tone: "website" },
-] as const;
-
 const providerNames: Record<string, string> = {
-  google: "Google", facebook: "Facebook", zalo_personal: "Zalo", shopee: "Shopee", tiktok_shop: "TikTok Shop", website: "Website",
+  google: "Google",
+  facebook: "Facebook",
+  zalo_personal: "Zalo cá nhân",
+  shopee: "Shopee",
+  tiktok_shop: "TikTok Shop",
+  website: "Website",
 };
 
-const jobStatus: Record<string, string> = {
-  published: "Thành công", queued: "Đang chờ", publishing: "Đang đăng", retry_wait: "Chờ thử lại",
-  awaiting_confirmation: "Chờ xác nhận", blocked: "Cần xử lý", failed: "Thất bại", cancelled: "Đã hủy",
+const providerMarks: Record<string, string> = {
+  google: "G",
+  facebook: "f",
+  zalo_personal: "Z",
+  shopee: "S",
+  tiktok_shop: "T",
+  website: "W",
 };
 
-const dashboardDateFormatter = new Intl.DateTimeFormat("vi-VN", {
+const jobLabels: Record<string, string> = {
+  published: "Đã đăng",
+  queued: "Đang chờ",
+  publishing: "Đang đăng",
+  retry_wait: "Chờ thử lại",
+  awaiting_confirmation: "Chờ xác nhận",
+  blocked: "Cần xử lý",
+  failed: "Thất bại",
+  cancelled: "Đã hủy",
+};
+
+const dateFormatter = new Intl.DateTimeFormat("vi-VN", {
   day: "2-digit",
   month: "2-digit",
   year: "numeric",
   timeZone: "Asia/Ho_Chi_Minh",
 });
-const dashboardTimeFormatter = new Intl.DateTimeFormat("vi-VN", {
+
+const shortDateFormatter = new Intl.DateTimeFormat("vi-VN", {
+  day: "2-digit",
+  month: "2-digit",
+  timeZone: "Asia/Ho_Chi_Minh",
+});
+
+const timeFormatter = new Intl.DateTimeFormat("vi-VN", {
   hour: "2-digit",
   minute: "2-digit",
   hour12: false,
   timeZone: "Asia/Ho_Chi_Minh",
 });
-const dashboardDayFormatter = new Intl.DateTimeFormat("vi-VN", {
-  day: "2-digit",
-  month: "2-digit",
-  timeZone: "Asia/Ho_Chi_Minh",
-});
-const weekWindowMs = 6 * 24 * 60 * 60 * 1000;
 
 export const dynamic = "force-dynamic";
 
-function RobotMark() {
-  return <span className="dash-robot" aria-hidden="true"><i /><b>TA</b></span>;
+function ProviderBadge({ provider }: { provider: string }) {
+  return <span className={`ui-provider-badge ${provider}`} aria-hidden="true">{providerMarks[provider] || provider.slice(0, 1).toUpperCase()}</span>;
 }
 
-function NavIcon({ children }: { children: ReactNode }) {
-  return <span className="dash-nav-icon" aria-hidden="true">{children}</span>;
-}
-
-function ProviderMark({ provider }: { provider: string }) {
-  return <span className={`dash-mini-logo ${provider}`} aria-hidden="true">{provider === "facebook" ? "f" : provider === "zalo_personal" ? "Z" : provider === "shopee" ? "S" : provider === "tiktok_shop" ? "♪" : "◎"}</span>;
+function Status({ status }: { status: string }) {
+  const tone = status === "published"
+    ? "is-success"
+    : status === "failed" || status === "blocked"
+      ? "is-danger"
+      : status === "retry_wait" || status === "awaiting_confirmation"
+        ? "is-warning"
+        : "is-info";
+  return <span className={`ui-status ${tone}`}>{jobLabels[status] || status}</span>;
 }
 
 export default async function Home() {
   const snapshot = await getDashboardSnapshot();
   const connected = new Set(snapshot.connectedProviders);
-  const connectionByProvider = new Map(snapshot.connections.map((connection) => [connection.provider, connection]));
-  const now = new Date();
-  const start = new Date(now.getTime() - weekWindowMs);
-  const connectedChannelCount = channelDefinitions.filter((item) => connected.has(item.provider)).length;
-  const connectionProgress = Math.round((connectedChannelCount / channelDefinitions.length) * 100);
-  const recordedItemCount = snapshot.publishedThisMonth
-    + snapshot.readyMedia
-    + snapshot.activeProducts
-    + snapshot.activeScheduleCount
-    + snapshot.attentionCount
-    + snapshot.reviewCount
-    + snapshot.connections.length
-    + snapshot.recentActivity.length
-    + snapshot.upcoming.length;
-  const metrics = [
-    { label: "Bài đã đăng", value: snapshot.publishedThisMonth, detail: snapshot.publishedThisMonth ? "Đã ghi nhận trong tháng này" : "Chưa ghi nhận bài trong tháng", icon: "➤", tone: "violet" },
-    { label: "Sản phẩm", value: snapshot.activeProducts, detail: snapshot.activeProducts ? "Sản phẩm đang hoạt động" : "Chưa có sản phẩm hoạt động", icon: "▣", tone: "green" },
-    { label: "Ảnh & video", value: snapshot.readyMedia, detail: snapshot.readyMedia ? `${snapshot.generatedImages} ảnh do AI tạo` : "Chưa có media sẵn sàng", icon: "▧", tone: "amber" },
-    { label: "Lịch tự động", value: snapshot.activeScheduleCount, detail: snapshot.activeScheduleCount ? "Lịch đang hoạt động" : "Chưa có lịch hoạt động", icon: "◷", tone: "pink" },
-    { label: "Cần xử lý", value: snapshot.attentionCount + snapshot.reviewCount, detail: snapshot.attentionCount || snapshot.reviewCount ? `${snapshot.attentionCount} lỗi · ${snapshot.reviewCount} chờ duyệt` : "0 mục được hệ thống ghi nhận", icon: "✦", tone: "blue" },
-  ];
+  const attentionTotal = snapshot.attentionCount + snapshot.reviewCount;
+  const sourcesReady = connected.has("google");
+  const distributionProviders = ["facebook", "zalo_personal", "website", "shopee", "tiktok_shop"];
+  const distributionReady = distributionProviders.filter((provider) => connected.has(provider)).length;
 
   return (
-    <div className="dash-shell">
-      <aside className="dash-sidebar">
-        <Link className="dash-brand" href="/" aria-label="TAHA AI - Tổng quan"><RobotMark /><strong>TAHA-AI</strong></Link>
-        <nav className="dash-nav" aria-label="Điều hướng chính">
-          <Link className="is-active" href="/" aria-current="page"><NavIcon>⌂</NavIcon>Tổng quan</Link>
-          <Link href="/channels"><NavIcon>⌁</NavIcon>Kênh tích hợp</Link>
-          <Link href="/automation"><NavIcon>✥</NavIcon>AI Automation</Link>
-          <Link href="/channels?view=schedules"><NavIcon>▣</NavIcon>Lịch đăng bài</Link>
-          <Link href="/channels/google_sheets"><NavIcon>▢</NavIcon>Sản phẩm</Link>
-          <Link href="/channels/google_drive"><NavIcon>▧</NavIcon>Nội dung & Media</Link>
-          <Link href="/channels?status=in_review"><NavIcon>◌</NavIcon>Chiến dịch</Link>
-          <Link href="/channels?view=activity"><NavIcon>▥</NavIcon>Báo cáo & Nhật ký</Link>
-          <Link href="/connections"><NavIcon>⚙</NavIcon>Cài đặt hệ thống</Link>
-          <Link href="/connections/guide"><NavIcon>?</NavIcon>Hướng dẫn kết nối</Link>
-        </nav>
-        <div className="dash-plan-card">
-          <span>HỆ THỐNG TAHA AI</span><strong>{connectedChannelCount}/{channelDefinitions.length} kênh sẵn sàng</strong>
-          <p>Google, Facebook và các kênh bán hàng được quản lý tập trung.</p>
-          <div><i style={{ width: `${connectionProgress}%` }} /></div><Link href="/connections">Quản lý kết nối →</Link>
+    <AppShell
+      active="overview"
+      contextTitle="Tổng quan vận hành"
+      noticeCount={attentionTotal}
+      headerActions={(
+        <Link className="ui-button is-primary" href="/products">
+          <AppIcon name="plus" size={17} /> Mở sản phẩm
+        </Link>
+      )}
+    >
+      <section className="ui-page-header">
+        <div className="ui-page-header-copy">
+          <span className="ui-eyebrow">TRUNG TÂM ĐIỀU HÀNH</span>
+          <h1>Vận hành sản phẩm và nội dung đa kênh</h1>
+          <p>Dữ liệu từ Google Sheets và hình ảnh trong thư mục Drive theo SKU được tập trung thành một quy trình tạo nội dung, lên lịch và xuất bản rõ ràng.</p>
         </div>
-      </aside>
+        <div className="ui-page-actions">
+          <Link className="ui-button" href="/connections"><AppIcon name="sync" size={17} /> Đồng bộ dữ liệu</Link>
+          <Link className="ui-button" href="/automation"><AppIcon name="automation" size={17} /> Tạo nội dung</Link>
+          <Link className="ui-button is-primary" href="/products"><AppIcon name="publish" size={17} /> Đăng sản phẩm</Link>
+        </div>
+      </section>
 
-      <main className="dash-main">
-        <header className="dash-header">
-          <span className="dash-menu" aria-hidden="true">☰</span>
-          <div className="dash-header-actions">
-            <Link className="dash-create" href="/channels/facebook?compose=1"><b aria-hidden="true">＋</b><span>Tạo mới</span></Link>
-            <Link className="dash-bell" href="/channels?view=attention" aria-label={`${snapshot.attentionCount} mục cần chú ý`}>♢{snapshot.attentionCount > 0 ? <b>{snapshot.attentionCount}</b> : null}</Link>
-            <Link className="dash-user" href="/connections"><span>T</span><span><strong>TaHa Team</strong><small>Quản trị viên</small></span><i>⌄</i></Link>
-          </div>
-        </header>
+      <section className="ui-kpi-grid" aria-label="Chỉ số vận hành">
+        <article className="ui-kpi">
+          <span className="ui-kpi-icon"><AppIcon name="products" size={21} /></span>
+          <span>Sản phẩm đang hoạt động</span>
+          <strong>{snapshot.activeProducts.toLocaleString("vi-VN")}</strong>
+          <small>Được đồng bộ từ Google Sheets và sẵn sàng kiểm tra theo SKU.</small>
+        </article>
+        <article className="ui-kpi is-success">
+          <span className="ui-kpi-icon"><AppIcon name="publish" size={21} /></span>
+          <span>Đã đăng trong tháng</span>
+          <strong>{snapshot.publishedThisMonth.toLocaleString("vi-VN")}</strong>
+          <small>Bài viết hoặc tác vụ xuất bản đã được nền tảng xác nhận.</small>
+        </article>
+        <article className="ui-kpi">
+          <span className="ui-kpi-icon"><AppIcon name="calendar" size={21} /></span>
+          <span>Lịch đang hoạt động</span>
+          <strong>{snapshot.activeScheduleCount.toLocaleString("vi-VN")}</strong>
+          <small>Các lịch social automation đang được hệ thống theo dõi.</small>
+        </article>
+        <article className={attentionTotal > 0 ? "ui-kpi is-danger" : "ui-kpi is-success"}>
+          <span className="ui-kpi-icon"><AppIcon name={attentionTotal > 0 ? "alert" : "check"} size={21} /></span>
+          <span>Cần xử lý</span>
+          <strong>{attentionTotal.toLocaleString("vi-VN")}</strong>
+          <small>{snapshot.attentionCount} lỗi vận hành · {snapshot.reviewCount} nội dung chờ duyệt.</small>
+        </article>
+      </section>
 
-        <div className="dash-content">
-          <div className="dash-welcome">
-            <div><h1>Xin chào, TaHa Team! <span>👋</span></h1><p>{recordedItemCount ? "Đây là dữ liệu vận hành hiện có của hệ thống TAHA-AI." : "Hệ thống chưa ghi nhận dữ liệu vận hành; các chỉ số bên dưới đang ở mức 0."}</p></div>
-            <div className="dash-date" aria-label="Khoảng thời gian hiển thị"><time dateTime={start.toISOString()}>{dashboardDateFormatter.format(start)}</time><span aria-hidden="true">–</span><time dateTime={now.toISOString()}>{dashboardDateFormatter.format(now)}</time><b aria-hidden="true">▣</b></div>
-          </div>
-
-          <section className="dash-metrics" aria-label="Chỉ số vận hành">
-            {metrics.map((metric) => <article key={metric.label}>
-              <span className={`dash-metric-icon ${metric.tone}`} aria-hidden="true">{metric.icon}</span>
-              <div><span>{metric.label}</span><strong>{metric.value.toLocaleString("vi-VN")}</strong></div><small>{metric.detail}</small>
-            </article>)}
-          </section>
-
-          <section className="dash-panel dash-integrations" aria-labelledby="integration-title">
-            <div className="dash-panel-heading"><h2 id="integration-title">Kênh tích hợp</h2><Link href="/connections">Quản lý kênh tích hợp</Link></div>
-            <div className="dash-channel-grid">
-              {channelDefinitions.map((channel) => {
-                const isConnected = connected.has(channel.provider);
-                const account = connectionByProvider.get(channel.provider);
-                const detail = isConnected
-                  ? account?.display_name || account?.external_account_id || "Tài khoản đã kết nối"
-                  : "Chưa kết nối tài khoản";
-                return <Link className="dash-channel-card" href={`/channels/${channel.id}`} key={channel.id}>
-                  <span className={`dash-channel-logo ${channel.tone}`} aria-hidden="true">{channel.mark}</span>
-                  <div><strong>{channel.name}</strong><b className={isConnected ? "is-connected" : "is-pending"}>{isConnected ? "Đã kết nối" : "Chờ kết nối"}</b><small>{detail}</small></div>
-                </Link>;
-              })}
-              <Link className="dash-channel-card dash-add-channel" href="/connections"><span aria-hidden="true">＋</span><strong>Kết nối kênh mới</strong></Link>
+      <section className="ui-dashboard-grid">
+        <div className="ui-stack">
+          <article className="ui-panel">
+            <header className="ui-panel-header">
+              <div><h2>Cần xử lý</h2><p>Ưu tiên các mục ảnh hưởng trực tiếp đến vận hành.</p></div>
+              <Link href="/activity">Mở nhật ký <AppIcon name="arrow-right" size={15} /></Link>
+            </header>
+            <div className="ui-list">
+              <div className="ui-list-row">
+                <span className="ui-list-icon"><AppIcon name="connections" size={19} /></span>
+                <div><strong>Nguồn Google</strong><p>{sourcesReady ? "Google đã kết nối; có thể kiểm tra lần đồng bộ gần nhất." : "Chưa có kết nối Google hoạt động."}</p></div>
+                <span className={`ui-status ${sourcesReady ? "is-success" : "is-danger"}`}>{sourcesReady ? "Sẵn sàng" : "Cần kết nối"}</span>
+              </div>
+              <div className="ui-list-row">
+                <span className="ui-list-icon"><AppIcon name="alert" size={19} /></span>
+                <div><strong>Job và kết nối có lỗi</strong><p>Nhật ký thất bại hoặc kết nối hết hạn cần được kiểm tra.</p></div>
+                <span className={`ui-status ${snapshot.attentionCount ? "is-danger" : "is-success"}`}>{snapshot.attentionCount} mục</span>
+              </div>
+              <div className="ui-list-row">
+                <span className="ui-list-icon"><AppIcon name="content" size={19} /></span>
+                <div><strong>Nội dung chờ duyệt</strong><p>Chỉ nội dung đã duyệt mới được đưa vào lịch hoặc xuất bản.</p></div>
+                <span className={`ui-status ${snapshot.reviewCount ? "is-warning" : "is-success"}`}>{snapshot.reviewCount} mục</span>
+              </div>
             </div>
-          </section>
+          </article>
 
-          <section className="dash-lower-grid">
-            <article className="dash-panel dash-automation">
-              <div className="dash-panel-heading"><h2>AI Automation đang hoạt động</h2><Link href="/channels?view=schedules">Xem tất cả</Link></div>
-              <div className="dash-list">
-                {snapshot.activeSchedules.length ? snapshot.activeSchedules.map((item) => <div className="dash-list-row" key={item.id}>
-                  <ProviderMark provider={item.provider} /><div><strong>{item.title || `Tự động đăng ${providerNames[item.provider] || item.provider}`}</strong><small>{item.execution_mode === "assisted" ? "Đăng có xác nhận" : "Tự động qua API"}</small></div>
-                  <span className="dash-running"><i />Đang chạy<small>{item.local_time || (item.next_run_at ? dashboardTimeFormatter.format(item.next_run_at) : "Theo lịch")}</small></span>
-                </div>) : <div className="dash-empty"><span aria-hidden="true">✥</span><strong>Chưa ghi nhận lịch tự động</strong><p>Duyệt nội dung rồi kích hoạt lịch đăng để bắt đầu.</p><Link href="/channels?view=schedules">Tạo lịch đầu tiên</Link></div>}
+          <article className="ui-panel">
+            <header className="ui-panel-header">
+              <div><h2>Nguồn dữ liệu</h2><p>Google Sheets giữ dữ liệu, Drive giữ ảnh theo thư mục SKU.</p></div>
+              <Link href="/connections">Quản lý <AppIcon name="arrow-right" size={15} /></Link>
+            </header>
+            <div className="ui-list">
+              <div className="ui-list-row">
+                <ProviderBadge provider="google" />
+                <div><strong>Google Sheets</strong><p>{snapshot.activeProducts} sản phẩm hoạt động</p></div>
+                <span className={`ui-status ${sourcesReady ? "is-success" : "is-danger"}`}>{sourcesReady ? "Đã kết nối" : "Chưa kết nối"}</span>
               </div>
-            </article>
-
-            <article className="dash-panel dash-upcoming">
-              <div className="dash-panel-heading"><h2>Lịch đăng bài sắp tới</h2><Link href="/channels?view=schedules">Xem lịch</Link></div>
-              <div className="dash-list">
-                {snapshot.upcoming.length ? snapshot.upcoming.map((item, index) => <div className="dash-schedule-row" key={`${item.scheduled_for}-${item.provider}-${index}`}>
-                  <time><strong>{dashboardTimeFormatter.format(item.scheduled_for)}</strong><small>{dashboardDayFormatter.format(item.scheduled_for)}</small></time><ProviderMark provider={item.provider} />
-                  <div><strong>{item.title || item.body || "Nội dung đã lên lịch"}</strong><small>{providerNames[item.provider] || item.provider}</small></div>
-                  <b>{item.status === "awaiting_confirmation" ? "Chờ xác nhận" : "Sắp tới"}</b>
-                </div>) : <div className="dash-empty"><span aria-hidden="true">◷</span><strong>Chưa ghi nhận bài sắp đăng</strong><p>Các bài đã lên lịch sẽ xuất hiện tại đây.</p><Link href="/channels">Mở kho nội dung</Link></div>}
+              <div className="ui-list-row">
+                <span className="ui-list-icon"><AppIcon name="image" size={19} /></span>
+                <div><strong>Google Drive & R2</strong><p>{snapshot.readyMedia} media sẵn sàng · {snapshot.generatedImages} ảnh AI</p></div>
+                <span className={`ui-status ${snapshot.readyMedia > 0 ? "is-success" : "is-warning"}`}>{snapshot.readyMedia > 0 ? "Có dữ liệu" : "Chưa có ảnh"}</span>
               </div>
-            </article>
-
-            <article className="dash-panel dash-health">
-              <div className="dash-panel-heading"><h2>Sức khỏe hệ thống</h2><Link href="/connections">Chi tiết</Link></div>
-              <div className="dash-ring" role="img" aria-label={`${connectedChannelCount} trên ${channelDefinitions.length} kênh sẵn sàng, tương đương ${connectionProgress}%`} style={{ "--progress": `${connectionProgress * 3.6}deg` } as CSSProperties}><div><span>Kênh sẵn sàng</span><strong>{connectedChannelCount}/{channelDefinitions.length}</strong><b>{connectionProgress}%</b></div></div>
-              <div className="dash-health-legend"><span><i className="ok" />Đã kết nối <b>{connectedChannelCount}</b></span><span><i />Chờ cấu hình <b>{channelDefinitions.length - connectedChannelCount}</b></span><span><i className="warn" />Cần xử lý <b>{snapshot.attentionCount}</b></span></div>
-            </article>
-          </section>
-
-          <section className="dash-panel dash-activity">
-            <div className="dash-panel-heading"><h2>Hoạt động gần đây</h2><Link href="/channels?view=activity">Xem nhật ký</Link></div>
-            {snapshot.recentActivity.length ? <div className="dash-activity-grid">{snapshot.recentActivity.map((item) => <Link href={`/channels/${item.provider}`} key={item.id}>
-              <ProviderMark provider={item.provider} /><div><strong>{item.title || `${providerNames[item.provider] || item.provider} · ${jobStatus[item.status] || item.status}`}</strong><small>{dashboardTimeFormatter.format(item.updated_at)} · {dashboardDayFormatter.format(item.updated_at)}</small></div>
-              <b className={`dash-job-${item.status}`}>{jobStatus[item.status] || item.status}</b>
-            </Link>)}</div> : <div className="dash-empty dash-empty-compact"><span aria-hidden="true">≡</span><strong>Chưa ghi nhận hoạt động xuất bản</strong><p>Nhật ký sẽ tự cập nhật sau lần đăng đầu tiên.</p></div>}
-          </section>
+            </div>
+          </article>
         </div>
-      </main>
-    </div>
+
+        <article className="ui-panel">
+          <header className="ui-panel-header">
+            <div><h2>Lịch sắp tới</h2><p>Các bài đang chờ đến giờ đăng hoặc xác nhận.</p></div>
+            <Link href="/calendar">Xem lịch <AppIcon name="arrow-right" size={15} /></Link>
+          </header>
+          {snapshot.upcoming.length ? (
+            <div className="ui-list">
+              {snapshot.upcoming.map((item, index) => (
+                <div className="ui-list-row" key={`${item.scheduled_for}-${item.provider}-${index}`}>
+                  <ProviderBadge provider={item.provider} />
+                  <div>
+                    <strong>{item.title || item.body || "Nội dung đã lên lịch"}</strong>
+                    <p>{providerNames[item.provider] || item.provider} · {timeFormatter.format(item.scheduled_for)} ngày {shortDateFormatter.format(item.scheduled_for)}</p>
+                  </div>
+                  <Status status={item.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="ui-empty">
+              <span className="ui-empty-icon"><AppIcon name="calendar" size={22} /></span>
+              <strong>Chưa có bài sắp đăng</strong>
+              <p>Tạo nội dung và kích hoạt lịch để hệ thống tự đưa bài vào hàng đợi.</p>
+              <Link className="ui-button" href="/automation">Mở AI Automation</Link>
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section className="ui-grid-2 ui-section-gap">
+        <article className="ui-panel">
+          <header className="ui-panel-header">
+            <div><h2>Kênh phân phối</h2><p>Trạng thái kết nối social và kênh bán.</p></div>
+            <Link href="/connections">Tất cả kênh <AppIcon name="arrow-right" size={15} /></Link>
+          </header>
+          <div className="ui-list">
+            {distributionProviders.map((provider) => {
+              const isConnected = connected.has(provider);
+              const connection = snapshot.connections.find((item) => item.provider === provider);
+              return (
+                <div className="ui-list-row" key={provider}>
+                  <ProviderBadge provider={provider} />
+                  <div><strong>{providerNames[provider]}</strong><p>{connection?.display_name || "Chưa có tài khoản hoạt động"}</p></div>
+                  <span className={`ui-status ${isConnected ? "is-success" : "is-warning"}`}>{isConnected ? "Đã kết nối" : "Chờ cấu hình"}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="ui-panel-padding ui-panel-divider">
+            <span className={`ui-status ${distributionReady === distributionProviders.length ? "is-success" : "is-info"}`}>{distributionReady}/{distributionProviders.length} kênh sẵn sàng</span>
+          </div>
+        </article>
+
+        <article className="ui-panel">
+          <header className="ui-panel-header">
+            <div><h2>Hoạt động gần đây</h2><p>Trạng thái xác nhận từ hàng đợi xuất bản.</p></div>
+            <Link href="/activity">Nhật ký <AppIcon name="arrow-right" size={15} /></Link>
+          </header>
+          {snapshot.recentActivity.length ? (
+            <div className="ui-list">
+              {snapshot.recentActivity.map((item) => (
+                <div className="ui-list-row" key={item.id}>
+                  <ProviderBadge provider={item.provider} />
+                  <div><strong>{item.title || providerNames[item.provider] || item.provider}</strong><p>{dateFormatter.format(item.updated_at)} · {timeFormatter.format(item.updated_at)}{item.error_message ? ` · ${item.error_message}` : ""}</p></div>
+                  <Status status={item.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="ui-empty">
+              <span className="ui-empty-icon"><AppIcon name="activity" size={22} /></span>
+              <strong>Chưa có hoạt động xuất bản</strong>
+              <p>Nhật ký sẽ được cập nhật sau tác vụ đầu tiên.</p>
+            </div>
+          )}
+        </article>
+      </section>
+    </AppShell>
   );
 }
