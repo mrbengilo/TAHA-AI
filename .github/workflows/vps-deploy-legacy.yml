@@ -1,0 +1,59 @@
+name: TAHA VPS production deploy legacy fallback
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/vps-deploy-legacy.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Verify deploy secrets and configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+
+      - name: Run repository legacy-builder deployment procedure
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" bash -s -- "$TARGET_SHA" <<'REMOTE'
+          set -Eeuo pipefail
+          TARGET_SHA="$1"
+          REPO=/var/www/taha-ai
+
+          git -C "$REPO" fetch origin main --prune
+          git -C "$REPO" cat-file -e "${TARGET_SHA}^{commit}"
+          git -C "$REPO" checkout -q main
+          git -C "$REPO" reset --hard "$TARGET_SHA"
+
+          python3 - "$REPO/.github/workflows/vps-deploy-retry.yml" > /tmp/taha-vps-deploy-retry.sh <<'PY'
+          from pathlib import Path
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          start = next(i for i, line in enumerate(lines) if "<<'REMOTE'" in line)
+          end = next(i for i, line in enumerate(lines[start + 1 :], start + 1) if line.strip() == "REMOTE")
+          for line in lines[start + 1 : end]:
+              print(line[10:] if line.startswith("          ") else line)
+          PY
+
+          chmod 700 /tmp/taha-vps-deploy-retry.sh
+          bash /tmp/taha-vps-deploy-retry.sh "$TARGET_SHA"
+          REMOTE
