@@ -89,6 +89,13 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         self.assertIn("https://oauth2.googleapis.com/token'", source)
         self.assertIn("grant_type:'refresh_token'", source)
 
+    def test_catalog_is_driven_only_by_the_exact_filtered_worker(self):
+        source = Path(recovery.__file__).read_text()
+        self.assertIn("'/api/internal/automation/tick', {'runIds': ids}", source)
+        self.assertNotIn("'/api/internal/cron/tick'", source)
+        self.assertLess(source.index("CATALOG_PREPARE_ONLY_FINAL_STATE_INVALID"),
+                        source.rindex("['systemctl', 'start', 'taha-ai-cron.timer']"))
+
     def test_held_cron_requires_exact_applied_conflict_resolution(self):
         catalog_ids = ['catalog-run']
         with tempfile.TemporaryDirectory() as folder:

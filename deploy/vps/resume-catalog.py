@@ -13,9 +13,9 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
-IMAGE = 'tahashoes-taha-ai:010c0193ab4ed57991a60e17aee2925a729ac117'
-IMAGE_ID = 'sha256:3c4035316ec16398880dbceab5bc422c0824279f7816ef01625f91dba1f7b434'
-REVISION = '010c0193ab4ed57991a60e17aee2925a729ac117'
+IMAGE = 'tahashoes-taha-ai:e2340bf0a521075945edc7d1f52283d90806ef69'
+IMAGE_ID = 'sha256:f0bd747d917a3b23d05907922adf9498646ff24b8309a1ef7730662d4b4574e8'
+REVISION = 'e2340bf0a521075945edc7d1f52283d90806ef69'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 APPLIED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-applied.json')
 RESOLUTION = Path('/var/lib/taha-ai/ops-recovery/catalog-conflicts-v3-resolved.json')
@@ -390,7 +390,6 @@ def main():
         was_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode == 0
         resume_held = not was_active and validate_conflict_resolution(database, ids)
         if not was_active and not resume_held: raise RuntimeError('CATALOG_CRON_TIMER_INACTIVE')
-        ready_to_start = False
         try:
             if was_active:
                 subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
@@ -473,10 +472,8 @@ def main():
                 replay_action(final_by_id[run_id], True)
             if not validate_conflict_resolution(database, ids):
                 raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_MISSING')
-            ready_to_start = True
         finally:
-            if ready_to_start:
-                subprocess.run(['systemctl', 'start', 'taha-ai-cron.timer'], check=True, timeout=30)
+            subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
         print('CATALOG_GOOGLE_WRITE_GRANT_ACTIVE=yes', flush=True)
         print('CATALOG_RUNS_RETRIED=' + str(retried_count), flush=True)
         verified = {}
@@ -494,7 +491,19 @@ def main():
                 print('CATALOG_RECOVERY_PROGRESS=' + json.dumps(progress, separators=(',', ':')), flush=True)
                 save_marker(marker, progress, verified); previous = progress
             if len(rows) == 15 and all(row['status'] in ('completed', 'failed', 'cancelled') for row in rows): break
-            time.sleep(15)
+            if subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode == 0:
+                raise RuntimeError('CATALOG_CRON_TIMER_NOT_HELD')
+            if not validate_conflict_resolution(database, ids):
+                raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_MISSING')
+            try:
+                tick = api(secret, '/api/internal/automation/tick', {'runIds': ids}, timeout=300)
+                errors = tick.get('automation', {}).get('errors', [])
+                if errors:
+                    print('CATALOG_WORKER_ERRORS=' + json.dumps(errors, separators=(',', ':')), flush=True)
+            except RuntimeError as error:
+                print(str(error), flush=True)
+                time.sleep(10)
+            time.sleep(2)
         rows = read_runs(database, ids)
         failed = [{'skuRun': row['id'], 'code': row.get('error_code')} for row in rows if row['status'] != 'completed']
         if failed:
@@ -514,9 +523,18 @@ def main():
                 f"GROUP BY json_extract(generation_meta_json,'$.automationRunId'),status", [WORKSPACE, *ids])]
             validate_final_drafts(drafts, ids)
             if schedules or jobs: raise RuntimeError('CATALOG_PREPARE_ONLY_FINAL_STATE_INVALID')
+        validate_runtime()
+        if not validate_conflict_resolution(database, ids):
+            raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_MISSING')
+        if subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode == 0:
+            raise RuntimeError('CATALOG_CRON_TIMER_NOT_HELD')
+        subprocess.run(['systemctl', 'start', 'taha-ai-cron.timer'], check=True, timeout=30)
+        if subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode != 0:
+            raise RuntimeError('CATALOG_CRON_TIMER_RESTORE_FAILED')
         print('CATALOG_ALL_15_SKUS_VERIFIED=yes', flush=True)
         print('CATALOG_GENERATED_IMAGES_VERIFIED=60', flush=True)
         print('CATALOG_PREPARE_ONLY_VERIFIED=yes', flush=True)
+        print('CATALOG_CRON_RESTORED=yes', flush=True)
 
 
 if __name__ == '__main__':
