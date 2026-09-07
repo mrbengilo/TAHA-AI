@@ -1,6 +1,7 @@
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { assertProductMedia, objectJson } from "./product-integrity";
+import { objectJson } from "./product-integrity";
+import { assertPublishProductMedia } from "./publish-media-integrity";
 import { customerCopyViolation } from "./ai/shoe-content";
 
 export class ContentReviewError extends Error {
@@ -81,7 +82,7 @@ export async function approvedDraftPayload(id: string, provider: string) {
     .bind(id, TAHA_WORKSPACE_ID).all<{ media_id: string }>();
   const mediaIds = media.results.map((item) => item.media_id);
   const data = objectJson(draft.platform_data_json);
-  await assertProductMedia(draft.product_id, mediaIds, typeof data.sourceFingerprint === "string" ? data.sourceFingerprint : undefined);
+  await assertPublishProductMedia(draft.product_id, mediaIds, data);
   return { draft, mediaIds, platformData: data };
 }
 

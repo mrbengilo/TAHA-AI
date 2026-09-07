@@ -307,7 +307,7 @@ async function attachAssets(productId: string, files: IndexedDriveFile[], source
     `SELECT pm.id, pm.media_id, media.external_id FROM product_media pm
      INNER JOIN media_assets media ON media.id = pm.media_id
      WHERE pm.workspace_id = ? AND pm.product_id = ? AND media.storage_provider = 'google_drive'
-       AND media.source_connection_id = ?`,
+       AND media.source_connection_id = ? AND media.origin = 'source'`,
   ).bind(TAHA_WORKSPACE_ID, productId, source.connectionId).all<{ id: string; media_id: string; external_id: string }>();
   const remoteIds = new Set(files.map((file) => file.id));
   const staleLinks = (linkedAssets.results ?? []).filter((link) => !remoteIds.has(link.external_id));

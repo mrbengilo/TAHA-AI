@@ -342,6 +342,7 @@ async function loadDispatcher() {
       if (specifier === "./ai/shoe-content") return policyModule.exports;
       if (specifier === "./integrations/google-sync") return { syncGoogleCatalog: async () => {} };
       if (specifier === "./product-integrity") return { productSourceConnection: async () => "google-test", assertProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };
+      if (specifier === "./publish-media-integrity") return { assertPublishProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };
       if (specifier === "./integrations/env") return { getRuntimeEnv: () => ({}) };
       if (specifier === "./publishing") {
         return {

@@ -15,9 +15,11 @@ function harness() {
 async function prepare() {
   const h = harness(); h.seedProduct();
   const automation = h.load("lib/automation.ts");
-  const run = await automation.queueAutomationRun({ productId: "product-1", idempotencyKey: "confirmation-product-1", targetProviders: ["facebook"], imageCount: 6 });
+  const run = await automation.queueAutomationRun({ productId: "product-1", idempotencyKey: "confirmation-product-1", targetProviders: ["facebook"], imageCount: 0 });
   const content = await automation.runAutomationWorker();
   assert.equal(content.completed, 1, JSON.stringify(content));
+  const optimize = await automation.runAutomationWorker();
+  assert.equal(optimize.completed, 1, JSON.stringify(optimize));
   const finish = await automation.runAutomationWorker();
   assert.equal(finish.completed, 1, JSON.stringify(finish));
   const draft = h.sqlite.prepare("SELECT * FROM content_drafts").get();
@@ -44,7 +46,7 @@ test("one confirmation, one Drive image -> caption/hashtags -> schedule -> exact
   assert.equal(h.schedule.connection_id, "facebook-1");
   const ids = h.sqlite.prepare("SELECT media_id FROM content_draft_media").all().map((r) => r.media_id);
   assert.deepEqual(ids, ["image-product-1"]);
-  const replay = await h.automation.queueAutomationRun({ productId: "product-1", idempotencyKey: "confirmation-product-1", targetProviders: ["facebook"], imageCount: 99 });
+  const replay = await h.automation.queueAutomationRun({ productId: "product-1", idempotencyKey: "confirmation-product-1", targetProviders: ["facebook"], imageCount: 0 });
   assert.equal(replay.replayed, true);
   assert.equal((await enqueue(h)).enqueued, 1);
   assert.equal((await enqueue(h)).enqueued, 0);

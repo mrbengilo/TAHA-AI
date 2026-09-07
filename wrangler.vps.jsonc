@@ -8,6 +8,10 @@
     "binding": "ASSETS",
     "directory": "./dist/client"
   },
+  "images": {
+    "binding": "IMAGES",
+    "remote": false
+  },
   "d1_databases": [
     {
       "binding": "DB",

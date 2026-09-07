@@ -1,5 +1,6 @@
 import { syncGoogleCatalog } from "./integrations/google-sync";
-import { assertProductMedia, productSourceConnection } from "./product-integrity";
+import { productSourceConnection } from "./product-integrity";
+import { assertPublishProductMedia } from "./publish-media-integrity";
 import { getRuntimeEnv } from "./integrations/env";
 import {
   PublishDeliveryError,
@@ -537,7 +538,7 @@ async function publishLeasedJob(
     const data = payload.platformData as Record<string, unknown> | undefined;
     try {
       await syncGoogleCatalog(await productSourceConnection(job.product_id, database));
-      await assertProductMedia(job.product_id, mediaIds, typeof data?.sourceFingerprint === "string" ? data.sourceFingerprint : undefined, database);
+      await assertPublishProductMedia(job.product_id, mediaIds, data ?? {}, database);
     }
     catch (error) { throw new PublishDeliveryError(error instanceof Error ? error.message : "PRODUCT_MEDIA_MISMATCH"); }
   }

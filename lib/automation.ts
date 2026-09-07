@@ -1,9 +1,12 @@
-import { generateProductContent } from "./ai/openai";
+import { editProductImage, generateProductContent } from "./ai/openai";
+import { compressImageToJpeg, GENERATED_IMAGE_MAX_BYTES, LIFESTYLE_PROMPT_VERSION } from "./image-compression";
+import { mediaBlob } from "./media";
 import { syncGoogleCatalog } from "./integrations/google-sync";
 import { getRuntimeEnv } from "./integrations/env";
 import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { ensureWorkspace, TAHA_WORKSPACE_ID } from "./integrations/store";
-import { assertProductMedia, productFingerprint, productSourceConnection, productSources } from "./product-integrity";
+import { assertGeneratedProductMedia, assertProductMedia, productFingerprint, productSourceConnection, productSources } from "./product-integrity";
+import { findOrPersistGeneratedImage, LIFESTYLE_VARIANTS, normalizeProductSourceImages } from "./product-image-processing";
 
 export const AUTOMATION_TARGET_PROVIDERS = [
   "facebook",
@@ -14,8 +17,10 @@ export const AUTOMATION_TARGET_PROVIDERS = [
 ] as const;
 
 type TargetProvider = (typeof AUTOMATION_TARGET_PROVIDERS)[number];
-type StepType = "content" | "image" | "finalize";
+type StepType = "content" | "optimize" | "image" | "finalize";
 const AUTOMATION_LEASE_MS = 15 * 60_000;
+const LEGACY_PROMPT_VERSION = "taha-drive-only-v2";
+const MAX_AUTOMATION_SOURCE_IMAGES = 20;
 
 type AutomationStatement = {
   bind(...values: unknown[]): AutomationStatement;
@@ -72,6 +77,7 @@ export type QueueAutomationInput = {
   imageCount?: unknown;
   targetProviders?: unknown;
   connectionIds?: unknown;
+  prepareOnly?: unknown;
 };
 
 export type AutomationWorkerResult = {
@@ -172,14 +178,16 @@ function publicRun(row: RunRow) {
 
 function isSameAutomationRequest(
   existing: RunRow,
-  input: { productId: string; mediaId: string; imageCount: number; targetProviders: TargetProvider[]; targetConnections: Record<string, string> },
+  input: { productId: string; mediaId: string; imageCount: number; targetProviders: TargetProvider[]; targetConnections: Record<string, string>; prepareOnly: boolean },
 ) {
-  const existingConnections = record(json<Record<string, unknown>>(existing.content_json, {}).targetConnections);
+  const existingContent = json<Record<string, unknown>>(existing.content_json, {});
+  const existingConnections = record(existingContent.targetConnections);
   return existing.product_id === input.productId
     && Object.keys(existingConnections).length === Object.keys(input.targetConnections).length
     && Object.entries(input.targetConnections).every(([key, value]) => existingConnections[key] === value)
     && existing.source_media_id === input.mediaId
     && existing.requested_image_count === input.imageCount
+    && (existingContent.prepareOnly === true) === input.prepareOnly
     && JSON.stringify(json<string[]>(existing.target_providers_json, []).sort())
       === JSON.stringify([...input.targetProviders].sort());
 }
@@ -206,11 +214,17 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
   const productId = requiredText(input.productId, "productId", 120);
   const requestKey = requiredText(input.idempotencyKey, "idempotencyKey", 200);
   if (requestKey.length < 8) throw new AutomationError("IDEMPOTENCY_KEY_INVALID", "Khóa chống trùng quá ngắn.");
-  const imageCount = 0; // Drive originals only, including requests from older clients.
+  if (input.prepareOnly !== undefined && typeof input.prepareOnly !== "boolean") throw new AutomationError("INVALID_AUTOMATION_INPUT", "prepareOnly không hợp lệ.");
+  const prepareOnly = input.prepareOnly === true;
+  if (input.imageCount !== undefined && input.imageCount !== 0 && input.imageCount !== LIFESTYLE_VARIANTS.length) {
+    throw new AutomationError("IMAGE_COUNT_INVALID", "Mỗi SKU phải dùng đúng 4 ảnh phong cách.");
+  }
+  const imageCount = input.imageCount === 0 ? 0 : LIFESTYLE_VARIANTS.length;
+  const promptVersion = imageCount === LIFESTYLE_VARIANTS.length ? LIFESTYLE_PROMPT_VERSION : LEGACY_PROMPT_VERSION;
   const targetProviders = normalizeTargets(input.targetProviders);
   const targetConnections: Record<string, string> = {};
   const requestedConnections = record(input.connectionIds);
-  for (const provider of targetProviders.filter((p) => ["facebook", "website", "zalo_personal"].includes(p))) {
+  for (const provider of prepareOnly ? [] : targetProviders.filter((p) => ["facebook", "website", "zalo_personal"].includes(p))) {
     const rows = await db.prepare(`SELECT id FROM channel_connections WHERE workspace_id = ? AND provider = ? AND status = 'connected' AND publish_mode = ?`)
       .bind(TAHA_WORKSPACE_ID, provider, provider === "zalo_personal" ? "assisted" : "api").all<{ id: string }>();
     const candidates = (rows.results ?? []).filter((row) => !requestedConnections[provider] || requestedConnections[provider] === row.id);
@@ -226,7 +240,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
     `SELECT * FROM automation_runs WHERE workspace_id = ? AND request_key = ? LIMIT 1`,
   ).bind(TAHA_WORKSPACE_ID, requestKey).first<RunRow>();
   if (existing) {
-    if (!isSameAutomationRequest(existing, { productId, mediaId, imageCount, targetProviders, targetConnections })) {
+    if (!isSameAutomationRequest(existing, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly })) {
       throw new AutomationError("IDEMPOTENCY_KEY_REUSED", "Khóa chống trùng đã được dùng cho yêu cầu khác.", 409);
     }
     return { run: publicRun(existing), replayed: true };
@@ -234,7 +248,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
 
   if (await activeAutomationRun(db, productId)) throw automationAlreadyRunning();
 
-  if (targetConnections.facebook) {
+  if (!prepareOnly && targetConnections.facebook) {
     const permissions = await verifyFacebookConnection(targetConnections.facebook);
     if (!permissions.ready) throw new AutomationError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", permissions.message || "Facebook chưa có đủ quyền đăng bài. Hãy kiểm tra kết nối Page.", 409);
   }
@@ -247,8 +261,8 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
        (id, workspace_id, product_id, source_media_id, request_key, status, requested_image_count,
         completed_image_count, target_providers_json, output_media_ids_json, prompt_version,
         created_by, created_at, updated_at, content_json)
-       VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '[]', 'taha-drive-only-v2', ?, ?, ?, ?)`,
-    ).bind(runId, TAHA_WORKSPACE_ID, productId, mediaId, requestKey, imageCount, JSON.stringify(targetProviders), actorId?.slice(0, 160) ?? "operator", now, now, JSON.stringify({ targetConnections })),
+       VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '[]', ?, ?, ?, ?, ?)`,
+    ).bind(runId, TAHA_WORKSPACE_ID, productId, mediaId, requestKey, imageCount, JSON.stringify(targetProviders), promptVersion, actorId?.slice(0, 160) ?? "operator", now, now, JSON.stringify({ targetConnections, prepareOnly })),
     db.prepare(
       `INSERT INTO automation_steps
        (id, workspace_id, run_id, step_type, ordinal, status, available_at, attempt_count, max_attempts,
@@ -256,6 +270,16 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
        VALUES (?, ?, ?, 'content', 0, 'queued', ?, 0, 3, '{}', ?, ?)`,
     ).bind(await stableId("step", `${runId}:content:0`), TAHA_WORKSPACE_ID, runId, now, now, now),
   ];
+  if (imageCount === LIFESTYLE_VARIANTS.length) {
+    for (let ordinal = 0; ordinal < LIFESTYLE_VARIANTS.length; ordinal += 1) {
+      statements.push(db.prepare(
+        `INSERT INTO automation_steps
+         (id, workspace_id, run_id, step_type, ordinal, status, available_at, attempt_count, max_attempts,
+          result_json, created_at, updated_at)
+         VALUES (?, ?, ?, 'image', ?, 'queued', ?, 0, 3, '{}', ?, ?)`,
+      ).bind(await stableId("step", `${runId}:image:${ordinal}`), TAHA_WORKSPACE_ID, runId, ordinal, now, now, now));
+    }
+  }
   statements.push(db.prepare(
     `INSERT INTO automation_steps
      (id, workspace_id, run_id, step_type, ordinal, status, available_at, attempt_count, max_attempts,
@@ -273,7 +297,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
       `SELECT * FROM automation_runs WHERE workspace_id = ? AND request_key = ? LIMIT 1`,
     ).bind(TAHA_WORKSPACE_ID, requestKey).first<RunRow>();
     if (racedExisting) {
-      if (!isSameAutomationRequest(racedExisting, { productId, mediaId, imageCount, targetProviders, targetConnections })) {
+      if (!isSameAutomationRequest(racedExisting, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly })) {
         throw new AutomationError("IDEMPOTENCY_KEY_REUSED", "Khóa chống trùng đã được dùng cho yêu cầu khác.", 409);
       }
       return { run: publicRun(racedExisting), replayed: true };
@@ -304,7 +328,7 @@ export async function getAutomationRun(id: string) {
     `SELECT id, step_type, ordinal, status, attempt_count, max_attempts, result_json, error_code,
             error_message, created_at, updated_at, started_at, completed_at
      FROM automation_steps WHERE run_id = ? AND workspace_id = ?
-     ORDER BY CASE step_type WHEN 'content' THEN 0 WHEN 'image' THEN 1 ELSE 2 END, ordinal`,
+     ORDER BY CASE step_type WHEN 'content' THEN 0 WHEN 'optimize' THEN 1 WHEN 'image' THEN 2 ELSE 3 END, ordinal`,
   ).bind(id, TAHA_WORKSPACE_ID).all<Record<string, unknown>>();
   const drafts = await db.prepare(
     `SELECT id, target_provider, content_type, title, body, hashtags_json, status, version, created_at
@@ -347,10 +371,13 @@ export async function retryAutomationRun(id: string) {
   const db = database();
   const now = Date.now();
   const existing = await db.prepare(
-    "SELECT status, requested_image_count FROM automation_runs WHERE id = ? AND workspace_id = ? LIMIT 1",
-  ).bind(id, TAHA_WORKSPACE_ID).first<{ status: string }>();
+    "SELECT status, requested_image_count, prompt_version FROM automation_runs WHERE id = ? AND workspace_id = ? LIMIT 1",
+  ).bind(id, TAHA_WORKSPACE_ID).first<{ status: string; requested_image_count: number; prompt_version: string }>();
   if (!existing) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc AI.", 404);
-  if (Number((existing as { requested_image_count?: number }).requested_image_count) > 0) throw new AutomationError("DRIVE_ONLY_RESTART_REQUIRED", "Hãy xác nhận lại sản phẩm để dùng luồng ảnh Drive mới.", 409);
+  if (Number(existing.requested_image_count) !== 0
+    && !(Number(existing.requested_image_count) === LIFESTYLE_VARIANTS.length && existing.prompt_version === LIFESTYLE_PROMPT_VERSION)) {
+    throw new AutomationError("DRIVE_ONLY_RESTART_REQUIRED", "Hãy xác nhận lại sản phẩm để dùng luồng ảnh mới.", 409);
+  }
   if (existing.status !== "failed" && existing.status !== "cancelled") {
     throw new AutomationError("AUTOMATION_RUN_NOT_RETRYABLE", "Chỉ có thể thử lại công việc đã lỗi hoặc đã hủy.", 409);
   }
@@ -399,9 +426,26 @@ function safeErrorCode(error: unknown) {
   return /^[A-Z][A-Z0-9_]{2,80}$/.test(candidate) ? candidate : "AUTOMATION_STEP_FAILED";
 }
 
+function assertSourceSnapshot(sources: Awaited<ReturnType<typeof productSources>>, content: Record<string, unknown>) {
+  const expected = Array.isArray(content.sourceMediaSnapshot) ? content.sourceMediaSnapshot.map(record) : [];
+  if (expected.length !== sources.images.length || expected.length < 1) throw new Error("PRODUCT_MEDIA_MISMATCH");
+  const current = new Map(sources.images.map((image) => {
+    const metadata = json<Record<string, unknown>>(image.metadata_json, {});
+    return [image.id, { externalId: image.external_id, sourceVersion: cleanText(metadata.md5Checksum || metadata.modifiedTime, 200) }];
+  }));
+  for (const item of expected) {
+    const mediaId = cleanText(item.mediaId, 120);
+    const match = current.get(mediaId);
+    if (!match || match.externalId !== item.externalId || !match.sourceVersion || match.sourceVersion !== item.sourceVersion) {
+      throw new Error("PRODUCT_MEDIA_MISMATCH");
+    }
+  }
+}
+
 async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow, workerId: string, now: number) {
   await syncGoogleCatalog(await productSourceConnection(run.product_id, db));
   const sources = await productSources(run.product_id, db);
+  if (sources.images.length > MAX_AUTOMATION_SOURCE_IMAGES) throw new Error("SKU_SOURCE_IMAGE_LIMIT_EXCEEDED");
   const product = sources.product;
   const fingerprint = await productFingerprint(product);
   const generated = await generateProductContent({
@@ -419,7 +463,13 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
     targetProviders: json<string[]>(run.target_providers_json, []),
   });
   const completedAt = Date.now();
-  const saved = await db.batch([
+  const sourceSnapshots = sources.images.map((image) => {
+    const metadata = json<Record<string, unknown>>(image.metadata_json, {});
+    const sourceVersion = cleanText(metadata.md5Checksum || metadata.modifiedTime, 200);
+    if (!sourceVersion) throw new Error("SOURCE_IMAGE_VERSION_MISSING");
+    return { mediaId: image.id, externalId: image.external_id, sourceVersion };
+  });
+  const statements: AutomationStatement[] = [
     db.prepare(
       `UPDATE automation_runs SET content_json = ?, text_model = ?, status = 'processing',
        started_at = COALESCE(started_at, ?), updated_at = ?
@@ -430,7 +480,9 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
              AND s.status = 'processing' AND s.lease_owner = ? AND s.lease_expires_at > ?
          )`,
     ).bind(
-      JSON.stringify({ ...json<Record<string, unknown>>(run.content_json, {}), ...generated.content, sourceFingerprint: fingerprint, sourceMediaIds: sources.images.slice(0, 10).map((image) => image.id) }),
+      JSON.stringify({ ...json<Record<string, unknown>>(run.content_json, {}), ...generated.content, sourceFingerprint: fingerprint,
+        sourceMediaIds: sources.images.slice(0, 10).map((image) => image.id), allSourceMediaIds: sources.images.map((image) => image.id),
+        sourceMediaSnapshot: sourceSnapshots }),
       generated.model,
       now,
       completedAt,
@@ -459,8 +511,119 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
       workerId,
       completedAt,
     ),
+  ];
+  const completeContent = statements.pop();
+  if (!completeContent) throw new Error("AUTOMATION_STEP_FAILED");
+  for (const [ordinal, snapshot] of sourceSnapshots.entries()) {
+    statements.push(db.prepare(
+      `INSERT OR IGNORE INTO automation_steps
+       (id, workspace_id, run_id, step_type, ordinal, status, available_at, attempt_count, max_attempts,
+        result_json, created_at, updated_at)
+       SELECT ?, ?, ?, 'optimize', ?, 'queued', ?, 0, 3, ?, ?, ?
+       WHERE EXISTS (SELECT 1 FROM automation_steps s WHERE s.id=? AND s.run_id=? AND s.workspace_id=?
+         AND s.status='processing' AND s.lease_owner=? AND s.lease_expires_at > ?)`,
+    ).bind(await stableId("step", `${run.id}:optimize:${snapshot.mediaId}`), TAHA_WORKSPACE_ID, run.id, ordinal,
+      completedAt, JSON.stringify(snapshot), completedAt, completedAt, step.id, run.id, TAHA_WORKSPACE_ID, workerId, completedAt));
+  }
+  statements.push(completeContent);
+  const saved = await db.batch(statements);
+  if (changes(saved[0]) === 0 || changes(saved[saved.length - 1]) === 0) throw new Error("AUTOMATION_LEASE_LOST");
+}
+
+async function processOptimize(db: AutomationDatabase, run: RunRow, step: StepRow, workerId: string) {
+  const content = json<Record<string, unknown>>(run.content_json, {});
+  if (typeof content.sourceFingerprint !== "string") throw new Error("AUTOMATION_PREREQUISITES_PENDING");
+  const snapshot = json<Record<string, unknown>>(step.result_json, {});
+  const mediaId = cleanText(snapshot.mediaId, 120);
+  const externalId = cleanText(snapshot.externalId, 160);
+  const expectedVersion = cleanText(snapshot.sourceVersion, 200);
+  const sources = await productSources(run.product_id, db);
+  if (content.sourceFingerprint !== await productFingerprint(sources.product)) throw new Error("PRODUCT_CONTENT_STALE");
+  assertSourceSnapshot(sources, content);
+  const source = sources.images.find((image) => image.id === mediaId);
+  const metadata = source ? json<Record<string, unknown>>(source.metadata_json, {}) : {};
+  const currentVersion = cleanText(metadata.md5Checksum || metadata.modifiedTime, 200);
+  if (!source || source.external_id !== externalId || !expectedVersion || currentVersion !== expectedVersion) {
+    throw new Error("PRODUCT_MEDIA_MISMATCH");
+  }
+  await normalizeProductSourceImages(run.product_id, [mediaId]);
+  const completedAt = Date.now();
+  const completed = await db.prepare(
+    `UPDATE automation_steps SET status='completed', result_json=?, lease_owner=NULL, lease_expires_at=NULL,
+     completed_at=?, updated_at=? WHERE id=? AND workspace_id=? AND status='processing' AND lease_owner=?
+       AND lease_expires_at > ? AND EXISTS (SELECT 1 FROM automation_runs r WHERE r.id=automation_steps.run_id
+         AND r.workspace_id=automation_steps.workspace_id AND r.status IN ('queued','processing'))`,
+  ).bind(JSON.stringify({ mediaId, externalId, sourceVersion: expectedVersion, optimized: true }), completedAt, completedAt,
+    step.id, TAHA_WORKSPACE_ID, workerId, completedAt).run();
+  if (changes(completed) === 0) throw new Error("AUTOMATION_LEASE_LOST");
+}
+
+async function processImage(db: AutomationDatabase, run: RunRow, step: StepRow, workerId: string) {
+  if (run.requested_image_count !== LIFESTYLE_VARIANTS.length || run.prompt_version !== LIFESTYLE_PROMPT_VERSION) {
+    throw new Error("LEGACY_IMAGE_RUN_DISABLED");
+  }
+  const variant = LIFESTYLE_VARIANTS[step.ordinal];
+  if (!variant) throw new Error("IMAGE_VARIANT_INVALID");
+  const content = json<Record<string, unknown>>(run.content_json, {});
+  if (typeof content.sourceFingerprint !== "string") throw new Error("AUTOMATION_PREREQUISITES_PENDING");
+  const sources = await productSources(run.product_id, db);
+  if (content.sourceFingerprint !== await productFingerprint(sources.product)) throw new Error("PRODUCT_CONTENT_STALE");
+  assertSourceSnapshot(sources, content);
+  const source = sources.images.find((image) => image.id === run.source_media_id);
+  if (!source) throw new Error("PRODUCT_MEDIA_MISMATCH");
+
+  let saved = await findOrPersistGeneratedImage({
+    productId: run.product_id,
+    source,
+    sourceFingerprint: content.sourceFingerprint,
+    variant,
+    promptVersion: run.prompt_version,
+  });
+  let model: string | null = null;
+  if (!saved) {
+    const loaded = await mediaBlob(source.id, 25 * 1024 * 1024);
+    const edited = await editProductImage({
+      source: loaded.blob,
+      mimeType: loaded.mimeType,
+      filename: loaded.filename,
+      product: { sku: sources.product.base_sku, name: sources.product.name },
+      layoutIndex: step.ordinal + 1,
+    });
+    const compressed = await compressImageToJpeg(edited.image, GENERATED_IMAGE_MAX_BYTES);
+    saved = await findOrPersistGeneratedImage({
+      productId: run.product_id,
+      source,
+      sourceFingerprint: content.sourceFingerprint,
+      variant,
+      promptVersion: run.prompt_version,
+      model: edited.model,
+      blob: compressed.blob,
+      width: compressed.width,
+      height: compressed.height,
+    });
+    model = edited.model;
+  }
+  if (!saved) throw new Error("PRODUCT_DRIVE_MEDIA_WRITE_FAILED");
+  model ??= cleanText(record(saved.metadata).generation && record(record(saved.metadata).generation).model, 200) || null;
+  const completedAt = Date.now();
+  const committed = await db.batch([
+    db.prepare(
+      `UPDATE automation_steps SET status='completed', result_json=?, lease_owner=NULL, lease_expires_at=NULL,
+       completed_at=?, updated_at=? WHERE id=? AND workspace_id=? AND status='processing' AND lease_owner=?
+       AND lease_expires_at > ? AND EXISTS (SELECT 1 FROM automation_runs r WHERE r.id=automation_steps.run_id
+         AND r.workspace_id=automation_steps.workspace_id AND r.status IN ('queued','processing'))`,
+    ).bind(JSON.stringify({ mediaId: saved.mediaId, variant }), completedAt, completedAt, step.id, TAHA_WORKSPACE_ID, workerId, completedAt),
+    db.prepare(
+      `UPDATE automation_runs SET completed_image_count=(SELECT COUNT(*) FROM automation_steps s
+         WHERE s.run_id=automation_runs.id AND s.workspace_id=automation_runs.workspace_id
+           AND s.step_type='image' AND s.status='completed'),
+       image_model=COALESCE(?, image_model), status='processing', updated_at=?
+       WHERE id=? AND workspace_id=? AND status IN ('queued','processing')
+         AND EXISTS (SELECT 1 FROM automation_steps s WHERE s.id=? AND s.run_id=automation_runs.id
+           AND s.workspace_id=automation_runs.workspace_id AND s.status='completed')`,
+    ).bind(model, completedAt, run.id, TAHA_WORKSPACE_ID, step.id),
   ]);
-  if (changes(saved[0]) === 0 || changes(saved[1]) === 0) throw new Error("AUTOMATION_LEASE_LOST");
+  if (changes(committed[0]) === 0 || changes(committed[1]) === 0) throw new Error("AUTOMATION_LEASE_LOST");
 }
 
 function channelContent(content: Record<string, unknown>, provider: TargetProvider) {
@@ -512,15 +675,29 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
   if (current.status !== "queued" && current.status !== "processing") throw new Error("AUTOMATION_LEASE_LOST");
   const incomplete = await db.prepare(
     `SELECT COUNT(*) AS total FROM automation_steps WHERE run_id = ? AND workspace_id = ?
-     AND step_type = 'content' AND status != 'completed'`,
+     AND step_type IN ('content', 'optimize', 'image') AND status != 'completed'`,
   ).bind(run.id, TAHA_WORKSPACE_ID).first<{ total: number }>();
   if (Number(incomplete?.total ?? 0) > 0) throw new Error("AUTOMATION_PREREQUISITES_PENDING");
   const content = json<Record<string, unknown>>(current.content_json, {});
   const originalMediaIds = Array.isArray(content.sourceMediaIds) ? content.sourceMediaIds.filter((id): id is string => typeof id === "string") : [];
   if (typeof content.sourceFingerprint !== "string") throw new Error("PRODUCT_CONTENT_STALE");
   const sources = await assertProductMedia(run.product_id, originalMediaIds, content.sourceFingerprint, db);
-  const mediaIds: string[] = [];
-  const draftMediaIds = originalMediaIds;
+  assertSourceSnapshot(sources, content);
+  let mediaIds: string[] = [];
+  if (current.requested_image_count === LIFESTYLE_VARIANTS.length) {
+    if (current.prompt_version !== LIFESTYLE_PROMPT_VERSION) throw new Error("LEGACY_IMAGE_RUN_DISABLED");
+    const imageSteps = await db.prepare(`SELECT ordinal, result_json FROM automation_steps
+      WHERE run_id=? AND workspace_id=? AND step_type='image' AND status='completed' ORDER BY ordinal`)
+      .bind(run.id, TAHA_WORKSPACE_ID).all<{ ordinal: number; result_json: string }>();
+    if ((imageSteps.results ?? []).length !== LIFESTYLE_VARIANTS.length
+      || (imageSteps.results ?? []).some((item, index) => item.ordinal !== index)) throw new Error("AUTOMATION_PREREQUISITES_PENDING");
+    mediaIds = (imageSteps.results ?? []).map((item) => cleanText(record(json<Record<string, unknown>>(item.result_json, {})).mediaId, 120));
+    await assertGeneratedProductMedia(run.product_id, mediaIds, content.sourceFingerprint, current.prompt_version, LIFESTYLE_VARIANTS, db);
+  } else if (current.requested_image_count !== 0) {
+    throw new Error("LEGACY_IMAGE_RUN_DISABLED");
+  }
+  const draftMediaIds = mediaIds.length ? mediaIds : originalMediaIds;
+  const prepareOnly = content.prepareOnly === true;
   const finalizedAt = Date.now();
   const statements: AutomationStatement[] = [];
   const draftIds: string[] = [];
@@ -535,7 +712,8 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       automationRunId: run.id,
       sku: sources.sku,
       sourceFingerprint: content.sourceFingerprint,
-      productDescription: cleanText(content.productDescription, 8000),
+      imagePromptVersion: current.prompt_version,
+      productDescription: cleanText(content.productDescription, 20_000),
       sourceImageCount: originalMediaIds.length,
       generatedImageCount: mediaIds.length,
       totalImageCount: draftMediaIds.length,
@@ -545,7 +723,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
        (id, workspace_id, product_id, target_provider, content_type, language, title, body,
         hashtags_json, platform_data_json, status, version, generator, model, prompt_version,
         generation_meta_json, approved_by, approved_at, created_at, updated_at)
-       SELECT ?, ?, ?, ?, ?, 'vi', ?, ?, ?, ?, 'approved', 1, 'openai', ?, ?, ?, ?, ?, ?, ?
+       SELECT ?, ?, ?, ?, ?, 'vi', ?, ?, ?, ?, ?, 1, 'openai', ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (
          SELECT 1 FROM automation_runs r JOIN automation_steps s
            ON s.run_id = r.id AND s.workspace_id = r.workspace_id
@@ -564,11 +742,12 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       generated.body,
       JSON.stringify(generated.hashtags),
       JSON.stringify(platformData),
+      prepareOnly ? "draft" : "approved",
       current.text_model,
       current.prompt_version,
       JSON.stringify({ automationRunId: run.id, sourceMediaIds: originalMediaIds, outputMediaIds: mediaIds, allMediaIds: draftMediaIds }),
-      `automation:${run.id}`,
-      finalizedAt,
+      prepareOnly ? null : `automation:${run.id}`,
+      prepareOnly ? null : finalizedAt,
       finalizedAt,
       finalizedAt,
       run.id,
@@ -594,7 +773,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
         TAHA_WORKSPACE_ID,
         draftId,
         draftMediaIds[index],
-        index === 0 ? "primary" : index < originalMediaIds.length ? "source" : "attachment",
+        index === 0 ? "primary" : mediaIds.length ? "attachment" : "source",
         index,
         finalizedAt,
         run.id,
@@ -605,7 +784,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       ));
     }
     const scheduleHour = scheduleHours[provider];
-    if (scheduleHour !== undefined) {
+    if (!prepareOnly && scheduleHour !== undefined) {
       const connection = await db.prepare(
         `SELECT id, publish_mode FROM channel_connections
          WHERE workspace_id = ? AND provider = ? AND status = 'connected' AND id = ? LIMIT 1`,
@@ -834,9 +1013,23 @@ export async function runAutomationWorker(options: {
             s.attempt_count, s.max_attempts, s.result_json
      FROM automation_steps s JOIN automation_runs r ON r.id = s.run_id AND r.workspace_id = s.workspace_id
      WHERE s.workspace_id = ? AND s.status IN ('queued', 'retry_wait') AND s.available_at <= ?
-       AND r.status IN ('queued', 'processing') AND s.step_type IN ('content', 'finalize')
-     ORDER BY CASE s.step_type WHEN 'content' THEN 0 WHEN 'image' THEN 1 ELSE 2 END,
-              s.available_at, r.created_at, s.ordinal LIMIT 20`,
+       AND r.status IN ('queued', 'processing') AND s.step_type IN ('content', 'optimize', 'image', 'finalize')
+       AND (s.step_type = 'content'
+         OR (s.step_type = 'optimize' AND NOT EXISTS (
+           SELECT 1 FROM automation_steps prior WHERE prior.run_id=s.run_id AND prior.workspace_id=s.workspace_id
+             AND prior.step_type='content' AND prior.status != 'completed'
+         ))
+         OR (s.step_type = 'image' AND NOT EXISTS (
+           SELECT 1 FROM automation_steps prior WHERE prior.run_id=s.run_id AND prior.workspace_id=s.workspace_id
+             AND prior.step_type IN ('content','optimize') AND prior.status != 'completed'
+         ))
+         OR (s.step_type = 'finalize' AND NOT EXISTS (
+           SELECT 1 FROM automation_steps prior WHERE prior.run_id=s.run_id AND prior.workspace_id=s.workspace_id
+             AND prior.step_type IN ('content','optimize','image') AND prior.status != 'completed'
+         )))
+     ORDER BY r.created_at,
+              CASE s.step_type WHEN 'content' THEN 0 WHEN 'optimize' THEN 1 WHEN 'image' THEN 2 ELSE 3 END,
+              s.available_at, s.ordinal, s.id LIMIT 20`,
   ).bind(TAHA_WORKSPACE_ID, now).all<StepRow>();
   const summary: AutomationWorkerResult = {
     checked: 0,
@@ -852,10 +1045,15 @@ export async function runAutomationWorker(options: {
   for (const step of candidates.results ?? []) {
     if (claimed.length >= limit) break;
     summary.checked += 1;
-    if (step.step_type === "finalize") {
+    if ((step.step_type === "optimize" || step.step_type === "image")
+      && claimed.some((item) => item.step.step_type === "optimize" || item.step.step_type === "image")) {
+      summary.skipped += 1;
+      continue;
+    }
+    if (step.step_type === "optimize" || step.step_type === "image" || step.step_type === "finalize") {
       const pending = await db.prepare(
         `SELECT COUNT(*) AS total FROM automation_steps WHERE run_id = ? AND workspace_id = ?
-         AND step_type = 'content' AND status != 'completed'`,
+         AND step_type IN (${step.step_type === "optimize" ? "'content'" : step.step_type === "image" ? "'content','optimize'" : "'content','optimize','image'"}) AND status != 'completed'`,
       ).bind(step.run_id, TAHA_WORKSPACE_ID).first<{ total: number }>();
       if (Number(pending?.total ?? 0) > 0) {
         summary.skipped += 1;
@@ -875,7 +1073,8 @@ export async function runAutomationWorker(options: {
     try {
       const run = await loadRun(db, step.run_id);
       if (step.step_type === "content") await processContent(db, run, step, stepWorkerId, now);
-      else if (step.step_type === "image") throw new Error("IMAGE_GENERATION_DISABLED");
+      else if (step.step_type === "optimize") await processOptimize(db, run, step, stepWorkerId);
+      else if (step.step_type === "image") await processImage(db, run, step, stepWorkerId);
       else await processFinalize(db, run, step, stepWorkerId, now);
       summary.completed += 1;
     } catch (error) {
