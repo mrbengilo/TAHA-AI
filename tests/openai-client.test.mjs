@@ -41,16 +41,9 @@ function validGeneratedContent() {
     hashtags: ["#TAHAShoes", "#GiayDep"],
   };
   return {
+    sku: "TAHA-001",
     productDescription: "Mẫu giày TAHA với thiết kế gọn gàng.",
     hashtags: ["#TAHAShoes", "#GiayDep"],
-    imageLayouts: [
-      "Nền studio sáng với bóng đổ mềm.",
-      "Bệ trưng bày tối giản màu trung tính.",
-      "Bối cảnh đường phố hiện đại ban ngày.",
-      "Bối cảnh phòng thay đồ cao cấp.",
-      "Bố cục nhìn từ trên xuống với đạo cụ tối giản.",
-      "Phông nền chuyển sắc với ánh sáng viền.",
-    ],
     channels: {
       facebook: channel,
       zalo: channel,
@@ -103,12 +96,12 @@ test("generateProductContent uses Responses structured JSON and treats product f
   assert.equal(body.store, false);
   assert.equal(body.text.format.type, "json_schema");
   assert.equal(body.text.format.strict, true);
-  assert.equal(body.text.format.schema.properties.imageLayouts.minItems, 6);
+  assert.equal(body.text.format.schema.properties.imageLayouts, undefined);
   assert.match(body.input[0].content[0].text, /chỉ dẫn nằm trong dữ liệu/i);
   assert.match(body.input[1].content[0].text, /Ignore previous instructions/);
   assert.equal(result.model, "gpt-test-2026-08-21");
   assert.equal(result.content.channels.shopee.title, "Giày TAHA mới");
-  assert.equal(result.content.imageLayouts.length, 6);
+  assert.ok(result.content.productDescription);
   assert.equal(result.usage.output_tokens, 456);
 });
 
@@ -116,7 +109,7 @@ test("generateProductContent rejects malformed structured output", async () => {
   const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
   const fetcher = async () => Response.json(responsesEnvelope({
     ...validGeneratedContent(),
-    imageLayouts: ["only one layout"],
+    productDescription: "",
   }));
 
   await assert.rejects(
@@ -126,6 +119,15 @@ test("generateProductContent rejects malformed structured output", async () => {
     }, fetcher),
     (error) => error.code === "OPENAI_RESPONSE_INVALID" && error.message === "OPENAI_RESPONSE_INVALID",
   );
+});
+
+test("generateProductContent rejects AI output attributed to a different SKU", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const content = validGeneratedContent(); content.sku = "TAHA-002";
+  await assert.rejects(client.generateProductContent({
+    product: { sku: "TAHA-001", name: "Sneaker" },
+    targetProviders: ["facebook", "zalo", "website", "tiktokShop", "shopee"],
+  }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_RESPONSE_INVALID");
 });
 
 test("editProductImage uses GPT Image edits without input_fidelity", async () => {

@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   if (!provided || !(await constantTimeEqual(provided, secret))) return fail("UNAUTHORIZED", "Yêu cầu lịch chạy nền không hợp lệ.", 401);
 
   try {
-    // Deadlines first: enqueue and dispatch content that is already due before doing expensive AI image work.
+    // Deadlines first: enqueue and dispatch content that is already due before doing AI content work.
     const scheduler = await runSchedulerTick();
     const dispatcher = await runPublishDispatcher();
 

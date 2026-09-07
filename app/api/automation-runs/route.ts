@@ -41,6 +41,14 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof SyntaxError) return fail("INVALID_JSON", "Dữ liệu JSON không hợp lệ.");
     if (error instanceof AutomationError) return fail(error.code, error.userMessage, error.status);
+    const code = error instanceof Error ? error.message : "";
+    const productErrors: Record<string, string> = {
+      PRODUCT_NOT_ACTIVE: "Sản phẩm không ở trạng thái đang bán.",
+      PRODUCT_SKU_FOLDER_MISMATCH: "SKU trong Sheet chưa khớp thư mục Drive. Hãy đồng bộ lại nguồn.",
+      SKU_SOURCE_IMAGES_REQUIRED: "Cần ít nhất một ảnh gốc Drive trong đúng thư mục SKU.",
+      PRODUCT_MEDIA_MISMATCH: "Ảnh đã chọn không thuộc đúng sản phẩm.",
+    };
+    if (productErrors[code]) return fail(code, productErrors[code], 409);
     return fail("AUTOMATION_QUEUE_FAILED", "Không thể tạo công việc AI lúc này.", 500);
   }
 }

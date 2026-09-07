@@ -1,3 +1,5 @@
+import { syncGoogleCatalog } from "./integrations/google-sync";
+import { assertProductMedia, productSourceConnection } from "./product-integrity";
 import { getRuntimeEnv } from "./integrations/env";
 import {
   PublishDeliveryError,
@@ -71,7 +73,7 @@ type RemoteResult = {
 };
 
 export type DispatcherPublishers = {
-  facebook(input: { connectionId: string; message: string; mediaIds: string[] }): Promise<RemoteResult>;
+  facebook(input: { connectionId: string; message: string; mediaIds: string[]; assertLease?: () => Promise<void> }): Promise<RemoteResult>;
   website(input: {
     connectionId: string;
     payload: Record<string, unknown>;
@@ -134,6 +136,8 @@ const defaultPublishers: DispatcherPublishers = {
   recordTikTokShop: recordTikTokShopMappings,
 };
 
+const transientGoogleErrors = new Set(["GOOGLE_SYNC_IN_PROGRESS", "GOOGLE_DRIVE_TEMPORARY_FAILURE", "GOOGLE_DRIVE_UNAVAILABLE", "GOOGLE_SHEETS_UNAVAILABLE", "GOOGLE_SHEETS_REQUEST_FAILED", "GOOGLE_MEDIA_TEMPORARY_FAILURE", "GOOGLE_MEDIA_UNAVAILABLE"]);
+
 function dispatcherDatabase(override?: DispatcherDatabase) {
   const database = override ?? (getRuntimeEnv().DB as unknown as DispatcherDatabase | undefined);
   if (!database) throw new Error("DATABASE_UNAVAILABLE");
@@ -178,7 +182,7 @@ function errorDetails(error: unknown) {
   if (error instanceof PublishDeliveryError) {
     return {
       code: error.code,
-      retryable: error.retryable,
+      retryable: error.retryable || transientGoogleErrors.has(error.code),
       outcomeUnknown: error.outcomeUnknown,
     };
   }
@@ -195,7 +199,7 @@ function errorDetails(error: unknown) {
     || /^WEBSITE_API_4\d\d$/.test(code) && code !== "WEBSITE_API_429";
   return {
     code,
-    retryable: typeof shaped?.retryable === "boolean" ? shaped.retryable : !blocked,
+    retryable: transientGoogleErrors.has(code) || (typeof shaped?.retryable === "boolean" ? shaped.retryable : !blocked && !code.startsWith("GOOGLE_")),
     outcomeUnknown: shaped?.outcomeUnknown === true,
   };
 }
@@ -235,7 +239,7 @@ async function recoverExpiredLeases(database: DispatcherDatabase, now: number) {
        AND connection_id IN (SELECT id FROM channel_connections WHERE provider = 'website')`,
   ).bind(now, now, now).run();
   const uncertain = await database.prepare(
-    `UPDATE publish_jobs SET status = 'blocked', lease_owner = NULL, lease_expires_at = NULL,
+    `UPDATE publish_jobs SET status = 'blocked', lease_expires_at = NULL,
      error_code = 'DELIVERY_OUTCOME_UNKNOWN',
      error_message = 'Worker dừng sau khi bắt đầu gửi; cần đối soát kênh trước khi thử lại.', updated_at = ?
      WHERE status = 'publishing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
@@ -259,6 +263,9 @@ async function leaseJob(
      error_code = NULL, error_message = NULL, completed_at = NULL, updated_at = ?
      WHERE id = ? AND workspace_id = ? AND status IN ('queued', 'retry_wait')
        AND available_at <= ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+       AND payload_snapshot_json = ?
+       AND (draft_id IS NULL OR EXISTS (SELECT 1 FROM content_drafts d WHERE d.id = publish_jobs.draft_id
+         AND d.workspace_id = publish_jobs.workspace_id AND d.status = 'approved'))
      RETURNING attempt_count, max_attempts`,
   ).bind(
     workerId,
@@ -269,6 +276,7 @@ async function leaseJob(
     job.workspace_id,
     now,
     now,
+    job.payload_snapshot_json,
   ).first<LeasedAttempt>();
 }
 
@@ -283,7 +291,8 @@ async function markPublished(
     `UPDATE publish_jobs SET status = 'published', external_post_id = ?, external_url = ?,
      provider_response_json = ?, lease_owner = NULL, lease_expires_at = NULL,
      completed_at = ?, updated_at = ?, error_code = NULL, error_message = NULL
-     WHERE id = ? AND workspace_id = ? AND status = 'publishing' AND lease_owner = ?
+     WHERE id = ? AND workspace_id = ? AND lease_owner = ?
+       AND (status = 'publishing' OR (status = 'blocked' AND error_code = 'DELIVERY_OUTCOME_UNKNOWN' AND external_post_id = ?))
      RETURNING id`,
   ).bind(
     result.externalId,
@@ -294,6 +303,7 @@ async function markPublished(
     job.id,
     job.workspace_id,
     workerId,
+    result.externalId,
   ).first<{ id: string }>();
   return Boolean(updated);
 }
@@ -359,7 +369,7 @@ async function persistAcceptedReceipt(
      WHERE id = ? AND workspace_id = ?
        AND (
          (status = 'publishing' AND lease_owner = ?)
-         OR (status = 'blocked' AND error_code = 'DELIVERY_OUTCOME_UNKNOWN' AND external_post_id IS NULL)
+         OR (status = 'blocked' AND error_code = 'DELIVERY_OUTCOME_UNKNOWN' AND external_post_id IS NULL AND lease_owner = ?)
        )`,
   ).bind(
     result.externalId,
@@ -368,6 +378,7 @@ async function persistAcceptedReceipt(
     now,
     job.id,
     job.workspace_id,
+    workerId,
     workerId,
   ).run();
   return resultChanges(updated) > 0;
@@ -508,14 +519,26 @@ async function publishLeasedJob(
   job: CandidateJob,
   publishers: DispatcherPublishers,
   workerId: string,
+  database: DispatcherDatabase,
+  assertLease: () => Promise<void>,
 ) {
   const payload = parsePayload(job.payload_snapshot_json);
+  if (job.draft_id && job.product_id && ["facebook", "website"].includes(job.provider)) {
+    const mediaIds = Array.isArray(payload.mediaIds) ? payload.mediaIds.filter((id): id is string => typeof id === "string") : [];
+    const data = payload.platformData as Record<string, unknown> | undefined;
+    try {
+      await syncGoogleCatalog(await productSourceConnection(job.product_id, database));
+      await assertProductMedia(job.product_id, mediaIds, typeof data?.sourceFingerprint === "string" ? data.sourceFingerprint : undefined, database);
+    }
+    catch (error) { throw new PublishDeliveryError(error instanceof Error ? error.message : "PRODUCT_MEDIA_MISMATCH"); }
+  }
   if (job.connection_status !== "connected") throw new PublishDeliveryError("CONNECTION_NOT_CONNECTED");
   if (job.publish_mode !== "api") throw new PublishDeliveryError("CONNECTION_NOT_AUTOMATIC");
 
   if (job.provider === "facebook") {
     if (job.job_kind !== "social_post") throw new PublishDeliveryError("FACEBOOK_JOB_KIND_UNSUPPORTED");
-    return publishers.facebook({ connectionId: job.connection_id, ...facebookPayload(payload) });
+    await assertLease();
+    return publishers.facebook({ connectionId: job.connection_id, ...facebookPayload(payload), assertLease });
   }
   if (job.provider === "website") {
     return publishers.website({
@@ -545,6 +568,7 @@ async function publishLeasedJob(
 }
 
 export async function runPublishDispatcher(options: DispatcherOptions = {}): Promise<DispatcherResult> {
+  const dispatchStartedAt = Date.now();
   const database = dispatcherDatabase(options.database);
   const publishers = options.publishers ?? defaultPublishers;
   const now = Math.floor(options.now ?? Date.now());
@@ -594,7 +618,20 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
     let accepted: RemoteResult | null = null;
     let tiktokMappingRecorded = false;
     try {
-      accepted = await publishLeasedJob(job, publishers, workerId);
+      const assertLease = async () => {
+        const checkedAt = now + Date.now() - dispatchStartedAt;
+        const renewed = await database.prepare(`UPDATE publish_jobs SET lease_expires_at = ?, updated_at = ?
+          WHERE id = ? AND workspace_id = ? AND status = 'publishing' AND lease_owner = ? AND lease_expires_at > ?
+            AND EXISTS (SELECT 1 FROM channel_connections c WHERE c.id = publish_jobs.connection_id
+              AND c.workspace_id = publish_jobs.workspace_id AND c.status = 'connected' AND c.publish_mode = 'api') RETURNING id`)
+          .bind(checkedAt + Math.max(leaseMs, 120_000), checkedAt, job.id, job.workspace_id, workerId, checkedAt).first<{ id: string }>();
+        if (!renewed) throw new PublishDeliveryError("PUBLISH_LEASE_LOST");
+      };
+      accepted = await publishLeasedJob(job, publishers, workerId, database, assertLease);
+      if (job.provider === "facebook") {
+        const receiptSaved = await persistAcceptedReceipt(database, job, workerId, accepted, Date.now());
+        if (!receiptSaved) throw new PublishDeliveryError("FACEBOOK_LOCAL_RECEIPT_PERSIST_FAILED", { outcomeUnknown: true });
+      }
       if (job.provider === "tiktok_shop" && job.product_id) {
         const receiptSaved = await persistAcceptedReceipt(database, job, workerId, accepted, now);
         if (!receiptSaved) {
@@ -675,6 +712,8 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
       }
       const details = errorDetails(error);
       const shouldBlock = details.outcomeUnknown
+        || details.code.startsWith("PRODUCT_") || details.code === "SKU_SOURCE_IMAGES_REQUIRED"
+        || (details.code.startsWith("GOOGLE_") && !details.retryable)
         || details.code === "COMMERCE_PUBLISH_NOT_IMPLEMENTED"
         || details.code === "PROVIDER_PUBLISH_NOT_SUPPORTED"
         || details.code === "FACEBOOK_JOB_KIND_UNSUPPORTED"
@@ -689,7 +728,9 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
           details.code,
           details.outcomeUnknown
             ? "Kênh có thể đã nhận nội dung; cần đối soát trước khi thử lại."
-            : "Kênh hoặc loại công việc này chưa thể tự xuất bản.",
+            : details.code.startsWith("PRODUCT_") || details.code === "SKU_SOURCE_IMAGES_REQUIRED"
+              ? "Ảnh hoặc thông tin SKU đã thay đổi. Đồng bộ lại và xác nhận sản phẩm để tạo bài mới."
+              : "Kênh hoặc loại công việc này chưa thể tự xuất bản.",
           now,
         );
         if (changed) summary.blocked += 1;
