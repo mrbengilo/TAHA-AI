@@ -26,10 +26,11 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         for change in ({'content_json': json.dumps({'prepareOnly': False})},
                        {'request_key': 'daily:product'}, {'requested_image_count': 3}):
             with self.assertRaises(RuntimeError): recovery.validate_run_contract([{**safe, **change}], ids)
-        with self.assertRaises(RuntimeError):
-            recovery.validate_run_contract([{**safe, 'error_code': 'OPENAI_BILLING_ERROR'}], ids)
-        with self.assertRaises(RuntimeError):
-            recovery.validate_run_contract([{**safe, 'error_code': 'CONNECTION_NOT_FOUND'}], ids)
+        for code in ('OPENAI_BILLING_ERROR', 'PRODUCT_MEDIA_MISMATCH'):
+            with self.assertRaises(RuntimeError):
+                recovery.validate_run_contract([{**safe, 'error_code': code}], ids)
+        for code in ('GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED'):
+            recovery.validate_run_contract([{**safe, 'error_code': code}], ids)
 
     def test_original_media_may_remain_safe_web_format_but_generated_media_is_jpeg(self):
         for value in ('image/jpeg', 'image/png', 'image/webp'):
@@ -52,10 +53,11 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
     def test_post_drain_retry_rechecks_the_exact_failure_code(self):
         self.assertEqual(recovery.retryable_ids([
             {'id': 'run-1', 'status': 'failed', 'error_code': 'GOOGLE_WRITE_SCOPE_REQUIRED'},
-            {'id': 'run-2', 'status': 'processing', 'error_code': None},
-        ]), ['run-1'])
+            {'id': 'run-2', 'status': 'failed', 'error_code': 'CONNECTION_NOT_FOUND'},
+            {'id': 'run-3', 'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'},
+        ]), ['run-1', 'run-2', 'run-3'])
         with self.assertRaises(RuntimeError):
-            recovery.retryable_ids([{'id': 'run-2', 'status': 'failed', 'error_code': 'OPENAI_RATE_LIMIT'}])
+            recovery.retryable_ids([{'id': 'run-4', 'status': 'failed', 'error_code': 'OPENAI_BILLING_ERROR'}])
 
 
 if __name__ == '__main__': unittest.main()

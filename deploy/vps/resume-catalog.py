@@ -18,6 +18,7 @@ APPLIED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-applied.json')
 PROMPT_VERSION = 'taha-lifestyle-v3'
 WRITE_SCOPES = {'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'}
 VARIANTS = {'cycling', 'running', 'climbing', 'stream'}
+RECOVERABLE_ERRORS = {'GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED'}
 
 
 def api(secret, path, body=None, timeout=300):
@@ -64,7 +65,7 @@ def validate_run_contract(rows, expected_ids, marker_products=None):
         {'sku': row.get('base_sku'), 'status': row.get('status'), 'code': row.get('error_code')}
         for row in rows
         if row.get('status') == 'cancelled'
-        or (row.get('status') == 'failed' and row.get('error_code') != 'GOOGLE_WRITE_SCOPE_REQUIRED')
+        or (row.get('status') == 'failed' and row.get('error_code') not in RECOVERABLE_ERRORS)
     ]
     if unexpected:
         print('CATALOG_UNEXPECTED_STATES=' + json.dumps(unexpected, separators=(',', ':')), flush=True)
@@ -135,7 +136,7 @@ def read_runs(database, ids):
 
 def retryable_ids(rows):
     for row in rows:
-        if row['status'] == 'failed' and row.get('error_code') != 'GOOGLE_WRITE_SCOPE_REQUIRED':
+        if row['status'] == 'failed' and row.get('error_code') not in RECOVERABLE_ERRORS:
             raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
         if row['status'] == 'cancelled': raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
     return [row['id'] for row in rows if row['status'] == 'failed']
