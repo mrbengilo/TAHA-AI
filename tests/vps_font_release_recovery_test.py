@@ -88,9 +88,16 @@ class FontReleaseRecoveryTest(unittest.TestCase):
         release = RELEASE.read_text()
         workflow = WORKFLOW.read_text()
         self.assertIn('EXPECTED_ACTIVE_SHA="${3:-}"', release)
+        self.assertIn('EXPECTED_ACTIVE_IMAGE="${4:-}"', release)
         self.assertIn('EXPECTED_ACTIVE_IMAGE_CHANGED', release)
+        self.assertIn('EXPECTED_ACTIVE_DIGEST_CHANGED', release)
+        self.assertIn('EXPECTED_ACTIVE_STATUS_CHANGED', release)
+        self.assertIn('EXPECTED_ACTIVE_REVISION_CHANGED', release)
         self.assertIn('group: taha-vps-production', workflow)
-        self.assertIn('bash -s -- "$TARGET_SHA" "" "$EXPECTED_ACTIVE_SHA" < deploy/vps/release.sh', workflow)
+        self.assertIn(
+            'bash -s -- "$TARGET_SHA" - "$EXPECTED_ACTIVE_SHA" "$EXPECTED_ACTIVE_IMAGE" < deploy/vps/release.sh',
+            workflow,
+        )
         self.assertIn('/app/dist/client/_next/static/css', workflow)
         self.assertNotIn('/app/.next/static/css', workflow)
 

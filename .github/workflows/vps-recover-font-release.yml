@@ -27,6 +27,7 @@ jobs:
       VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
       TARGET_SHA: 010c0193ab4ed57991a60e17aee2925a729ac117
       EXPECTED_ACTIVE_SHA: b723d97c5bbb098a8aae6d48117e8421ec3a2473
+      EXPECTED_ACTIVE_IMAGE: sha256:dd5388834f6ac3d385ef8adfa8bee8dfd17fc4a3c2431e1b0d9a3466a71af6ab
     steps:
       - uses: actions/checkout@v4
       - name: Verify exact recovery guards
@@ -50,7 +51,7 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            bash -s -- "$TARGET_SHA" "" "$EXPECTED_ACTIVE_SHA" < deploy/vps/release.sh
+            bash -s -- "$TARGET_SHA" - "$EXPECTED_ACTIVE_SHA" "$EXPECTED_ACTIVE_IMAGE" < deploy/vps/release.sh
       - name: Verify deployed revision and IDOSI typography
         run: |
           set -euo pipefail

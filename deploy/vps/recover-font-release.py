@@ -18,6 +18,7 @@ OBSOLETE_IMAGE = 'sha256:3e0899f3c151878c0cc0942b1af21119258846eb63c4d0fab9093f7
 ROLLBACK_NAME = re.compile(r'/taha-ai-rollback-\d{8}-\d{6}(?:-\d+)?')
 RELEASE_MINIMUM = 5242880 * 1024
 RECOVERY_HEADROOM = 100 * 1024 * 1024
+BACKUP = Path('/var/backups/taha-ai/font-release-obsolete-' + OBSOLETE_REVISION[:12] + '.json')
 
 
 def docker(*args):
@@ -33,12 +34,23 @@ def inspect(kind, reference):
     return json.loads(docker(kind, 'inspect', reference))[0]
 
 
+def maybe_image(reference):
+    result = subprocess.run(
+        ['docker', 'image', 'inspect', reference], capture_output=True, text=True, timeout=90
+    )
+    if result.returncode == 0:
+        return json.loads(result.stdout)[0]
+    if 'No such image' in result.stderr:
+        return None
+    raise RuntimeError('FONT_RECOVERY_DOCKER_FAILED')
+
+
 def containers():
     identities = docker('container', 'ls', '-aq').split()
     return json.loads(docker('container', 'inspect', *identities)) if identities else []
 
 
-def validate(items, current, target, obsolete):
+def validate_protected(items, current, target):
     if (
         current.get('Name') != '/taha-ai'
         or current.get('Image') != ACTIVE_IMAGE
@@ -54,6 +66,10 @@ def validate(items, current, target, obsolete):
         or any(item.get('Image') == target.get('Id') for item in items)
     ):
         raise RuntimeError('FONT_RECOVERY_TARGET_CHANGED')
+
+
+def validate(items, current, target, obsolete):
+    validate_protected(items, current, target)
     if (
         obsolete.get('Id') != OBSOLETE_IMAGE
         or obsolete.get('RepoTags') != [OBSOLETE_TAG]
@@ -103,15 +119,27 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         current = inspect('container', 'taha-ai')
         target = inspect('image', TARGET_TAG)
-        obsolete = inspect('image', OBSOLETE_TAG)
+        obsolete = maybe_image(OBSOLETE_TAG)
+        if obsolete is None:
+            validate_protected(containers(), current, target)
+            if any(item.get('Image') == OBSOLETE_IMAGE for item in containers()):
+                raise RuntimeError('FONT_RECOVERY_IMAGE_STILL_REFERENCED')
+            if not BACKUP.is_file() or (BACKUP.stat().st_mode & 0o777) != 0o600:
+                raise RuntimeError('FONT_RECOVERY_APPLIED_MARKER_MISSING')
+            free = os.statvfs('/').f_bavail * os.statvfs('/').f_frsize
+            if free < RELEASE_MINIMUM + RECOVERY_HEADROOM:
+                raise RuntimeError('FONT_RECOVERY_HEADROOM_INSUFFICIENT')
+            subprocess.run(['systemctl', 'is-active', 'taha-ai-cron.timer'], check=True)
+            print('FONT_RECOVERY_ALREADY_APPLIED=yes', flush=True)
+            print('FONT_RECOVERY_READY=yes', flush=True)
+            return
         candidate = validate(containers(), current, target, obsolete)
         print('FONT_RECOVERY_PLAN=' + candidate['Name'].lstrip('/') + '|' + OBSOLETE_TAG, flush=True)
         if '--apply' not in sys.argv:
             return
 
-        backup = Path('/var/backups/taha-ai/font-release-obsolete-' + OBSOLETE_REVISION[:12] + '.json')
-        if not backup.exists():
-            fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        if not BACKUP.exists():
+            fd = os.open(BACKUP, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, 'w') as output:
                 json.dump(candidate, output)
                 output.flush()

@@ -2,10 +2,13 @@
 set -Eeuo pipefail
 TARGET_SHA="$1"
 SOURCE_BUNDLE="${2:-}"
+if [ "$SOURCE_BUNDLE" = - ]; then SOURCE_BUNDLE=""; fi
 EXPECTED_ACTIVE_SHA="${3:-}"
+EXPECTED_ACTIVE_IMAGE="${4:-}"
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
 if [ -n "$EXPECTED_ACTIVE_SHA" ]; then
   [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
+  [[ "$EXPECTED_ACTIVE_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || exit 20
 fi
 exec 9>/var/lock/taha-ai-release.lock
 flock -n 9 || { echo 'RELEASE_ALREADY_RUNNING'; exit 21; }
@@ -61,6 +64,10 @@ docker network inspect "$NETWORK" >/dev/null
 if [ -n "$EXPECTED_ACTIVE_SHA" ]; then
   test "$(git -C "$REPO" rev-parse HEAD)" = "$EXPECTED_ACTIVE_SHA" || { echo 'EXPECTED_ACTIVE_SOURCE_CHANGED'; exit 30; }
   test "$(docker inspect taha-ai -f '{{.Config.Image}}')" = "${IMAGE_REPO}:${EXPECTED_ACTIVE_SHA}" || { echo 'EXPECTED_ACTIVE_IMAGE_CHANGED'; exit 30; }
+  test "$(docker inspect taha-ai -f '{{.Image}}')" = "$EXPECTED_ACTIVE_IMAGE" || { echo 'EXPECTED_ACTIVE_DIGEST_CHANGED'; exit 30; }
+  test "$(docker inspect taha-ai -f '{{.State.Status}}')" = running || { echo 'EXPECTED_ACTIVE_STATUS_CHANGED'; exit 30; }
+  test "$(docker image inspect "${IMAGE_REPO}:${EXPECTED_ACTIVE_SHA}" -f '{{.Id}}')" = "$EXPECTED_ACTIVE_IMAGE" || { echo 'EXPECTED_ACTIVE_TAG_CHANGED'; exit 30; }
+  test "$(docker image inspect "$EXPECTED_ACTIVE_IMAGE" -f '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$EXPECTED_ACTIVE_SHA" || { echo 'EXPECTED_ACTIVE_REVISION_CHANGED'; exit 30; }
 fi
 FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
 [ "$FREE_KB" -ge 5242880 ] || { echo 'INSUFFICIENT_RELEASE_DISK'; exit 23; }
