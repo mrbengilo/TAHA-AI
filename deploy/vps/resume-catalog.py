@@ -60,6 +60,15 @@ def validate_run_contract(rows, expected_ids, marker_products=None):
     expected_products = None
     if marker_products is not None:
         expected_products = {(row.get('runId'), row.get('productId'), row.get('sku')) for row in marker_products}
+    unexpected = [
+        {'sku': row.get('base_sku'), 'status': row.get('status'), 'code': row.get('error_code')}
+        for row in rows
+        if row.get('status') == 'cancelled'
+        or (row.get('status') == 'failed' and row.get('error_code') != 'GOOGLE_WRITE_SCOPE_REQUIRED')
+    ]
+    if unexpected:
+        print('CATALOG_UNEXPECTED_STATES=' + json.dumps(unexpected, separators=(',', ':')), flush=True)
+        raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
     for row in rows:
         try: content = json.loads(row['content_json'] or '{}')
         except ValueError: raise RuntimeError('CATALOG_RUN_CONTENT_INVALID') from None
@@ -69,9 +78,6 @@ def validate_run_contract(rows, expected_ids, marker_products=None):
                 or json.loads(row['target_providers_json'] or '[]') != ['facebook'] \
                 or content.get('targetConnections') != {}:
             raise RuntimeError('CATALOG_RUN_NOT_PREPARE_ONLY')
-        if row['status'] == 'cancelled' or (row['status'] == 'failed'
-                                           and row['error_code'] != 'GOOGLE_WRITE_SCOPE_REQUIRED'):
-            raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
         if expected_products is not None and (row['id'], row['product_id'], row['base_sku']) not in expected_products:
             raise RuntimeError('CATALOG_MARKER_PRODUCT_MISMATCH')
 
