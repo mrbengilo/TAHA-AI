@@ -1,9 +1,6 @@
 name: TAHA Facebook trial diagnosis
 
 on:
-  push:
-    branches: [codex/facebook-trial-diagnose]
-    paths: [.github/workflows/vps-facebook-diagnose.yml, deploy/vps/facebook-diagnose.mjs]
   workflow_dispatch:
 
 permissions:

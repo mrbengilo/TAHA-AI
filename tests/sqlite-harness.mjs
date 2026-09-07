@@ -15,7 +15,7 @@ export function harness() {
   class Statement {
     constructor(sql) { this.sql = sql; this.values = []; }
     bind(...values) { this.values = values; return this; }
-    result() { const result = sqlite.prepare(this.sql).run(...this.values); return { meta: { changes: result.changes } }; }
+    result() { const result = sqlite.prepare(this.sql).run(...this.values); return { success: true, meta: { changes: result.changes } }; }
     async run() { return this.result(); }
     async all() { return { results: sqlite.prepare(this.sql).all(...this.values) }; }
     async first() {

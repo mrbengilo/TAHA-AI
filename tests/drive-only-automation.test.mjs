@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { harness, ROOT, WORKSPACE } from "./sqlite-harness.mjs";
+import { harness as sqliteHarness, ROOT, WORKSPACE } from "./sqlite-harness.mjs";
+
+function harness() {
+  const h = sqliteHarness();
+  h.overrides.set(path.join(ROOT, "lib/integrations/facebook-permissions.ts"), {
+    verifyFacebookConnection: async () => ({ ready: true }),
+  });
+  return h;
+}
 
 async function prepare() {
   const h = harness(); h.seedProduct();
@@ -72,6 +80,50 @@ test("requires a real exact SKU folder and connected Facebook destination before
   await assert.rejects(automation.queueAutomationRun(input), /SKU_SOURCE_IMAGES_REQUIRED/);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs").get().n, 0);
   assert.equal(h.generated.length, 0);
+});
+
+test("missing live Facebook grants block AI preparation and media upload despite a connected flag", async () => {
+  const h = harness(); h.seedProduct();
+  h.overrides.set(path.join(ROOT, "lib/integrations/facebook-permissions.ts"), {
+    verifyFacebookConnection: async () => ({ ready: false, code: "FACEBOOK_SCOPES_MISSING", message: "Cần cấp quyền đăng bài." }),
+  });
+  await assert.rejects(h.load("lib/automation.ts").queueAutomationRun({ productId: "product-1", idempotencyKey: "missing-facebook-grants", targetProviders: ["facebook"] }), (error) => error.code === "FACEBOOK_SCOPES_MISSING");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs").get().n, 0);
+  assert.equal(h.generated.length, 0);
+  let uploads = 0;
+  h.runtime.TEST_FETCH = async () => { uploads += 1; throw new Error("Must not upload without permission"); };
+  await assert.rejects(h.load("lib/publishing.ts").sendFacebookPost({ connectionId: "facebook-1", message: "PH0001", mediaIds: ["image-product-1"] }), (error) => error.code === "FACEBOOK_SCOPES_MISSING" && error.retryable === false);
+  assert.equal(uploads, 0);
+});
+
+test("Facebook verification SQL preserves concurrent settings and never overwrites a reconnect", async () => {
+  const h = sqliteHarness();
+  Object.assign(h.runtime, { META_APP_ID: "app-1", META_APP_SECRET: "test-app-secret", META_GRAPH_API_VERSION: "v26.0", INTEGRATION_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url") });
+  const encrypted = await h.load("lib/integrations/crypto.ts").encryptCredentials({ accessToken: "test-page-token" });
+  h.sqlite.prepare("UPDATE channel_connections SET external_account_id='123', config_json=?, auth_ciphertext=?, auth_iv=? WHERE id='facebook-1'").run(JSON.stringify({ tasks: ["CREATE_CONTENT"] }), encrypted.ciphertext, encrypted.iv);
+  const data = { is_valid: true, type: "PAGE", app_id: "app-1", profile_id: "123", scopes: ["pages_show_list"] };
+  h.runtime.TEST_FETCH = async () => {
+    h.sqlite.prepare("UPDATE channel_connections SET config_json=json_set(config_json,'$.dailyAutomationEnabled',1) WHERE id='facebook-1'").run();
+    return Response.json({ data });
+  };
+  const verifier = h.load("lib/integrations/facebook-permissions.ts");
+  const denied = await verifier.verifyFacebookConnection("facebook-1");
+  assert.equal(denied.code, "FACEBOOK_SCOPES_MISSING");
+  const row = h.sqlite.prepare("SELECT status,config_json,scopes_json FROM channel_connections WHERE id='facebook-1'").get();
+  assert.equal(row.status, "error");
+  assert.equal(JSON.parse(row.config_json).dailyAutomationEnabled, 1);
+  assert.equal(JSON.parse(row.config_json).facebookPermissionVerification.ready, false);
+  assert.deepEqual(JSON.parse(row.scopes_json), ["pages_show_list"]);
+  h.runtime.TEST_FETCH = async () => {
+    h.sqlite.prepare("UPDATE channel_connections SET auth_ciphertext='new-credential', auth_iv='new-iv', status='connected', last_error=NULL WHERE id='facebook-1'").run();
+    return Response.json({ data });
+  };
+  const stale = await verifier.verifyFacebookConnection("facebook-1");
+  assert.equal(stale.code, "FACEBOOK_CONNECTION_CHANGED");
+  const changed = h.sqlite.prepare("SELECT status,auth_ciphertext,last_error FROM channel_connections WHERE id='facebook-1'").get();
+  assert.equal(changed.status, "connected");
+  assert.equal(changed.auth_ciphertext, "new-credential");
+  assert.equal(changed.last_error, null);
 });
 
 test("concurrent confirmations never create two active runs", async () => {

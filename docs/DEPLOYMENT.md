@@ -136,3 +136,5 @@ CI build image có nhãn SHA và chuyển image cùng Git bundle qua SSH. VPS ki
 Migration `0004` chỉ hủy run tạo ảnh cũ và tạm dừng lịch/jobs dùng ảnh generated; giữ nguyên sản phẩm, ảnh và lịch sử. Nếu health check thất bại sau cutover, khôi phục container cũ, giữ các hủy bỏ và để cron dừng để không chạy lại luồng ảnh cũ.
 
 Bài Facebook thử chỉ chạy khi commit merge chứa `[facebook-trial]` hoặc workflow dispatch bật tùy chọn tương ứng. Script `facebook-trial.py` gửi một yêu cầu idempotent rồi chỉ theo dõi; cron thực tế tự viết và đăng. Script chỉ thành công khi có đúng một job published kèm Post ID. Không bật thử cho các đợt phát hành khác nếu không có yêu cầu. Lập kế hoạch tự chọn SKU hằng ngày chỉ chạy cho connection đã bật `dailyAutomationEnabled` rõ ràng.
+
+Sau phát hành, `facebook-verify.py` đối soát quyền của connection thuộc lượt thử hiện hữu bằng API quản trị; không tạo hoặc thử lại bài đăng. `ready=false` cùng mã thiếu quyền là kết quả kiểm tra kết nối, khác với lỗi triển khai ứng dụng. Workflow thủ công `TAHA Facebook trial diagnosis` chỉ gọi GET Meta và giữ token trong container VPS.

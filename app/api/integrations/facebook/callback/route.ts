@@ -1,4 +1,5 @@
 import { redirectWithResult } from "../../../../../lib/api";
+import { FacebookPermissionCheckError } from "../../../../../lib/integrations/facebook-permissions";
 import { connectFacebook } from "../../../../../lib/integrations/oauth";
 import { consumeOAuthState } from "../../../../../lib/integrations/store";
 
@@ -11,7 +12,10 @@ export async function GET(request: Request) {
     await consumeOAuthState(state, "facebook");
     await connectFacebook(code);
     return redirectWithResult(request, "facebook", "connected");
-  } catch {
+  } catch (error) {
+    if (error instanceof FacebookPermissionCheckError) {
+      return redirectWithResult(request, "facebook", "error", error.userMessage);
+    }
     return redirectWithResult(request, "facebook", "error", "Không thể hoàn tất kết nối Facebook Page.");
   }
 }

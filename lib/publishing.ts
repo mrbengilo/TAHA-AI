@@ -1,6 +1,7 @@
 import { hmacHex } from "./integrations/crypto";
 import { getConnectedIntegration } from "./integrations/connection-secrets";
 import { getRuntimeEnv, requireEnv } from "./integrations/env";
+import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 import { mediaBlob } from "./media";
 import { markJobBlocked, markJobFailed, markJobPublished, startPublishJob } from "./publish-jobs";
@@ -55,6 +56,10 @@ async function facebookJson(url: string | URL, init: RequestInit, phase: "media"
 }
 
 export async function sendFacebookPost(input: FacebookRemoteInput) {
+  const permissions = await verifyFacebookConnection(input.connectionId);
+  if (!permissions.ready) throw new PublishDeliveryError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", {
+    retryable: ["FACEBOOK_VERIFICATION_UNAVAILABLE", "FACEBOOK_CONNECTION_CHANGED"].includes(permissions.code || ""),
+  });
   const connection = await getConnectedIntegration<{ accessToken?: unknown }>("facebook", input.connectionId);
   const pageId = connection.externalAccountId;
   const accessToken = typeof connection.credentials.accessToken === "string" ? connection.credentials.accessToken : "";

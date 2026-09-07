@@ -25,7 +25,7 @@ export async function getProductFolder(id: string) {
       .all<{ id: string; draft_id: string; status: string; run_at: number; next_run_at: number | null; destination: string }>(),
     db.prepare(`SELECT id, draft_id, status, external_url, error_code, error_message FROM publish_jobs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 100`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; draft_id: string; status: string; external_url: string | null; error_code: string | null; error_message: string | null }>(),
-    db.prepare(`SELECT id, status, error_code, error_message FROM automation_runs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)
+    db.prepare(`SELECT id, status, error_code, error_message FROM automation_runs WHERE product_id = ? AND workspace_id = ? AND requested_image_count = 0 ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; status: string; error_code: string | null; error_message: string | null }>(),
   ]);
   const drafts = draftRows.results.map((draft) => ({ ...draft, hashtags: JSON.parse(draft.hashtags_json) as string[], productDescription: String(objectJson(draft.platform_data_json).productDescription || "") }));

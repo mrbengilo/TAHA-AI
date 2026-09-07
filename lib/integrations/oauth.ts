@@ -1,5 +1,11 @@
 import { encryptCredentials, hmacHex } from "./crypto";
 import { getRuntimeEnv, requireEnv } from "./env";
+import {
+  FacebookPermissionCheckError,
+  inspectFacebookPageToken,
+  persistFacebookPermissionState,
+  type FacebookPermissionInspection,
+} from "./facebook-permissions";
 import { providerDefinitions, type ProviderId } from "./providers";
 import { upsertConnection } from "./store";
 
@@ -182,30 +188,66 @@ export async function connectFacebook(code: string) {
   const pages = Array.isArray(pagesData.data) ? pagesData.data.map(asObject) : [];
   if (pages.length === 0) throw new ExternalIntegrationError("facebook", 403, "Không tìm thấy Facebook Page có quyền tạo nội dung.");
 
-  let saved = 0;
+  const inspected: Array<{
+    id: string;
+    name: string;
+    pageToken: string;
+    tasks: string[];
+    inspection: FacebookPermissionInspection;
+  }> = [];
   for (const page of pages) {
     const tasks = Array.isArray(page.tasks) ? page.tasks.map(String) : [];
     const pageToken = asString(page.access_token);
-    const canCreateContent = tasks.includes("CREATE_CONTENT") || tasks.includes("PROFILE_PLUS_CREATE_CONTENT");
-    if (!pageToken || !asString(page.id) || !canCreateContent) continue;
-    const encrypted = await encryptCredentials({ accessToken: pageToken, tokenType: "Bearer" });
-    await upsertConnection({
+    const pageId = asString(page.id);
+    if (!pageToken || !pageId) continue;
+    inspected.push({
+      id: pageId,
+      name: asString(page.name) || "Facebook Page",
+      pageToken,
+      tasks,
+      inspection: await inspectFacebookPageToken({ pageId, pageToken, tasks }),
+    });
+  }
+  if (inspected.length === 0) throw new ExternalIntegrationError("facebook", 403, "Facebook Page không cấp token đăng bài.");
+
+  let ready = 0;
+  let firstFailure: FacebookPermissionInspection | null = null;
+  for (const page of inspected) {
+    const encrypted = await encryptCredentials({ accessToken: page.pageToken, tokenType: "Bearer" });
+    const connectionId = await upsertConnection({
       provider: "facebook",
       role: "publisher",
-      displayName: asString(page.name) || "Facebook Page",
-      externalAccountId: asString(page.id),
+      displayName: page.name,
+      externalAccountId: page.id,
       publishMode: "api",
-      scopes: ["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
+      scopes: page.inspection.grantedScopes,
       capabilities: providerDefinitions.facebook.capabilities,
-      config: { tasks },
+      config: { tasks: page.tasks },
       authCiphertext: encrypted.ciphertext,
       authIv: encrypted.iv,
       authKeyVersion: encrypted.keyVersion,
       tokenExpiresAt: null,
+      status: page.inspection.ready ? "connected" : "error",
     });
-    saved += 1;
+    const applied = await persistFacebookPermissionState({
+      connectionId,
+      expectedCiphertext: encrypted.ciphertext,
+      expectedIv: encrypted.iv,
+      inspection: page.inspection,
+    });
+    if (!applied) {
+      throw new FacebookPermissionCheckError(
+        "FACEBOOK_CONNECTION_CHANGED",
+        "Kết nối Facebook đã thay đổi trong lúc kiểm tra. Hãy tải lại rồi thử kết nối lại.",
+        409,
+      );
+    }
+    if (page.inspection.ready) ready += 1;
+    else firstFailure ??= page.inspection;
   }
-  if (saved === 0) throw new ExternalIntegrationError("facebook", 403, "Facebook Page không cấp token đăng bài.");
+  if (ready === 0 && firstFailure?.code && firstFailure.message) {
+    throw new FacebookPermissionCheckError(firstFailure.code, firstFailure.message, 403);
+  }
 }
 
 export async function connectShopee(code: string, shopId: string) {
