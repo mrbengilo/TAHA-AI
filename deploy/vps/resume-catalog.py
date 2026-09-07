@@ -14,12 +14,19 @@ from urllib.request import Request, urlopen
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
 IMAGE = 'tahashoes-taha-ai:010c0193ab4ed57991a60e17aee2925a729ac117'
+IMAGE_ID = 'sha256:3c4035316ec16398880dbceab5bc422c0824279f7816ef01625f91dba1f7b434'
+REVISION = '010c0193ab4ed57991a60e17aee2925a729ac117'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 APPLIED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-applied.json')
+RESOLUTION = Path('/var/lib/taha-ai/ops-recovery/catalog-conflicts-v3-resolved.json')
 PROMPT_VERSION = 'taha-lifestyle-v3'
 WRITE_SCOPES = {'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'}
 VARIANTS = {'cycling', 'running', 'climbing', 'stream'}
 RECOVERABLE_ERRORS = {'GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED'}
+RESOLVED_CONFLICTS = {
+    '82af7bf1-2c99-479d-8922-afb90d595217': 'PH0014',
+    'cdf173a1-4729-4fef-bd48-3c4e9c6abf3c': 'PH0021',
+}
 
 
 def api(secret, path, body=None, timeout=300):
@@ -171,6 +178,91 @@ def retryable_ids(rows):
     return [row['id'] for row in rows if row['status'] == 'failed']
 
 
+def validate_recovery_marker(applied, catalog_ids):
+    if applied.get('runIds') != catalog_ids:
+        raise RuntimeError('CATALOG_RECOVERY_MARKER_MISMATCH')
+    planned = applied.get('retryIds')
+    resumed = applied.get('resumedIds') or []
+    if not isinstance(planned, list) or not isinstance(resumed, list) \
+            or any(not isinstance(value, str) for value in planned + resumed) \
+            or len(set(planned)) != len(planned) or len(set(resumed)) != len(resumed) \
+            or not set(planned).issubset(set(catalog_ids)) or resumed != planned[:len(resumed)]:
+        raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
+    if applied.get('stage') == 'applied' and resumed != planned:
+        raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
+    return planned, resumed
+
+
+def replay_action(row, already_resumed):
+    if already_resumed:
+        if row['status'] not in ('queued', 'processing', 'completed'):
+            raise RuntimeError('CATALOG_RECOVERY_RESUMED_RUN_FAILED')
+        return 'skip'
+    if row['status'] == 'failed':
+        if row.get('error_code') not in RECOVERABLE_ERRORS:
+            raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
+        return 'retry'
+    if row['status'] in ('queued', 'processing', 'completed'):
+        return 'record'
+    raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
+
+
+def validate_runtime():
+    container = subprocess.run(
+        ['docker', 'inspect', 'taha-ai', '--format',
+         '{{.Config.Image}}|{{.Image}}|{{.State.Status}}|{{index .Config.Labels "org.opencontainers.image.revision"}}'],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    if container != '|'.join((IMAGE, IMAGE_ID, 'running', REVISION)):
+        raise RuntimeError('CATALOG_DEPLOYMENT_CHANGED')
+    image = subprocess.run(
+        ['docker', 'image', 'inspect', IMAGE, '--format',
+         '{{.Id}}|{{index .Config.Labels "org.opencontainers.image.revision"}}'],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
+    if image != IMAGE_ID + '|' + REVISION:
+        raise RuntimeError('CATALOG_DEPLOYMENT_CHANGED')
+    print('CATALOG_RUNTIME_IMAGE_B64=' + base64.b64encode(IMAGE_ID.encode()).decode(), flush=True)
+
+
+def validate_conflict_resolution(database, catalog_ids):
+    if not RESOLUTION.is_file() or (RESOLUTION.stat().st_mode & 0o777) != 0o600:
+        return False
+    try: marker = json.loads(RESOLUTION.read_text())
+    except ValueError: raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_INVALID') from None
+    conflict_ids = list(RESOLVED_CONFLICTS)
+    if marker.get('stage') != 'applied' or marker.get('catalogRunIds') != catalog_ids \
+            or marker.get('runIds') != conflict_ids:
+        raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_INVALID')
+    placeholders = ','.join('?' for _ in conflict_ids)
+    creators = ['automation:' + value for value in conflict_ids]
+    with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
+        rows = db.execute(
+            f"SELECT r.id,p.base_sku,r.status FROM automation_runs r "
+            f"JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
+            f"WHERE r.workspace_id=? AND r.id IN ({placeholders})",
+            [WORKSPACE, *conflict_ids],
+        ).fetchall()
+        drafts = db.execute(
+            f"SELECT count(*) FROM content_drafts WHERE workspace_id=? AND "
+            f"json_extract(generation_meta_json,'$.automationRunId') IN ({placeholders})",
+            [WORKSPACE, *conflict_ids],
+        ).fetchone()[0]
+        schedules = db.execute(
+            f"SELECT count(*) FROM schedules WHERE workspace_id=? AND created_by IN ({placeholders})",
+            [WORKSPACE, *creators],
+        ).fetchone()[0]
+        jobs = db.execute(
+            f"SELECT count(*) FROM publish_jobs j JOIN schedules s ON s.id=j.schedule_id "
+            f"WHERE j.workspace_id=? AND s.created_by IN ({placeholders})",
+            [WORKSPACE, *creators],
+        ).fetchone()[0]
+    if len(rows) != 2 or any(RESOLVED_CONFLICTS.get(row[0]) != row[1] or row[2] != 'cancelled' for row in rows) \
+            or drafts or schedules or jobs or competing_active_runs(database, catalog_ids):
+        raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_INVALID')
+    return True
+
+
 def save_marker(existing, progress, verified):
     value = {**existing, 'recovery': {'progress': progress, 'verified': verified, 'updatedAt': int(time.time())}}
     temporary = MARKER.with_suffix('.recovery-tmp')
@@ -184,6 +276,17 @@ def write_applied(value):
     fd = os.open(APPLIED, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, 'w') as output:
         json.dump(value, output, separators=(',', ':')); output.flush(); os.fsync(output.fileno())
+    directory = os.open(APPLIED.parent, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+
+
+def replace_applied(value):
+    temporary = APPLIED.with_name(APPLIED.name + '.tmp-' + str(os.getpid()))
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as output:
+        json.dump(value, output, separators=(',', ':')); output.flush(); os.fsync(output.fileno())
+    os.replace(temporary, APPLIED)
     directory = os.open(APPLIED.parent, os.O_RDONLY)
     try: os.fsync(directory)
     finally: os.close(directory)
@@ -264,12 +367,7 @@ def validate_final_drafts(rows, ids):
 def main():
     with open('/var/lock/taha-ai-release.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        runtime = subprocess.run(['docker', 'inspect', 'taha-ai', '--format', '{{.Config.Image}}|{{.State.Status}}'],
-                                 check=True, capture_output=True, text=True, timeout=30).stdout.strip()
-        if runtime != IMAGE + '|running': raise RuntimeError('CATALOG_DEPLOYMENT_CHANGED')
-        digest = subprocess.run(['docker', 'inspect', 'taha-ai', '--format', '{{.Image}}'], check=True,
-                                capture_output=True, text=True, timeout=30).stdout.strip()
-        print('CATALOG_RUNTIME_IMAGE_B64=' + base64.b64encode(digest.encode()).decode(), flush=True)
+        validate_runtime()
         if not MARKER.exists(): raise RuntimeError('CATALOG_MARKER_MISSING')
         marker = json.loads(MARKER.read_text())
         ids = marker_run_ids(marker)
@@ -279,9 +377,12 @@ def main():
         print('CATALOG_COMPETING_ACTIVE_RUNS=' + json.dumps(
             competing_active_runs(database, ids), separators=(',', ':')), flush=True)
         was_active = subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode == 0
-        if not was_active: raise RuntimeError('CATALOG_CRON_TIMER_INACTIVE')
+        resume_held = not was_active and validate_conflict_resolution(database, ids)
+        if not was_active and not resume_held: raise RuntimeError('CATALOG_CRON_TIMER_INACTIVE')
+        ready_to_start = False
         try:
-            subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
+            if was_active:
+                subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
             for _ in range(60):
                 service = subprocess.run(['systemctl', 'show', 'taha-ai-cron.service', '-p', 'ActiveState', '--value'],
                                          check=True, capture_output=True, text=True, timeout=15).stdout.strip()
@@ -291,35 +392,82 @@ def main():
             drained_database, drained_connection = find_database(ids)
             if drained_database != database or drained_connection['id'] != google_connection['id']:
                 raise RuntimeError('CATALOG_STATE_CHANGED_DURING_DRAIN')
+            validate_runtime()
             initial = read_runs(database, ids)
             print('CATALOG_PRE_RETRY_STATES=' + json.dumps([
                 {'sku': row['base_sku'], 'status': row['status'], 'code': row.get('error_code'),
                  'images': row['completed_image_count']} for row in initial
             ], separators=(',', ':')), flush=True)
             retry_ids = retryable_ids(initial)
+            retried_count = 0
             if APPLIED.exists():
                 applied = json.loads(APPLIED.read_text())
-                if applied.get('runIds') != ids: raise RuntimeError('CATALOG_RECOVERY_MARKER_MISMATCH')
+                planned_ids, resumed = validate_recovery_marker(applied, ids)
                 print('CATALOG_APPLIED_MARKER=' + json.dumps({
-                    'stage': applied.get('stage'), 'retryCount': len(applied.get('retryIds', []))
+                    'stage': applied.get('stage'), 'retryCount': len(planned_ids)
                 }, separators=(',', ':')), flush=True)
-                if applied.get('stage') != 'applied':
+                if applied.get('stage') == 'planned':
+                    if not set(retry_ids).issubset(set(planned_ids)):
+                        raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
+                    for run_id in planned_ids:
+                        current = {row['id']: row for row in read_runs(database, ids)}[run_id]
+                        action = replay_action(current, run_id in resumed)
+                        if action == 'retry':
+                            api(secret, '/api/automation-runs/' + run_id + '/retry', {})
+                            retried_count += 1
+                        if action != 'skip':
+                            resumed.append(run_id)
+                            applied = {**applied, 'resumedIds': resumed}
+                            replace_applied(applied)
+                    current_by_id = {row['id']: row for row in read_runs(database, ids)}
+                    for run_id in planned_ids:
+                        replay_action(current_by_id[run_id], True)
+                    replace_applied({**applied, 'stage': 'applied', 'resumedIds': planned_ids,
+                                     'appliedAt': int(time.time())})
+                elif applied.get('stage') == 'applied':
+                    current_by_id = {row['id']: row for row in read_runs(database, ids)}
+                    for run_id in planned_ids:
+                        replay_action(current_by_id[run_id], True)
+                else:
                     raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
-                retry_ids = []
             elif retry_ids:
-                write_applied({'runIds': ids, 'retryIds': retry_ids, 'stage': 'planned', 'createdAt': int(time.time())})
-                for run_id in retry_ids: api(secret, '/api/automation-runs/' + run_id + '/retry', {})
-                temporary = APPLIED.with_suffix('.tmp')
-                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, 'w') as output:
-                    json.dump({'runIds': ids, 'retryIds': retry_ids, 'stage': 'applied', 'appliedAt': int(time.time())}, output,
-                              separators=(',', ':')); output.flush(); os.fsync(output.fileno())
-                os.replace(temporary, APPLIED)
+                applied = {'runIds': ids, 'retryIds': retry_ids, 'resumedIds': [],
+                           'stage': 'planned', 'createdAt': int(time.time())}
+                write_applied(applied)
+                resumed = []
+                for run_id in retry_ids:
+                    current = {row['id']: row for row in read_runs(database, ids)}[run_id]
+                    action = replay_action(current, False)
+                    if action == 'retry':
+                        api(secret, '/api/automation-runs/' + run_id + '/retry', {})
+                        retried_count += 1
+                    resumed.append(run_id)
+                    applied = {**applied, 'resumedIds': resumed}
+                    replace_applied(applied)
+                current_by_id = {row['id']: row for row in read_runs(database, ids)}
+                for run_id in retry_ids:
+                    replay_action(current_by_id[run_id], True)
+                replace_applied({**applied, 'resumedIds': retry_ids, 'stage': 'applied',
+                                 'appliedAt': int(time.time())})
+            else:
+                write_applied({'runIds': ids, 'retryIds': [], 'resumedIds': [], 'stage': 'applied',
+                               'createdAt': int(time.time()), 'appliedAt': int(time.time())})
+            validate_runtime()
+            final_by_id = {row['id']: row for row in read_runs(database, ids)}
+            applied_final = json.loads(APPLIED.read_text())
+            final_planned, final_resumed = validate_recovery_marker(applied_final, ids)
+            if applied_final.get('stage') != 'applied' or final_resumed != final_planned:
+                raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
+            for run_id in final_planned:
+                replay_action(final_by_id[run_id], True)
+            if not validate_conflict_resolution(database, ids):
+                raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_MISSING')
+            ready_to_start = True
         finally:
-            if was_active:
+            if ready_to_start:
                 subprocess.run(['systemctl', 'start', 'taha-ai-cron.timer'], check=True, timeout=30)
         print('CATALOG_GOOGLE_WRITE_GRANT_ACTIVE=yes', flush=True)
-        print('CATALOG_RUNS_RETRIED=' + str(len(retry_ids)), flush=True)
+        print('CATALOG_RUNS_RETRIED=' + str(retried_count), flush=True)
         verified = {}
         previous = None
         deadline = time.monotonic() + 5.5 * 60 * 60

@@ -1,6 +1,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import sqlite3
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location('recovery', Path(__file__).resolve().parents[1] / 'deploy/vps/resume-catalog.py')
@@ -58,6 +60,64 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         ]), ['run-1', 'run-2', 'run-3'])
         with self.assertRaises(RuntimeError):
             recovery.retryable_ids([{'id': 'run-4', 'status': 'failed', 'error_code': 'OPENAI_BILLING_ERROR'}])
+
+    def test_durable_resumed_run_is_never_retried_again(self):
+        for status in ('queued', 'processing', 'completed'):
+            self.assertEqual(recovery.replay_action({'status': status}, True), 'skip')
+        with self.assertRaisesRegex(RuntimeError, 'CATALOG_RECOVERY_RESUMED_RUN_FAILED'):
+            recovery.replay_action({'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'}, True)
+        self.assertEqual(recovery.replay_action(
+            {'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'}, False), 'retry')
+        self.assertEqual(recovery.replay_action({'status': 'processing'}, False), 'record')
+
+    def test_recovery_marker_ids_are_bounded_to_the_catalog(self):
+        catalog = ['run-1', 'run-2']
+        planned = {'runIds': catalog, 'retryIds': ['run-1'], 'resumedIds': [], 'stage': 'planned'}
+        self.assertEqual(recovery.validate_recovery_marker(planned, catalog), (['run-1'], []))
+        for change in ({'retryIds': ['other']}, {'retryIds': ['run-1', 'run-1']},
+                       {'retryIds': ['run-1', 'run-2'], 'resumedIds': ['run-2']},
+                       {'resumedIds': ['run-2']}, {'runIds': list(reversed(catalog))}):
+            with self.assertRaises(RuntimeError):
+                recovery.validate_recovery_marker({**planned, **change}, catalog)
+        with self.assertRaises(RuntimeError):
+            recovery.validate_recovery_marker(
+                {**planned, 'stage': 'applied', 'resumedIds': []}, catalog)
+
+    def test_held_cron_requires_exact_applied_conflict_resolution(self):
+        catalog_ids = ['catalog-run']
+        with tempfile.TemporaryDirectory() as folder:
+            database = Path(folder) / 'db.sqlite'
+            marker = Path(folder) / 'resolution.json'
+            with sqlite3.connect(database) as db:
+                db.executescript('''
+                    CREATE TABLE products(id TEXT, workspace_id TEXT, base_sku TEXT);
+                    CREATE TABLE automation_runs(id TEXT, workspace_id TEXT, product_id TEXT, status TEXT);
+                    CREATE TABLE content_drafts(workspace_id TEXT, generation_meta_json TEXT);
+                    CREATE TABLE schedules(id TEXT, workspace_id TEXT, created_by TEXT);
+                    CREATE TABLE publish_jobs(workspace_id TEXT, schedule_id TEXT);
+                ''')
+                for index, (run_id, sku) in enumerate(recovery.RESOLVED_CONFLICTS.items()):
+                    product_id = f'product-{index}'
+                    db.execute('INSERT INTO products VALUES(?,?,?)', (product_id, recovery.WORKSPACE, sku))
+                    db.execute('INSERT INTO automation_runs VALUES(?,?,?,?)',
+                               (run_id, recovery.WORKSPACE, product_id, 'cancelled'))
+            marker.write_text(json.dumps({'stage': 'applied', 'catalogRunIds': catalog_ids,
+                                          'runIds': list(recovery.RESOLVED_CONFLICTS)}))
+            marker.chmod(0o600)
+            original_marker = recovery.RESOLUTION
+            original_competing = recovery.competing_active_runs
+            recovery.RESOLUTION = marker
+            recovery.competing_active_runs = lambda *_: []
+            try:
+                self.assertTrue(recovery.validate_conflict_resolution(database, catalog_ids))
+                with sqlite3.connect(database) as db:
+                    db.execute("UPDATE automation_runs SET status='queued' WHERE id=?",
+                               (next(iter(recovery.RESOLVED_CONFLICTS)),))
+                with self.assertRaisesRegex(RuntimeError, 'CATALOG_CONFLICT_RESOLUTION_INVALID'):
+                    recovery.validate_conflict_resolution(database, catalog_ids)
+            finally:
+                recovery.RESOLUTION = original_marker
+                recovery.competing_active_runs = original_competing
 
 
 if __name__ == '__main__': unittest.main()
