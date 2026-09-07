@@ -1,6 +1,6 @@
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { objectJson, productSources } from "./product-integrity";
+import { objectJson, productSources, verifiedProductGeneratedImages, verifiedProductOptimizedImages } from "./product-integrity";
 
 export async function getProductFolder(id: string) {
   const db = getRuntimeEnv().DB;
@@ -10,10 +10,27 @@ export async function getProductFolder(id: string) {
     .first<{ id: string; base_sku: string; name: string; description: string; status: string; metadata_json: string }>();
   if (!product) throw new Error("PRODUCT_NOT_FOUND");
   let validationError: string | null = null;
-  let images: Array<{ id: string; filename: string; previewUrl: string }> = [];
+  let images: Array<{ id: string; filename: string; previewUrl: string; byteSize: number | null; optimized: boolean }> = [];
+  let generatedImages: Array<{ id: string; filename: string; previewUrl: string; byteSize: number; variant: string }> = [];
+  let imageValidationError: string | null = null;
   try {
     const sources = await productSources(id);
-    images = sources.images.map((image) => ({ id: image.id, filename: String(objectJson(image.metadata_json).name || image.external_id), previewUrl: `/api/media/${encodeURIComponent(image.id)}/download?inline=1` }));
+    const optimized = await verifiedProductOptimizedImages(id);
+    const bySource = new Map(optimized.map((image) => [image.source_media_id, image]));
+    images = sources.images.map((image) => {
+      const preview = bySource.get(image.id) ?? image;
+      const byteSize = preview.byte_size ?? null;
+      return { id: image.id, filename: String(objectJson(preview.metadata_json).name || preview.external_id),
+        previewUrl: `/api/media/${encodeURIComponent(image.id)}/download?inline=1`, byteSize,
+        optimized: Boolean(byteSize && byteSize < 300_000) };
+    });
+    try {
+      generatedImages = (await verifiedProductGeneratedImages(id)).map((image) => ({
+        id: image.id, filename: String(objectJson(image.metadata_json).name || image.external_id),
+        previewUrl: `/api/media/${encodeURIComponent(image.id)}/download?inline=1`, byteSize: Number(image.byte_size),
+        variant: String((objectJson(image.metadata_json).generation as Record<string, unknown>)?.variant || ""),
+      }));
+    } catch (error) { imageValidationError = error instanceof Error ? error.message : "PRODUCT_GENERATED_MEDIA_MISMATCH"; }
   } catch (error) { validationError = error instanceof Error ? error.message : "PRODUCT_VALIDATION_FAILED"; }
   const [draftRows, scheduleRows, jobRows, runRows] = await Promise.all([
     db.prepare(`SELECT id, target_provider, title, body, hashtags_json, status, version, platform_data_json FROM content_drafts
@@ -25,9 +42,9 @@ export async function getProductFolder(id: string) {
       .all<{ id: string; draft_id: string; status: string; run_at: number; next_run_at: number | null; destination: string }>(),
     db.prepare(`SELECT id, draft_id, status, external_url, error_code, error_message FROM publish_jobs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 100`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; draft_id: string; status: string; external_url: string | null; error_code: string | null; error_message: string | null }>(),
-    db.prepare(`SELECT id, status, error_code, error_message FROM automation_runs WHERE product_id = ? AND workspace_id = ? AND requested_image_count = 0 ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)
-      .all<{ id: string; status: string; error_code: string | null; error_message: string | null }>(),
+    db.prepare(`SELECT id, status, error_code, error_message, requested_image_count, completed_image_count FROM automation_runs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)
+      .all<{ id: string; status: string; error_code: string | null; error_message: string | null; requested_image_count: number; completed_image_count: number }>(),
   ]);
   const drafts = draftRows.results.map((draft) => ({ ...draft, hashtags: JSON.parse(draft.hashtags_json) as string[], productDescription: String(objectJson(draft.platform_data_json).productDescription || "") }));
-  return { product, images, validationError, drafts, schedules: scheduleRows.results, jobs: jobRows.results, runs: runRows.results };
+  return { product, images, generatedImages, validationError, imageValidationError, drafts, schedules: scheduleRows.results, jobs: jobRows.results, runs: runRows.results };
 }
