@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 14: inspect post-replan recovery.
+# Probe generation 15: inspect six-image recovery markers.
 import base64
 import json
 from pathlib import Path
@@ -9,6 +9,21 @@ import sys
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
+REPLAN = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-replan-v1.json')
+REPAIR = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-recovery-v1-retries.json')
+
+
+def safe_marker(path, ids):
+    if not path.is_file() or (path.stat().st_mode & 0o777) != 0o600: return None
+    try: value = json.loads(path.read_text())
+    except ValueError: return {'invalid': True}
+    if value.get('runIds') != ids: return {'invalid': True}
+    result = {'stage': value.get('stage'), 'updatedAt': value.get('updatedAt'), 'appliedAt': value.get('appliedAt')}
+    if isinstance(value.get('states'), dict):
+        result['states'] = {stage: sum(item == stage for item in value['states'].values())
+                            for stage in sorted(set(value['states'].values()))}
+    if isinstance(value.get('attempts'), dict): result['attempts'] = sum(value['attempts'].values())
+    return result
 
 
 def main():
@@ -88,6 +103,10 @@ def main():
                 'publishJobs': jobs,
                 'competitors': safe_competitors,
                 'cronTimer': timer,
+                'recoveryLockHeld': subprocess.run(
+                    ['flock', '-n', '/var/lock/taha-ai-release.lock', 'true'], timeout=10).returncode != 0,
+                'replan': safe_marker(REPLAN, ids),
+                'repair': safe_marker(REPAIR, ids),
                 'runtimeB64': base64.b64encode(runtime.encode()).decode(),
             }, separators=(',', ':')), flush=True)
             return
