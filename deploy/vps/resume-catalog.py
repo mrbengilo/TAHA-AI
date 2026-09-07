@@ -135,6 +135,21 @@ def read_runs(database, ids):
             f"WHERE r.workspace_id=? AND r.id IN ({placeholders}) ORDER BY r.created_at", [WORKSPACE, *ids])]
 
 
+def competing_active_runs(database, ids):
+    placeholders = ','.join('?' for _ in ids)
+    with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
+        db.row_factory = sqlite3.Row
+        rows = [dict(row) for row in db.execute(
+            f"SELECT p.base_sku,r.request_key,r.status,r.error_code FROM automation_runs r "
+            f"JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
+            f"WHERE r.workspace_id=? AND r.product_id IN (SELECT product_id FROM automation_runs "
+            f"WHERE workspace_id=? AND id IN ({placeholders})) AND r.id NOT IN ({placeholders}) "
+            f"AND r.status IN ('queued','processing') ORDER BY r.created_at",
+            [WORKSPACE, WORKSPACE, *ids, *ids])]
+    return [{'sku': row['base_sku'], 'kind': row['request_key'].split(':', 1)[0],
+             'status': row['status'], 'code': row['error_code']} for row in rows]
+
+
 def retryable_ids(rows):
     for row in rows:
         if row['status'] == 'failed' and row.get('error_code') not in RECOVERABLE_ERRORS:
@@ -263,6 +278,8 @@ def main():
                 {'sku': row['base_sku'], 'status': row['status'], 'code': row.get('error_code'),
                  'images': row['completed_image_count']} for row in initial
             ], separators=(',', ':')), flush=True)
+            print('CATALOG_COMPETING_ACTIVE_RUNS=' + json.dumps(
+                competing_active_runs(database, ids), separators=(',', ':')), flush=True)
             retry_ids = retryable_ids(initial)
             if APPLIED.exists():
                 applied = json.loads(APPLIED.read_text())
