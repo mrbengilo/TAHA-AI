@@ -249,7 +249,7 @@ export default function AutomationCenter() {
         <div>
           <span className="automation-eyebrow">TRUNG TÂM NỘI DUNG TỰ ĐỘNG</span>
           <h1 id="automation-title">Tạo bộ nội dung sản phẩm bằng AI</h1>
-          <p>Xác nhận một lần để chuẩn bị 4 ảnh theo SKU, viết bài không giá và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
+          <p>Xác nhận một lần để dùng tối đa 6 ảnh theo SKU, chỉ tạo thêm ảnh khi cần, viết bài không giá và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
         </div>
         <button className="automation-refresh" type="button" onClick={() => void refresh()} disabled={loading || isPending}>↻ Làm mới</button>
       </div>
@@ -295,7 +295,7 @@ export default function AutomationCenter() {
           </div>
 
           <div className="automation-output-preview">
-            <div><b>4 ảnh</b><span>đúng mẫu giày · dưới 200 KB/ảnh</span></div>
+            <div><b>Tối đa 6 ảnh</b><span>ưu tiên ảnh gốc · ảnh tạo thêm dưới 200 KB</span></div>
             <div><b>{targets.length}</b><span>bộ nội dung</span></div>
             <div><b>1</b><span>lịch tự động / kênh</span></div>
           </div>
@@ -320,7 +320,7 @@ export default function AutomationCenter() {
           <ol>
             <li><i>1</i><div><strong>Đọc Google Sheets</strong><span>Tên, SKU và đặc điểm sản phẩm</span></div></li>
             <li><i>2</i><div><strong>Ghép ảnh Google Drive</strong><span>Thư mục sản phẩm khớp chính xác SKU</span></div></li>
-            <li><i>3</i><div><strong>Tạo 4 ảnh từ mẫu giày gốc</strong><span>Đạp xe · Chạy bộ · Leo núi · Vượt suối</span></div></li>
+            <li><i>3</i><div><strong>Chỉ tạo thêm ảnh khi thư mục có dưới 6 ảnh</strong><span>Tối đa 4 cảnh: đạp xe · chạy bộ · leo núi · vượt suối</span></div></li>
             <li><i>4</i><div><strong>Viết bài tối đa 2.000 từ</strong><span>Không giá · Đặc điểm · Vệ sinh · Bảo quản · Size</span></div></li>
             <li><i>5</i><div><strong>Lên lịch và xuất bản</strong><span>Facebook, Zalo, Website; sàn dùng nút đăng</span></div></li>
           </ol>
