@@ -31,7 +31,8 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         for code in ('OPENAI_BILLING_ERROR', 'PRODUCT_MEDIA_MISMATCH'):
             with self.assertRaises(RuntimeError):
                 recovery.validate_run_contract([{**safe, 'error_code': code}], ids)
-        for code in ('GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED'):
+        for code in ('GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED',
+                     'GOOGLE_SYNC_IN_PROGRESS', 'PRODUCT_SOURCE_CHANGED'):
             recovery.validate_run_contract([{**safe, 'error_code': code}], ids)
 
     def test_original_media_may_remain_safe_web_format_but_generated_media_is_jpeg(self):
@@ -57,15 +58,18 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
             {'id': 'run-1', 'status': 'failed', 'error_code': 'GOOGLE_WRITE_SCOPE_REQUIRED'},
             {'id': 'run-2', 'status': 'failed', 'error_code': 'CONNECTION_NOT_FOUND'},
             {'id': 'run-3', 'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'},
-        ]), ['run-1', 'run-2', 'run-3'])
+            {'id': 'run-4', 'status': 'failed', 'error_code': 'PRODUCT_SOURCE_CHANGED'},
+        ]), ['run-1', 'run-2', 'run-3', 'run-4'])
         with self.assertRaises(RuntimeError):
             recovery.retryable_ids([{'id': 'run-4', 'status': 'failed', 'error_code': 'OPENAI_BILLING_ERROR'}])
 
-    def test_durable_resumed_run_is_never_retried_again(self):
+    def test_durable_resumed_run_routes_only_recoverable_failure_to_bounded_repair(self):
         for status in ('queued', 'processing', 'completed'):
             self.assertEqual(recovery.replay_action({'status': status}, True), 'skip')
+        self.assertEqual(recovery.replay_action(
+            {'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'}, True), 'repair')
         with self.assertRaisesRegex(RuntimeError, 'CATALOG_RECOVERY_RESUMED_RUN_FAILED'):
-            recovery.replay_action({'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'}, True)
+            recovery.replay_action({'status': 'failed', 'error_code': 'OPENAI_BILLING_ERROR'}, True)
         self.assertEqual(recovery.replay_action(
             {'status': 'failed', 'error_code': 'OPENAI_RATE_LIMITED'}, False), 'retry')
         self.assertEqual(recovery.replay_action({'status': 'processing'}, False), 'record')
@@ -82,6 +86,26 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             recovery.validate_recovery_marker(
                 {**planned, 'stage': 'applied', 'resumedIds': []}, catalog)
+
+    def test_repair_marker_is_exact_and_bounded(self):
+        catalog = ['run-1', 'run-2']
+        with tempfile.TemporaryDirectory() as folder:
+            marker = Path(folder) / 'repair.json'
+            original = recovery.REPAIR
+            recovery.REPAIR = marker
+            try:
+                self.assertEqual(recovery.repair_marker(catalog)['attempts'], {})
+                marker.write_text(json.dumps({'runIds': catalog, 'attempts': {'run-1': 2}}))
+                marker.chmod(0o600)
+                self.assertEqual(recovery.repair_marker(catalog)['attempts'], {'run-1': 2})
+                for value in ({'runIds': list(reversed(catalog)), 'attempts': {}},
+                              {'runIds': catalog, 'attempts': {'other': 1}},
+                              {'runIds': catalog, 'attempts': {'run-1': recovery.MAX_RECOVERY_RETRIES + 1}}):
+                    marker.write_text(json.dumps(value)); marker.chmod(0o600)
+                    with self.assertRaisesRegex(RuntimeError, 'CATALOG_REPAIR_MARKER_INVALID'):
+                        recovery.repair_marker(catalog)
+            finally:
+                recovery.REPAIR = original
 
     def test_google_verifier_can_refresh_an_expired_access_token(self):
         source = Path(recovery.__file__).read_text()

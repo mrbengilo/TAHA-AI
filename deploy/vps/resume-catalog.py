@@ -18,11 +18,16 @@ IMAGE_ID = 'sha256:f0bd747d917a3b23d05907922adf9498646ff24b8309a1ef7730662d4b457
 REVISION = 'e2340bf0a521075945edc7d1f52283d90806ef69'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 APPLIED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-applied.json')
+REPAIR = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v4-retries.json')
 RESOLUTION = Path('/var/lib/taha-ai/ops-recovery/catalog-conflicts-v3-resolved.json')
 PROMPT_VERSION = 'taha-lifestyle-v3'
 WRITE_SCOPES = {'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'}
 VARIANTS = {'cycling', 'running', 'climbing', 'stream'}
-RECOVERABLE_ERRORS = {'GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED'}
+RECOVERABLE_ERRORS = {
+    'GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED',
+    'GOOGLE_SYNC_IN_PROGRESS', 'PRODUCT_SOURCE_CHANGED',
+}
+MAX_RECOVERY_RETRIES = 3
 RESOLVED_CONFLICTS = {
     '82af7bf1-2c99-479d-8922-afb90d595217': 'PH0014',
     'cdf173a1-4729-4fef-bd48-3c4e9c6abf3c': 'PH0021',
@@ -195,9 +200,9 @@ def validate_recovery_marker(applied, catalog_ids):
 
 def replay_action(row, already_resumed):
     if already_resumed:
-        if row['status'] not in ('queued', 'processing', 'completed'):
-            raise RuntimeError('CATALOG_RECOVERY_RESUMED_RUN_FAILED')
-        return 'skip'
+        if row['status'] in ('queued', 'processing', 'completed'): return 'skip'
+        if row['status'] == 'failed' and row.get('error_code') in RECOVERABLE_ERRORS: return 'repair'
+        raise RuntimeError('CATALOG_RECOVERY_RESUMED_RUN_FAILED')
     if row['status'] == 'failed':
         if row.get('error_code') not in RECOVERABLE_ERRORS:
             raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
@@ -290,6 +295,63 @@ def replace_applied(value):
     directory = os.open(APPLIED.parent, os.O_RDONLY)
     try: os.fsync(directory)
     finally: os.close(directory)
+
+
+def replace_repair(value):
+    REPAIR.parent.mkdir(parents=True, exist_ok=True)
+    temporary = REPAIR.with_name(REPAIR.name + '.tmp-' + str(os.getpid()))
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as output:
+        json.dump(value, output, separators=(',', ':')); output.flush(); os.fsync(output.fileno())
+    os.replace(temporary, REPAIR)
+    directory = os.open(REPAIR.parent, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+
+
+def repair_marker(catalog_ids):
+    if not REPAIR.exists():
+        return {'runIds': catalog_ids, 'attempts': {}, 'createdAt': int(time.time())}
+    if not REPAIR.is_file() or (REPAIR.stat().st_mode & 0o777) != 0o600:
+        raise RuntimeError('CATALOG_REPAIR_MARKER_INVALID')
+    try: marker = json.loads(REPAIR.read_text())
+    except ValueError: raise RuntimeError('CATALOG_REPAIR_MARKER_INVALID') from None
+    attempts = marker.get('attempts')
+    if marker.get('runIds') != catalog_ids or not isinstance(attempts, dict) \
+            or any(run_id not in catalog_ids or not isinstance(count, int) or count < 0 or count > MAX_RECOVERY_RETRIES
+                   for run_id, count in attempts.items()):
+        raise RuntimeError('CATALOG_REPAIR_MARKER_INVALID')
+    return marker
+
+
+def retry_recoverable_failures(secret, database, catalog_ids):
+    rows = read_runs(database, catalog_ids)
+    failed = [row for row in rows if row['status'] == 'failed']
+    if any(row.get('error_code') not in RECOVERABLE_ERRORS for row in failed) \
+            or any(row['status'] == 'cancelled' for row in rows):
+        raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
+    marker = repair_marker(catalog_ids)
+    retried = 0
+    for row in failed:
+        attempts = dict(marker['attempts'])
+        used = attempts.get(row['id'], 0)
+        if used >= MAX_RECOVERY_RETRIES:
+            raise RuntimeError('CATALOG_RECOVERY_RETRY_BUDGET_EXHAUSTED')
+        attempts[row['id']] = used + 1
+        marker = {**marker, 'attempts': attempts, 'lastRunId': row['id'],
+                  'lastCode': row.get('error_code'), 'updatedAt': int(time.time())}
+        # Persist the bounded attempt before the retry mutation. A crash may consume an
+        # attempt, but can never make the operation exceed the configured retry budget.
+        replace_repair(marker)
+        api(secret, '/api/automation-runs/' + row['id'] + '/retry', {})
+        current = {item['id']: item for item in read_runs(database, catalog_ids)}[row['id']]
+        if current['status'] not in ('queued', 'processing', 'completed'):
+            raise RuntimeError('CATALOG_REPAIR_RETRY_NOT_APPLIED')
+        retried += 1
+        print('CATALOG_RECOVERY_REPAIR=' + json.dumps({
+            'sku': row['base_sku'], 'code': row.get('error_code'), 'attempt': used + 1
+        }, separators=(',', ':')), flush=True)
+    return retried
 
 
 def media_type_allowed(content_type, generated):
@@ -472,6 +534,7 @@ def main():
                 replay_action(final_by_id[run_id], True)
             if not validate_conflict_resolution(database, ids):
                 raise RuntimeError('CATALOG_CONFLICT_RESOLUTION_MISSING')
+            retried_count += retry_recoverable_failures(secret, database, ids)
         finally:
             subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
         print('CATALOG_GOOGLE_WRITE_GRANT_ACTIVE=yes', flush=True)
@@ -490,6 +553,10 @@ def main():
             if progress != previous:
                 print('CATALOG_RECOVERY_PROGRESS=' + json.dumps(progress, separators=(',', ':')), flush=True)
                 save_marker(marker, progress, verified); previous = progress
+            if any(row['status'] in ('failed', 'cancelled') for row in rows):
+                retried_count += retry_recoverable_failures(secret, database, ids)
+                previous = None
+                continue
             if len(rows) == 15 and all(row['status'] in ('completed', 'failed', 'cancelled') for row in rows): break
             if subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode == 0:
                 raise RuntimeError('CATALOG_CRON_TIMER_NOT_HELD')
