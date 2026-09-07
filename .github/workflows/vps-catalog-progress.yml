@@ -6,7 +6,7 @@ on:
     paths: [deploy/vps/catalog-progress.py, .github/workflows/vps-catalog-progress.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
@@ -28,7 +28,14 @@ jobs:
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - < deploy/vps/catalog-progress.py
+            python3 -u - < deploy/vps/catalog-progress.py | tee deploy/vps/catalog-progress-output.txt
+      - name: Save progress snapshot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/catalog-progress-output.txt
+          git commit -m "ops: record catalog recovery progress" || exit 0
+          git push origin HEAD:codex/vps-release-space
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps
