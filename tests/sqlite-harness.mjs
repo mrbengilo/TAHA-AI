@@ -67,13 +67,18 @@ export function harness() {
     sqlite.prepare(`INSERT INTO product_variants (id,workspace_id,product_id,sku,title,price_minor,inventory_quantity,status,created_at,updated_at)
       VALUES (?,?,?,?,?,490000,10,'active',?,?)`).run(`variant-${id}`, WORKSPACE, id, sku, sku, now, now);
     const mediaId = `image-${id}`;
-    const metadata = { name: `${sku}-01.jpg`, googleDriveSource: { connectionId: "google-1", driveFileId: `file-${id}`, driveFolderId: `folder-${sku}`, skuKey: sku, matchKind: "sku_folder" } };
+    const metadata = { name: `${sku}-01.jpg`, md5Checksum: "md5-source", googleDriveSource: { connectionId: "google-1", driveFileId: `file-${id}`, driveFolderId: `folder-${sku}`, skuKey: sku, matchKind: "sku_folder" } };
     sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,external_id,mime_type,status,metadata_json,created_at,updated_at)
       VALUES (?,?,'google-1','google_drive','image','source','google_drive',?,'image/jpeg','ready',?,?,?)`).run(mediaId, WORKSPACE, `file-${id}`, JSON.stringify(metadata), now, now);
     sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,created_at) VALUES (?,?,?,?,'primary',?)").run(`pm-${id}`, WORKSPACE, id, mediaId, now);
     return { id, sku, mediaId };
   }
   overrides.set(path.join(ROOT, "lib/integrations/google-sync.ts"), { syncGoogleCatalog: async () => ({ products: 1 }) });
+  overrides.set(path.join(ROOT, "lib/product-image-processing.ts"), {
+    LIFESTYLE_VARIANTS: ["cycling", "running", "climbing", "stream"],
+    normalizeProductSourceImages: async () => ({ checked: 1 }),
+    findOrPersistGeneratedImage: async () => { throw new Error("Image generation must never execute"); },
+  });
   const generated = [];
   overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
     async generateProductContent(input) {

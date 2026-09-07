@@ -303,7 +303,7 @@ export const automationSteps = sqliteTable("automation_steps", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   runId: text("run_id").notNull().references(() => automationRuns.id),
-  stepType: text("step_type", { enum: ["content", "image", "finalize"] }).notNull(),
+  stepType: text("step_type", { enum: ["content", "optimize", "image", "finalize"] }).notNull(),
   ordinal: integer("ordinal").notNull().default(0),
   status: text("status", {
     enum: ["queued", "processing", "retry_wait", "completed", "failed", "cancelled"],

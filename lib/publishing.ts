@@ -5,6 +5,7 @@ import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 import { mediaBlob } from "./media";
 import { markJobBlocked, markJobFailed, markJobPublished, startPublishJob } from "./publish-jobs";
+import { customerCopyViolation } from "./ai/shoe-content";
 
 type FacebookInput = { connectionId: string; message: string; mediaIds: string[]; idempotencyKey: string };
 type WebsiteInput = { connectionId: string; payload: Record<string, unknown>; idempotencyKey: string };
@@ -56,6 +57,8 @@ async function facebookJson(url: string | URL, init: RequestInit, phase: "media"
 }
 
 export async function sendFacebookPost(input: FacebookRemoteInput) {
+  const copyViolation = customerCopyViolation({ body: input.message });
+  if (copyViolation) throw new PublishDeliveryError(copyViolation);
   const permissions = await verifyFacebookConnection(input.connectionId);
   if (!permissions.ready) throw new PublishDeliveryError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", {
     retryable: ["FACEBOOK_VERIFICATION_UNAVAILABLE", "FACEBOOK_CONNECTION_CHANGED"].includes(permissions.code || ""),
@@ -137,6 +140,13 @@ export async function recordFacebookMapping(input: {
 }
 
 export async function sendWebsitePayload(input: WebsiteRemoteInput) {
+  const copyViolation = customerCopyViolation({
+    title: typeof input.payload.title === "string" ? input.payload.title : "",
+    body: [input.payload.message, input.payload.body, input.payload.description]
+      .filter((value): value is string => typeof value === "string").join("\n"),
+    hashtags: Array.isArray(input.payload.hashtags) ? input.payload.hashtags.filter((value): value is string => typeof value === "string") : [],
+  });
+  if (copyViolation) throw new PublishDeliveryError(copyViolation);
   const connection = await getConnectedIntegration<{ webhookSecret?: unknown }>("website", input.connectionId);
   const secret = typeof connection.credentials.webhookSecret === "string" ? connection.credentials.webhookSecret : "";
   const endpoint = typeof connection.config.publishEndpoint === "string" ? connection.config.publishEndpoint : "";

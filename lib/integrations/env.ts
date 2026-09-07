@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 export type RuntimeEnv = {
   DB?: D1Database;
   MEDIA?: R2Bucket;
+  IMAGES?: ImagesBinding;
   PUBLIC_APP_URL?: string;
   OAUTH_STATE_SECRET?: string;
   INTEGRATION_TOKEN_ENCRYPTION_KEY?: string;

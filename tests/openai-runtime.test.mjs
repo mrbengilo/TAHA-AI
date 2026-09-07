@@ -8,8 +8,11 @@ const require = createRequire(import.meta.url);
 const { Miniflare } = require(require.resolve("miniflare", { paths: [require.resolve("wrangler/package.json")] }));
 
 test("OpenAI request options work in the deployed workerd runtime and reject redirects", async () => {
-  const source = (await readFile(new URL("../lib/ai/openai.ts", import.meta.url), "utf8"))
-    .replace('import { getRuntimeEnv } from "../integrations/env";', 'function getRuntimeEnv() { return { OPENAI_API_KEY: "test-runtime-key" }; }');
+  const sources = await Promise.all(["shoe-content", "shoe-image-prompts", "openai"].map((name) => readFile(new URL(`../lib/ai/${name}.ts`, import.meta.url), "utf8")));
+  const source = sources.join("\n")
+    .replace(/import\s+\{[^}]+\}\s+from\s+"\.\/shoe-(?:content|image-prompts)";/g, "")
+    .replace('import { getRuntimeEnv } from "../integrations/env";', 'function getRuntimeEnv() { return { OPENAI_API_KEY: "test-runtime-key" }; }')
+    .replace(/^export /gm, "");
   const client = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
   const content = { sku: "PH0001", productDescription: "Giày PH0001", hashtags: ["#PH0001"], channels: { facebook: { title: "Giày PH0001", body: "Bài viết PH0001", hashtags: ["#PH0001"] } } };
   const script = `${client}

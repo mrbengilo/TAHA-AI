@@ -239,8 +239,8 @@ export function ConnectionCenter() {
                       <span>{modeLabel(provider.publishMode)}</span>
                       <div className="provider-actions">
                         {provider.setupUrl ? <a href={provider.setupUrl} target="_blank" rel="noreferrer">{provider.setupLabel || "Mở trang cấu hình"} ↗</a> : null}
-                        {provider.id === "google" && connected ? <button className="secondary" type="button" disabled={busy === "google-sync"} onClick={() => void syncGoogle()}>{busy === "google-sync" ? "Đang đồng bộ…" : "Đồng bộ ngay"}</button> : null}
-                        <button type="button" disabled={!!busy} onClick={() => void connect(provider)}>{busy === provider.id ? "Đang mở…" : provider.connections.length > 0 ? "Kết nối lại" : isAssisted ? "Bật trợ lý" : "Kết nối"}</button>
+                        {provider.id === "google" && connected ? <button className="secondary" type="button" disabled={!!busy} aria-busy={busy === "google-sync"} onClick={() => void syncGoogle()}>{busy === "google-sync" ? "Đang đồng bộ…" : "Đồng bộ ngay"}</button> : null}
+                        <button type="button" disabled={!!busy} aria-busy={busy === provider.id} onClick={() => void connect(provider)}>{busy === provider.id ? "Đang mở…" : provider.connections.length > 0 ? "Kết nối lại" : isAssisted ? "Bật trợ lý" : "Kết nối"}</button>
                       </div>
                     </div>
                   </article>

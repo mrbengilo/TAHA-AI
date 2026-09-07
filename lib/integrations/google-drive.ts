@@ -334,7 +334,31 @@ export async function findGoogleDriveFileByAppProperty(
   url.searchParams.set("supportsAllDrives", "true");
   url.searchParams.set("includeItemsFromAllDrives", "true");
   const data = await driveJson<{ files?: DriveFile[] }>(url, token, "read");
-  return sortDriveFiles(data.files ?? [])[0] ?? null;
+  const files = sortDriveFiles(data.files ?? []);
+  if (files.length > 1) throw new GoogleDriveError("GOOGLE_DRIVE_IDEMPOTENCY_AMBIGUOUS", "Có nhiều tệp Drive trùng khóa media.", 409);
+  return files[0] ?? null;
+}
+
+export async function downloadGoogleDriveImage(token: string, fileId: string, folderId: string, maxBytes: number) {
+  const metadataUrl = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
+  metadataUrl.searchParams.set("fields", "id,name,mimeType,size,modifiedTime,md5Checksum,parents,trashed,appProperties");
+  metadataUrl.searchParams.set("supportsAllDrives", "true");
+  const file = await driveJson<DriveFile>(metadataUrl, token, "read");
+  const size = Number(file.size);
+  if (file.trashed || file.id !== fileId || !file.parents?.includes(folderId) || !file.mimeType.startsWith("image/")
+    || !Number.isFinite(size) || size < 1 || size >= maxBytes) {
+    throw new GoogleDriveError("GOOGLE_DRIVE_MEDIA_MISMATCH", "Tệp Drive không còn khớp media đã lưu.", 409);
+  }
+  const contentUrl = new URL(metadataUrl);
+  contentUrl.search = "";
+  contentUrl.searchParams.set("alt", "media");
+  contentUrl.searchParams.set("supportsAllDrives", "true");
+  const response = await driveFetch(contentUrl, { headers: { authorization: `Bearer ${token}` } }, "read");
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength !== size || buffer.byteLength >= maxBytes) {
+    throw new GoogleDriveError("GOOGLE_DRIVE_MEDIA_MISMATCH", "Kích thước tệp Drive không khớp.", 409);
+  }
+  return { file, blob: new Blob([buffer], { type: file.mimeType }) };
 }
 
 export async function uploadGoogleDriveImage(input: {

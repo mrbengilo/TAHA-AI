@@ -1,0 +1,48 @@
+name: Correct authorized PH0014 Facebook caption
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-facebook-caption-correction
+  cancel-in-progress: false
+
+jobs:
+  correct:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[correct-ph0014]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify caption correction guards
+        run: node --test tests/facebook-trial-correct.test.mjs
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Correct and verify the existing post
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'flock -n /var/lock/taha-ai-release.lock docker exec -i taha-ai node --input-type=module - --run --apply' \
+            < deploy/vps/facebook-trial-correct.mjs
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps

@@ -1,6 +1,8 @@
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { assertProductMedia, objectJson } from "./product-integrity";
+import { objectJson } from "./product-integrity";
+import { assertPublishProductMedia } from "./publish-media-integrity";
+import { customerCopyViolation } from "./ai/shoe-content";
 
 export class ContentReviewError extends Error {
   constructor(public code: string, public userMessage: string, public status = 409) { super(code); }
@@ -16,8 +18,15 @@ export async function reviewContentDraft(id: string, input: Record<string, unkno
   const body = typeof input.body === "string" ? input.body.trim() : "";
   const title = typeof input.title === "string" ? input.title.trim() : "";
   const hashtags = Array.isArray(input.hashtags) ? [...new Set(input.hashtags.map((v) => String(v).trim().replace(/^#+/, "")))].filter(Boolean) : [];
-  if (!reject && (!body || body.length > 5000 || title.length > 180 || !hashtags.length || hashtags.length > 20 || hashtags.some((v) => !/^[^\s#]{1,79}$/.test(v)))) {
-    throw new ContentReviewError("INVALID_CONTENT", "Nhập bài viết (tối đa 5.000 ký tự) và hashtag không chứa khoảng trắng.", 422);
+  if (!reject && (!body || body.length > 20000 || title.length > 180 || !hashtags.length || hashtags.length > 20 || hashtags.some((v) => !/^[^\s#]{1,79}$/.test(v)))) {
+    throw new ContentReviewError("INVALID_CONTENT", "Nhập bài viết và hashtag không chứa khoảng trắng.", 422);
+  }
+  if (!reject) {
+    const violation = customerCopyViolation({ title, body, hashtags });
+    if (violation) throw new ContentReviewError(violation,
+      violation === "CONTENT_PRICE_FORBIDDEN" ? "Bài viết không được chứa giá hoặc thông tin báo giá."
+        : violation === "CONTENT_WORD_LIMIT_EXCEEDED" ? "Bài viết tối đa 2.000 từ, tính cả tiêu đề và hashtag."
+          : "Bỏ thông tin về quy trình nội bộ và lời nhắc kiểm tra mã sản phẩm khỏi bài viết.", 422);
   }
   const now = Date.now();
   const reviewId = crypto.randomUUID();
@@ -67,11 +76,13 @@ export async function approvedDraftPayload(id: string, provider: string) {
     FROM content_drafts WHERE id = ? AND workspace_id = ? AND target_provider = ? AND status = 'approved' LIMIT 1`)
     .bind(id, TAHA_WORKSPACE_ID, provider).first<{ id: string; product_id: string; body: string; title: string; hashtags_json: string; platform_data_json: string; version: number }>();
   if (!draft) throw new ContentReviewError("DRAFT_NOT_APPROVED", "Bài viết chưa được cho phép đăng hoặc đã bị admin chặn.");
+  const violation = customerCopyViolation({ title: draft.title, body: draft.body, hashtags: JSON.parse(draft.hashtags_json) });
+  if (violation) throw new ContentReviewError(violation, "Bài viết cần bỏ giá, thông tin nội bộ và bảo đảm tối đa 2.000 từ trước khi đăng.", 422);
   const media = await db.prepare(`SELECT media_id FROM content_draft_media WHERE draft_id = ? AND workspace_id = ? ORDER BY sort_order, created_at`)
     .bind(id, TAHA_WORKSPACE_ID).all<{ media_id: string }>();
   const mediaIds = media.results.map((item) => item.media_id);
   const data = objectJson(draft.platform_data_json);
-  await assertProductMedia(draft.product_id, mediaIds, typeof data.sourceFingerprint === "string" ? data.sourceFingerprint : undefined);
+  await assertPublishProductMedia(draft.product_id, mediaIds, data);
   return { draft, mediaIds, platformData: data };
 }
 

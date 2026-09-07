@@ -1,0 +1,69 @@
+name: TAHA release disk inventory
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Inspect TAHA release disk usage without changing resources
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          df -kP /
+          docker system df
+          docker system df -v | awk '$1 == "tahashoes-taha-ai" {print "TAHA_DISK_DETAIL=" $0}'
+          docker image ls tahashoes-taha-ai --no-trunc --format 'TAHA_IMAGE={{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}'
+          for image in $(docker image ls tahashoes-taha-ai -q --no-trunc | sort -u); do
+            docker image inspect "$image" --format 'TAHA_IMAGE_INFO={{.Id}}|{{json .RepoTags}}|{{.Size}}|{{.Created}}'
+          done
+          for container in $(docker container ls -aq); do
+            docker inspect "$container" --format 'CONTAINER_REFERENCE={{.Id}}|{{.Name}}|{{.Image}}|{{.State.Status}}|{{json .HostConfig.VolumesFrom}}|{{json .HostConfig.Links}}'
+          done
+          for container in $(docker container ls -aq --filter name=taha-ai); do
+            docker inspect "$container" --format 'TAHA_CONTAINER={{.Name}}|{{.Id}}|{{.Image}}|{{.Config.Image}}|{{.State.Status}}|{{.Created}}|{{.HostConfig.RestartPolicy.Name}}'
+          done
+          for path in /var/lib/taha-ai /var/backups/taha-ai /var/www/taha-ai /var/tmp/taha-source-*.bundle /var/lib/taha-ai-candidate-*; do
+            if [ -e "$path" ]; then du -sk -- "$path"; fi
+          done
+          docker inspect taha-ai --format 'ACTIVE_TAHA_IMAGE={{.Image}}|{{.State.Status}}'
+          if docker image inspect tahashoes-taha-ai:db9e460029454bd48e3c248cd64923d3208fcf0c >/dev/null 2>&1; then
+            docker image inspect tahashoes-taha-ai:db9e460029454bd48e3c248cd64923d3208fcf0c --format 'TARGET_TAHA_IMAGE={{.Id}}'
+          fi
+          systemctl show taha-ai-cron.service -p TimeoutStartUSec -p ActiveState
+          python3 - <<'PY'
+          from pathlib import Path
+          import sqlite3,json
+          for path in Path('/var/lib/taha-ai').rglob('*.sqlite'):
+              with sqlite3.connect(f'file:{path}?mode=ro',uri=True) as db:
+                  if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='products'").fetchone(): continue
+                  values = {'activeProducts':db.execute("SELECT count(*) FROM products WHERE status='active' AND deleted_at IS NULL").fetchone()[0],
+                            'sourceImages':db.execute("SELECT count(*) FROM media_assets WHERE origin='source' AND media_type='image' AND status='ready'").fetchone()[0]}
+                  print('CATALOG_INVENTORY='+json.dumps(values,separators=(',',':')))
+          PY
+          systemctl is-active taha-ai-cron.timer
+          REMOTE
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps

@@ -91,7 +91,7 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
 
   const queued = await queueAutomationRun({
     productId: product.id,
-    imageCount: 0,
+    imageCount: 4,
     targetProviders: targets,
     connectionIds,
     idempotencyKey: `daily:${day}:${product.id}`,

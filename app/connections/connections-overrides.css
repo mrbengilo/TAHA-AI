@@ -53,7 +53,38 @@
 
 .taha-shell .provider-card {
   border-radius: 16px;
+  padding: 20px;
+  min-width: 0;
 }
+
+.taha-shell .provider-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.taha-shell .provider-status i { flex: 0 0 6px; width: 6px; height: 6px; }
+.taha-shell .provider-card h3 { font-size: 17px; line-height: 1.45; }
+.taha-shell .capability-list { flex-wrap: wrap; gap: 6px; }
+.taha-shell .capability-list span { font-size: 11px; line-height: 1.5; padding: 5px 8px; }
+.taha-shell .connected-accounts > div { padding: 12px; gap: 6px; min-width: 0; }
+.taha-shell .connected-accounts span { font-size: 13px; overflow-wrap: anywhere; }
+.taha-shell .connected-accounts small { font-size: 12px; }
+.taha-shell .provider-card details,
+.taha-shell .provider-card-footer > span { font-size: 12px; line-height: 1.5; }
+.taha-shell .provider-actions { max-width: 78%; gap: 8px; }
+.taha-shell .provider-actions > a { font-size: 12px; line-height: 1.5; }
+.taha-shell .provider-card-footer button,
+.taha-shell .channel-shortcuts a { height: auto; padding: 10px 12px; font-size: 13px; }
+.taha-shell .channel-shortcuts a span { font-size: 14px; }
 
 .taha-shell .provider-actions button,
 .taha-shell .provider-actions a,

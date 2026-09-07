@@ -548,6 +548,12 @@
 .sku-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 20px 0 28px; }
 .sku-images a { min-width: 0; text-decoration: none; color: var(--app-muted); font-size: 12px; overflow-wrap: anywhere; }
 .sku-images img { width: 100%; aspect-ratio: 1; object-fit: contain; border: 1px solid var(--app-line); border-radius: 10px; background: white; }
+.sku-images a { display: grid; align-content: start; gap: 5px; border-radius: 10px; }
+.sku-images a:hover img { border-color: var(--app-brand-strong); }
+.sku-images a:focus-visible { outline: 3px solid var(--app-brand-strong); outline-offset: 4px; }
+.sku-images img { height: auto; }
+.sku-images.is-generated img { object-fit: cover; }
+.sku-images small, .sku-editor-hint { font-size: 12px; line-height: 1.5; color: var(--app-muted); }
 .sku-body { white-space: pre-wrap; }
 .sku-articles { display: grid; gap: 16px; min-width: 0; }
 .sku-article-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
