@@ -194,9 +194,14 @@ jobs:
             exit 27
           fi
 
-          systemctl start taha-ai-cron.timer
-          systemctl is-active --quiet taha-ai-cron.timer
-          echo 'CRON_TIMER_ACTIVE=yes'
+          if [ "$TIMER_WAS_ACTIVE" = yes ]; then
+            systemctl start taha-ai-cron.timer
+            systemctl is-active --quiet taha-ai-cron.timer
+            echo 'CRON_TIMER_ACTIVE=yes'
+          else
+            ! systemctl is-active --quiet taha-ai-cron.timer
+            echo 'CRON_TIMER_PRESERVED_INACTIVE=yes'
+          fi
           echo '-- final production checks --'
           echo "repo_head=$(git -C "$REPO" rev-parse HEAD)"
           echo "container_image=$(docker inspect taha-ai -f '{{.Config.Image}}')"
