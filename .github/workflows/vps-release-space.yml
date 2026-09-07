@@ -48,7 +48,20 @@ jobs:
             if [ -e "$path" ]; then du -sk -- "$path"; fi
           done
           docker inspect taha-ai --format 'ACTIVE_TAHA_IMAGE={{.Image}}|{{.State.Status}}'
-          docker image inspect tahashoes-taha-ai:db9e460029454bd48e3c248cd64923d3208fcf0c --format 'TARGET_TAHA_IMAGE={{.Id}}'
+          if docker image inspect tahashoes-taha-ai:db9e460029454bd48e3c248cd64923d3208fcf0c >/dev/null 2>&1; then
+            docker image inspect tahashoes-taha-ai:db9e460029454bd48e3c248cd64923d3208fcf0c --format 'TARGET_TAHA_IMAGE={{.Id}}'
+          fi
+          systemctl show taha-ai-cron.service -p TimeoutStartUSec -p ActiveState
+          python3 - <<'PY'
+          from pathlib import Path
+          import sqlite3,json
+          for path in Path('/var/lib/taha-ai').rglob('*.sqlite'):
+              with sqlite3.connect(f'file:{path}?mode=ro',uri=True) as db:
+                  if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='products'").fetchone(): continue
+                  values = {'activeProducts':db.execute("SELECT count(*) FROM products WHERE status='active' AND deleted_at IS NULL").fetchone()[0],
+                            'sourceImages':db.execute("SELECT count(*) FROM media_assets WHERE origin='source' AND media_type='image' AND status='ready'").fetchone()[0]}
+                  print('CATALOG_INVENTORY='+json.dumps(values,separators=(',',':')))
+          PY
           systemctl is-active taha-ai-cron.timer
           REMOTE
       - name: Remove runner SSH key
