@@ -8,6 +8,7 @@ import {
   sendWebsitePayload,
 } from "./publishing";
 import { recordTikTokShopMappings, sendTikTokShopListing } from "./tiktok-shop-publishing";
+import { customerCopyViolation } from "./ai/shoe-content";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -523,6 +524,14 @@ async function publishLeasedJob(
   assertLease: () => Promise<void>,
 ) {
   const payload = parsePayload(job.payload_snapshot_json);
+  if (job.job_kind === "social_post") {
+    const copyViolation = customerCopyViolation({
+      title: typeof payload.title === "string" ? payload.title : "",
+      body: typeof payload.message === "string" ? payload.message : "",
+      hashtags: Array.isArray(payload.hashtags) ? payload.hashtags.filter((value): value is string => typeof value === "string") : [],
+    });
+    if (copyViolation) throw new PublishDeliveryError(copyViolation);
+  }
   if (job.draft_id && job.product_id && ["facebook", "website"].includes(job.provider)) {
     const mediaIds = Array.isArray(payload.mediaIds) ? payload.mediaIds.filter((id): id is string => typeof id === "string") : [];
     const data = payload.platformData as Record<string, unknown> | undefined;

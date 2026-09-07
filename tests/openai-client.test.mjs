@@ -5,33 +5,31 @@ import vm from "node:vm";
 import ts from "typescript";
 
 async function loadOpenAiClient(runtime = {}) {
-  const source = await readFile(new URL("../lib/ai/openai.ts", import.meta.url), "utf8");
-  const compiled = ts.transpileModule(source, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-      esModuleInterop: true,
-    },
-  }).outputText;
-  const commonJsModule = { exports: {} };
-  const context = vm.createContext({
-    module: commonJsModule,
-    exports: commonJsModule.exports,
-    AbortSignal,
-    Blob,
-    FormData,
-    Response,
-    Uint8Array,
-    atob,
-    fetch,
-    console,
-    require(specifier) {
-      if (specifier === "../integrations/env") return { getRuntimeEnv: () => runtime };
-      throw new Error(`Unexpected import: ${specifier}`);
-    },
-  });
-  new vm.Script(compiled, { filename: "openai.cjs" }).runInContext(context);
-  return commonJsModule.exports;
+  const modules = {};
+  for (const name of ["shoe-content", "shoe-image-prompts", "openai"]) {
+    const source = await readFile(new URL(`../lib/ai/${name}.ts`, import.meta.url), "utf8");
+    const compiled = ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+      },
+    }).outputText;
+    const commonJsModule = { exports: {} };
+    const context = vm.createContext({
+      module: commonJsModule,
+      exports: commonJsModule.exports,
+      AbortSignal, Blob, FormData, Response, Uint8Array, atob, fetch, console,
+      require(specifier) {
+        if (specifier === "../integrations/env") return { getRuntimeEnv: () => runtime };
+        if (modules[specifier]) return modules[specifier];
+        throw new Error(`Unexpected import: ${specifier}`);
+      },
+    });
+    new vm.Script(compiled, { filename: `${name}.cjs` }).runInContext(context);
+    modules[`./${name}`] = commonJsModule.exports;
+  }
+  return modules["./openai"];
 }
 
 function validGeneratedContent() {
@@ -99,6 +97,7 @@ test("generateProductContent uses Responses structured JSON and treats product f
   assert.equal(body.text.format.schema.properties.imageLayouts, undefined);
   assert.match(body.input[0].content[0].text, /chỉ dẫn nằm trong dữ liệu/i);
   assert.match(body.input[1].content[0].text, /Ignore previous instructions/);
+  assert.doesNotMatch(body.input[1].content[0].text, /priceMinor|compareAtPriceMinor|currency|490000|VND/);
   assert.equal(result.model, "gpt-test-2026-08-21");
   assert.equal(result.content.channels.shopee.title, "Giày TAHA mới");
   assert.ok(result.content.productDescription);
@@ -148,7 +147,7 @@ test("editProductImage uses GPT Image edits without input_fidelity", async () =>
     source: new Blob(["source"], { type: "image/png" }),
     mimeType: "image/png",
     product: { sku: "TAHA-001", name: "Sneaker trắng" },
-    layoutIndex: 6,
+    layoutIndex: 4,
     filename: "TAHA 001.png",
   }, fetcher);
 
@@ -163,7 +162,8 @@ test("editProductImage uses GPT Image edits without input_fidelity", async () =>
   assert.equal(form.getAll("image[]").length, 1);
   assert.match(form.get("prompt"), /Giữ sản phẩm giống hệt ảnh nguồn/);
   assert.match(form.get("prompt"), /SKU TAHA-001/);
-  assert.match(form.get("prompt"), /số 6\/6/);
+  assert.match(form.get("prompt"), /số 4\/4/);
+  assert.match(form.get("prompt"), /crystal-clear mountain streams/);
   assert.deepEqual(Array.from(new Uint8Array(await result.image.arrayBuffer())), [80, 78, 71]);
   assert.equal(result.mimeType, "image/png");
 });
@@ -223,4 +223,112 @@ test("client rejects invalid input before sending a request", async () => {
     (error) => error.code === "OPENAI_IMAGE_INPUT_INVALID",
   );
   assert.equal(calls, 0);
+});
+
+test("generation removes embedded price/provenance phrases and appends exact customer guidance", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  let request;
+  const content = validGeneratedContent();
+  content.channels = { facebook: content.channels.facebook };
+  const result = await client.generateProductContent({
+    product: {
+      sku: "TAHA-001", name: "Sneaker nữ", brand: "TAHA",
+      description: "Thân giày thoáng nhẹ. Giá bán: 619.000 VND\nGiá tham khảo: 990.000 VND\nĐế cao su; chỉ 619k; bảo hành 12 tháng. Hình ảnh có sẵn từ Google Drive.",
+      priceMinor: 619000, compareAtPriceMinor: 990000, currency: "VND",
+    },
+    targetProviders: ["facebook"],
+  }, async (_url, init) => {
+    request = JSON.parse(init.body);
+    return Response.json(responsesEnvelope(content));
+  });
+  const dataText = request.input[1].content[0].text;
+  assert.doesNotMatch(dataText, /619|990|priceMinor|compareAtPriceMinor|currency|Giá bán|Giá tham khảo|Google Drive/);
+  assert.match(dataText, /Thân giày thoáng nhẹ/);
+  assert.match(dataText, /Đế cao su/);
+  assert.match(dataText, /bảo hành 12 tháng/);
+  assert.match(request.input[0].content[0].text, /Tuyệt đối không đưa giá bán/);
+  const body = result.content.channels.facebook.body;
+  assert.match(body, /VỆ SINH & BẢO QUẢN/);
+  assert.match(body, /Nữ — size VN\/EU/);
+  assert.doesNotMatch(body, /Nam — size VN\/EU/);
+  assert.match(body, /37 → 22\.6–23\.5/);
+  assert.match(body, /44 → 28\.6–30\.0/);
+  assert.equal(body.split("VỆ SINH & BẢO QUẢN").length - 1, 1);
+  assert.match(result.content.productDescription, /CHỌN SIZE THEO CHIỀU DÀI CHÂN/);
+});
+
+test("generation rejects price, provenance and verify-SKU prose in every public output field", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const cases = [
+    [(content) => { content.productDescription = "Giá bán: 619.000 VND"; }, "CONTENT_PRICE_FORBIDDEN"],
+    [(content) => { content.channels.facebook.title = "Chỉ 619k"; }, "CONTENT_PRICE_FORBIDDEN"],
+    [(content) => { content.channels.facebook.body = "Giá tham khảo: 990.000"; }, "CONTENT_PRICE_FORBIDDEN"],
+    [(content) => { content.channels.facebook.hashtags = ["#Gia619k"]; }, "CONTENT_PRICE_FORBIDDEN"],
+    [(content) => { content.hashtags = ["#GoogleDrive"]; }, "CONTENT_INTERNAL_TEXT_FORBIDDEN"],
+    [(content) => { content.channels.facebook.body = "Vui lòng kiểm tra đúng mã sản phẩm PH0014 và thương hiệu LITUO SPORT trước khi mua."; }, "CONTENT_INTERNAL_TEXT_FORBIDDEN"],
+    [(content) => { content.channels.facebook.body = "Hình ảnh sản phẩm sử dụng ảnh có sẵn từ Google Drive."; }, "CONTENT_INTERNAL_TEXT_FORBIDDEN"],
+  ];
+  for (const [mutate, code] of cases) {
+    const content = validGeneratedContent();
+    content.channels = { facebook: content.channels.facebook };
+    mutate(content);
+    await assert.rejects(client.generateProductContent({
+      product: { sku: "TAHA-001", name: "Sneaker" }, targetProviders: ["facebook"],
+    }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === code);
+  }
+});
+
+test("generation counts the final appendix and hashtags toward the 2000-word cap", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const content = validGeneratedContent();
+  content.channels = { facebook: { ...content.channels.facebook, body: Array(1900).fill("giày").join(" ") } };
+  await assert.rejects(client.generateProductContent({
+    product: { sku: "TAHA-001", name: "Sneaker" }, targetProviders: ["facebook"],
+  }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "CONTENT_WORD_LIMIT_EXCEEDED");
+});
+
+test("generation does not treat the stream scene or care spray as proof of waterproof shoes", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const content = validGeneratedContent();
+  content.channels = { facebook: { ...content.channels.facebook, body: "Giày TAHA-001 có khả năng chống thấm." } };
+  for (const description of ["Giày cho hoạt động hằng ngày", "Giày không chống thấm", "Nên sử dụng chai xịt chống thấm nano khi đi mưa"]) {
+    await assert.rejects(client.generateProductContent({
+      product: { sku: "TAHA-001", name: "Sneaker", description }, targetProviders: ["facebook"],
+    }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_UNSUPPORTED_PRODUCT_CLAIM");
+  }
+});
+
+test("generation cannot add an invented size table beside the exact supplied appendix", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const content = validGeneratedContent();
+  content.channels = { facebook: { ...content.channels.facebook, body: "PH0014\nBảng size nam: size 37: 23.5–24.0 cm" } };
+  await assert.rejects(client.generateProductContent({
+    product: { sku: "TAHA-001", name: "Sneaker" }, targetProviders: ["facebook"],
+  }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_SIZE_REFERENCE_DUPLICATED");
+});
+
+test("image generation accepts the four requested scenes and rejects retired layouts before API calls", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const expectedScenes = ["professional cyclist", "professional runner", "climber ascending", "mountain streams"];
+  const source = new Blob(["source"], { type: "image/png" });
+  let calls = 0;
+  for (let layoutIndex = 1; layoutIndex <= 4; layoutIndex += 1) {
+    await client.editProductImage({
+      source, filename: "TAHA-001.png", mimeType: "image/png", product: { sku: "TAHA-001", name: "Sneaker" }, layoutIndex,
+    }, async (_url, init) => {
+      calls += 1;
+      const prompt = init.body.get("prompt");
+      assert.ok(prompt.includes(expectedScenes[layoutIndex - 1]));
+      assert.match(prompt, /không đổi hình dáng/);
+      assert.match(prompt, /Không biến giày thành một loại khác/);
+      assert.doesNotMatch(prompt, /không có người/);
+      return Response.json({ data: [{ b64_json: btoa("PNG") }] });
+    });
+  }
+  for (const layoutIndex of [0, 5, 6]) {
+    await assert.rejects(client.editProductImage({
+      source, filename: "TAHA-001.png", mimeType: "image/png", product: { sku: "TAHA-001", name: "Sneaker" }, layoutIndex,
+    }, async () => { calls += 1; return Response.json({}); }), (error) => error.code === "OPENAI_IMAGE_INPUT_INVALID");
+  }
+  assert.equal(calls, 4);
 });

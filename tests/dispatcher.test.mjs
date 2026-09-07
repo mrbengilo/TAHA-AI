@@ -323,6 +323,11 @@ class FakeDispatcherD1 {
 }
 
 async function loadDispatcher() {
+  const policySource = await readFile(new URL("../lib/ai/shoe-content.ts", import.meta.url), "utf8");
+  const policyModule = { exports: {} };
+  new vm.Script(ts.transpileModule(policySource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText).runInNewContext({ module: policyModule, exports: policyModule.exports });
   const source = await readFile(new URL("../lib/dispatcher.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -334,6 +339,7 @@ async function loadDispatcher() {
     crypto: webcrypto,
     console,
     require(specifier) {
+      if (specifier === "./ai/shoe-content") return policyModule.exports;
       if (specifier === "./integrations/google-sync") return { syncGoogleCatalog: async () => {} };
       if (specifier === "./product-integrity") return { productSourceConnection: async () => "google-test", assertProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };
       if (specifier === "./integrations/env") return { getRuntimeEnv: () => ({}) };
@@ -399,6 +405,25 @@ function publishers(overrides = {}) {
     ...overrides,
   };
 }
+
+test("prices and internal process text are rejected before any Facebook upload or feed request", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  for (const message of ["PH0014 Giá bán: 619.000 VND", "PH0014 Giá chỉ : 6xx", "PH0014 Hình ảnh từ Google Drive", "PH0014 " + "giày ".repeat(2001)]) {
+    const database = new FakeDispatcherD1({ jobs: [job("guard", "facebook", { payload_snapshot_json: JSON.stringify({ message, mediaIds: ["image"] }) })], connections: [connection("facebook", "facebook")] });
+    let calls = 0;
+    const result = await runPublishDispatcher({ database, now: 2000, publishers: publishers({ facebook: async () => { calls += 1; throw new Error("must not publish"); } }) });
+    assert.equal(calls, 0);
+    assert.equal(result.failed, 1);
+    assert.match(result.errors[0].code, /^CONTENT_/);
+  }
+});
+
+test("size ranges and SKU remain valid in a customer Facebook caption", async () => {
+  const { runPublishDispatcher } = await loadDispatcher();
+  const database = new FakeDispatcherD1({ jobs: [job("size", "facebook", { payload_snapshot_json: JSON.stringify({ message: "👟 PH0014 · Size 36: 21.6–22.5 cm\n🧼 Lau bằng khăn mềm.", hashtags: ["PH0014"], mediaIds: [] }) })], connections: [connection("facebook", "facebook")] });
+  const result = await runPublishDispatcher({ database, now: 2000, publishers: publishers() });
+  assert.equal(result.published, 1);
+});
 
 test("a conditional lease lets concurrent dispatchers publish a job once", async () => {
   const { runPublishDispatcher } = await loadDispatcher();
