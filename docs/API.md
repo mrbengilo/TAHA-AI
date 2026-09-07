@@ -39,6 +39,8 @@ Google Drive và Google Sheets dùng chung connection provider `google`, nhưng 
 - `GET /api/integrations/shopee/callback`
 - `GET /api/integrations/tiktok-shop/callback`
 
+`POST /api/integrations/facebook/verify` yêu cầu operator và body `{ "connectionId": "facebook-connection-id" }`. Endpoint đọc quyền thực tế từ Meta, cập nhật trạng thái đúng connection và trả `ready`, mã lỗi an toàn cùng quyền còn thiếu. Không tạo bài hoặc thử lại publish job; token vẫn ở máy chủ. OAuth, chuẩn bị công việc mới và gửi bài cũng kiểm tra quyền Facebook thực tế.
+
 ## Dữ liệu nguồn
 
 - `POST /api/integrations/google/sync`

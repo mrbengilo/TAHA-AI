@@ -47,6 +47,7 @@ function modeLabel(mode: Provider["publishMode"]) {
 
 function statusLabel(provider: Provider) {
   if (provider.connections.some((connection) => connection.status === "connected")) return "Đã kết nối";
+  if (provider.connections.some((connection) => ["error", "expired", "revoked"].includes(connection.status))) return "Cần kết nối lại";
   if (!provider.configured) return "Chờ cấu hình";
   return "Sẵn sàng kết nối";
 }
@@ -167,6 +168,24 @@ export function ConnectionCenter() {
     }
   }
 
+  async function verifyFacebook(connection: Connection) {
+    setBusy(`facebook-verify:${connection.id}`);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/integrations/facebook/verify", {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ connectionId: connection.id }),
+      });
+      const payload = await response.json() as { data?: { ready: boolean; message?: string }; error?: ApiPayload["error"] };
+      if (!response.ok || !payload.data) throw new Error(payload.error?.message || "Chưa kiểm tra được quyền Facebook.");
+      setNotice({ tone: payload.data.ready ? "success" : "error", text: payload.data.message || (payload.data.ready ? "Page đã có đủ quyền đăng bài tự động." : "Facebook chưa cấp đủ quyền. Hãy kiểm tra cấu hình Meta và kết nối lại Page.") });
+      await refresh();
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Chưa kiểm tra được quyền Facebook." });
+    } finally { setBusy(null); }
+  }
+
   return (
     <main className="connections-page">
       <aside className="connections-aside">
@@ -213,7 +232,7 @@ export function ConnectionCenter() {
                     <div className="provider-card-top"><span className="provider-mark" style={{ backgroundColor: provider.accent }}>{provider.mark}</span><span className={`provider-status ${connected ? "connected" : provider.configured ? "config-ready" : "pending"}`}><i />{statusLabel(provider)}</span></div>
                     <h3>{provider.name}</h3><p>{provider.description}</p>
                     <div className="capability-list">{provider.capabilities.map((item) => <span key={item}>✓ {item}</span>)}</div>
-                    {provider.connections.length > 0 && <div className="connected-accounts">{provider.connections.map((connection) => <div key={connection.id}><span>{connection.displayName}</span><small>{connection.externalAccountId || modeLabel(provider.publishMode)}</small></div>)}</div>}
+                    {provider.connections.length > 0 && <div className="connected-accounts">{provider.connections.map((connection) => <div key={connection.id}><span>{connection.displayName}</span><small>{connection.externalAccountId || modeLabel(provider.publishMode)}</small>{connection.lastError && <p className="connection-account-error" role="status">{connection.lastError}</p>}{provider.id === "facebook" && <button className="ui-button" type="button" disabled={!!busy} aria-busy={busy === `facebook-verify:${connection.id}`} onClick={() => void verifyFacebook(connection)}>{busy === `facebook-verify:${connection.id}` ? "Đang kiểm tra quyền…" : "Kiểm tra quyền đăng bài"}</button>}</div>)}</div>}
                     {!provider.configured && provider.missing.length > 0 && <details><summary>Còn thiếu {provider.missing.length} cấu hình</summary><ul>{provider.missing.map((item) => <li key={item}>{publicVariableName(item)}</li>)}</ul></details>}
                     {workspaces.length > 0 ? <div className="channel-shortcuts">{workspaces.map((workspace) => <Link href={workspace.href} key={workspace.href}>{workspace.label} <span>→</span></Link>)}</div> : null}
                     <div className="provider-card-footer">
@@ -221,7 +240,7 @@ export function ConnectionCenter() {
                       <div className="provider-actions">
                         {provider.setupUrl ? <a href={provider.setupUrl} target="_blank" rel="noreferrer">{provider.setupLabel || "Mở trang cấu hình"} ↗</a> : null}
                         {provider.id === "google" && connected ? <button className="secondary" type="button" disabled={busy === "google-sync"} onClick={() => void syncGoogle()}>{busy === "google-sync" ? "Đang đồng bộ…" : "Đồng bộ ngay"}</button> : null}
-                        <button type="button" disabled={busy === provider.id} onClick={() => void connect(provider)}>{busy === provider.id ? "Đang mở…" : connected ? "Kết nối lại" : isAssisted ? "Bật trợ lý" : "Kết nối"}</button>
+                        <button type="button" disabled={!!busy} onClick={() => void connect(provider)}>{busy === provider.id ? "Đang mở…" : provider.connections.length > 0 ? "Kết nối lại" : isAssisted ? "Bật trợ lý" : "Kết nối"}</button>
                       </div>
                     </div>
                   </article>

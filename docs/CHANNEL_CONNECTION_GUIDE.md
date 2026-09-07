@@ -14,7 +14,7 @@ Tài liệu này áp dụng cho bản TAHA AI đang triển khai tại:
 1. Google Drive: chuẩn bị thư mục ảnh đúng cấu trúc SKU.
 2. Google Sheets: chuẩn bị bảng sản phẩm và xác nhận quyền truy cập.
 3. Google OAuth: cấp quyền chung cho Drive và Sheets, sau đó chạy đồng bộ thử.
-4. OpenAI: lưu API key root-only trên VPS và chạy thử một ảnh.
+4. OpenAI: lưu API key root-only trên VPS và chạy thử bài viết cho một SKU bằng ảnh Drive có sẵn.
 5. Website: cài endpoint nhận bài tại `tahashoes.vn`.
 6. Facebook Page: tạo Meta App, cấp quyền Page và đăng một bài thử.
 7. Zalo cá nhân: bật trợ lý đăng thủ công có xác nhận.
@@ -28,7 +28,7 @@ Google Drive và Google Sheets xuất hiện thành hai khu vực dữ liệu ri
 
 1. Đăng nhập [Google Drive](https://drive.google.com/) bằng tài khoản sẽ kết nối với TAHA AI.
 2. Tạo một thư mục gốc, ví dụ `TAHA-AI-SAN-PHAM`.
-3. Bên trong thư mục gốc, tạo **một thư mục cho mỗi SKU**. Tên thư mục phải trùng chính xác với SKU trong Google Sheets, không phân biệt chữ hoa/thường.
+3. Bên trong thư mục gốc, tạo **một thư mục cho mỗi SKU** theo tên `SKU <mã SKU>`, ví dụ mã `SP-001` trong Google Sheets dùng thư mục `SKU SP-001`.
 4. Đưa ảnh của sản phẩm vào thư mục SKU tương ứng.
 5. Mở thư mục gốc và sao chép ID nằm sau `/folders/` trong URL.
 
@@ -36,17 +36,17 @@ Cấu trúc mẫu:
 
 ```text
 TAHA-AI-SAN-PHAM/                 ← GOOGLE_DRIVE_FOLDER_ID
-├── SP-001/
+├── SKU SP-001/
 │   ├── anh-chinh.jpg
 │   └── anh-phu-01.jpg
-├── SP-002/
+├── SKU SP-002/
 │   ├── anh-chinh.jpg
 │   └── anh-phu-01.png
-└── SP-003/
+└── SKU SP-003/
     └── anh-chinh.webp
 ```
 
-TAHA AI gắn tối đa 20 ảnh nguồn cho mỗi sản phẩm. Thư mục con có tên SKU được ưu tiên. Nếu ảnh đặt thẳng ở thư mục gốc, tên file phải chứa SKU với ranh giới rõ ràng, ví dụ `SP-001-anh-chinh.jpg`; file không khớp duy nhất một SKU sẽ được bỏ qua.
+TAHA AI gắn tối đa 20 ảnh nguồn cho mỗi sản phẩm và dùng tối đa 10 ảnh cho một bài Facebook. Ảnh phải nằm trong đúng thư mục `SKU <mã SKU>`; ảnh ở thư mục gốc hoặc thư mục chỉ có mã không được tự ghép bằng tên file. Thư mục trùng mã hoặc ảnh không còn thuộc đúng thư mục sẽ bị chặn.
 
 ### 2.2. Giá trị cần nhập trên máy chủ
 
@@ -213,7 +213,7 @@ Nếu chỉ kết nối Page của chính chủ hệ thống trong giai đoạn 
 3. Xác nhận tài khoản đang đăng nhập có Facebook access hoặc task access cho **Content**.
 4. Nếu Page thuộc Business Portfolio khác, người có full control của Page phải cấp quyền trước.
 
-TAHA AI chỉ lưu những Page mà phản hồi Meta cho thấy tài khoản có task tạo nội dung. Một Page chỉ có quyền xem/insights sẽ không được lưu làm kênh đăng.
+TAHA AI kiểm tra cả task tạo nội dung và token thực tế của Page. Token phải còn hiệu lực, thuộc đúng app/Page và có đủ `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`. Page thiếu quyền được hiển thị cần kết nối lại và không sẵn sàng đăng. Dùng **Kiểm tra quyền đăng bài** để đối soát token đã lưu.
 
 ### 5.5. Giá trị cần nhập trên máy chủ
 
@@ -231,7 +231,9 @@ META_REDIRECT_URI=https://tahashoes.store/api/integrations/facebook/callback
 2. Đăng nhập Facebook cá nhân có quyền nội dung trên Page.
 3. Chọn/cho phép Page cần quản lý và chấp thuận ba quyền ở trên.
 4. Trở lại TAHA AI, xác nhận đúng tên Page.
-5. Duyệt và đăng một bài thử chỉ có chữ; sau đó thử một bài có ảnh.
+5. Chọn một SKU có ảnh Drive khớp và xác nhận để hệ thống tự viết bài, chọn hashtag, lên lịch rồi đăng. Admin có thể sửa hoặc chặn trước lúc gửi.
+
+Nếu thiếu quyền, bổ sung hai quyền đọc nội dung và đăng bài trong configuration Meta đang dùng, rồi bấm **Kết nối lại** và cấp quyền mới. Việc sửa cấu hình không tự bổ sung quyền vào token cũ.
 
 Tài liệu chính thức: [Meta App Dashboard](https://developers.facebook.com/apps/), [permission reference](https://developers.facebook.com/docs/permissions), [Meta Facebook API collection — Page access token](https://www.postman.com/meta/facebook/request/bqfxwbp/get-access-tokens-of-pages-you-manage), [quyền truy cập Page](https://www.facebook.com/help/289207354498410), [xem quyền Page](https://www.facebook.com/help/510247025775149).
 
@@ -410,7 +412,7 @@ Không dùng một thư mục chung để coi là “đã đăng ở mọi nơi�
 
 | Khu vực | Dữ liệu nguồn | Dữ liệu đầu ra cần lưu riêng |
 |---|---|---|
-| Google Drive | file ảnh và thư mục SKU | media ID, checksum, ảnh generated đã upload, Drive file ID và thời điểm đồng bộ |
+| Google Drive | ảnh gốc trong thư mục `SKU <mã SKU>` | media ID, Drive file ID, liên kết đúng sản phẩm và thời điểm đồng bộ |
 | Google Sheets | SKU, mô tả, giá, tồn kho | product/variant và hàng nguồn |
 | Facebook | Page connection | caption Facebook, media, Page Post ID/URL |
 | Zalo cá nhân | trợ lý thủ công | caption Zalo, bộ ảnh, trạng thái chờ/xác nhận |

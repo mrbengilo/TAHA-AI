@@ -1,6 +1,7 @@
 import { generateProductContent } from "./ai/openai";
 import { syncGoogleCatalog } from "./integrations/google-sync";
 import { getRuntimeEnv } from "./integrations/env";
+import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { ensureWorkspace, TAHA_WORKSPACE_ID } from "./integrations/store";
 import { assertProductMedia, productFingerprint, productSourceConnection, productSources } from "./product-integrity";
 
@@ -232,6 +233,11 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
   }
 
   if (await activeAutomationRun(db, productId)) throw automationAlreadyRunning();
+
+  if (targetConnections.facebook) {
+    const permissions = await verifyFacebookConnection(targetConnections.facebook);
+    if (!permissions.ready) throw new AutomationError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", permissions.message || "Facebook chưa có đủ quyền đăng bài. Hãy kiểm tra kết nối Page.", 409);
+  }
 
   const now = Date.now();
   const runId = crypto.randomUUID();

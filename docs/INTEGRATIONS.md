@@ -21,7 +21,7 @@ Scope production hiện tại phải khớp `.env.example` và code OAuth:
 openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets.readonly
 ```
 
-`drive` được dùng để vừa đọc ảnh nguồn vừa tải ảnh generated về thư mục SKU hiện có; `spreadsheets.readonly` chỉ đọc bảng Products. `openid`, `email` và `profile` chỉ đặt nhãn đúng tài khoản cho connection. Nếu endpoint profile tạm lỗi, token Drive vẫn được lưu và kết nối nguồn vẫn có thể hoàn tất.
+Luồng tự động chỉ cần đọc ảnh nguồn Drive và đọc bảng Products bằng `spreadsheets.readonly`. Quyền `drive` hiện hữu cũng hỗ trợ API xuất media cũ khi được sử dụng riêng. `openid`, `email` và `profile` chỉ đặt nhãn đúng tài khoản cho connection. Nếu endpoint profile tạm lỗi, token Drive vẫn được lưu và kết nối nguồn vẫn có thể hoàn tất.
 
 Đây là thay đổi từ cấu hình `drive.readonly`. Token cũ không tự nhận thêm quyền: sau khi sửa consent screen và biến `GOOGLE_OAUTH_SCOPES`, phải ngắt/kết nối lại Google và chấp thuận màn hình consent mới. Nếu không, upload trả `GOOGLE_WRITE_SCOPE_REQUIRED` hoặc connection chuyển sang yêu cầu re-auth. Scope `drive` là restricted; ứng dụng External có thể phải hoàn tất Google verification. Không giảm xuống `drive.file` khi chưa bổ sung Google Picker và kiểm tra quyền với thư mục nguồn hiện hữu.
 
@@ -57,7 +57,11 @@ Callback:
 
 Thêm callback chính xác vào **Facebook Login for Business → Settings → Valid OAuth Redirect URIs**. Cấu hình máy chủ cần `META_APP_ID`, `META_APP_SECRET`, `META_LOGIN_CONFIG_ID`, `META_GRAPH_API_VERSION` và `META_REDIRECT_URI`.
 
-Người cấp quyền phải có quyền tạo nội dung trên Page. Khi OAuth hoàn tất, TAHA AI lưu từng Page như một connection riêng. Endpoint `POST /api/publish/facebook` nhận nội dung, media ID và idempotency key; ảnh Drive được tải bằng quyền Google rồi upload nhị phân lên Meta.
+Người cấp quyền phải có quyền tạo nội dung trên Page. Khi OAuth hoàn tất, TAHA AI kiểm tra token thực tế qua `debug_token`: đúng app, đúng Page, còn hiệu lực, đủ ba quyền và đúng Page trong các quyền chi tiết. Chỉ kết nối đủ quyền mới được đánh dấu sẵn sàng đăng. Nút **Kiểm tra quyền đăng bài** kiểm tra lại token hiện hữu qua `POST /api/integrations/facebook/verify`; token thiếu quyền được giữ để chẩn đoán nhưng connection chuyển sang lỗi, không dùng để đăng.
+
+Nếu token chỉ có `pages_show_list`, vào **Facebook Login for Business → Configurations**, thêm `pages_read_engagement` và `pages_manage_posts` cho configuration đang dùng, rồi chủ Page bấm **Kết nối lại** và cấp quyền. Token đã cấp không tự nhận các quyền mới. Không thêm `scope` vào URL để thay cho cấu hình Business Login.
+
+Endpoint `POST /api/publish/facebook` nhận `draftId`, `connectionId` và idempotency key; server lấy nội dung và ảnh đã duyệt của đúng SKU. Ảnh Drive được tải bằng quyền Google rồi upload nhị phân lên Meta.
 
 ## Zalo cá nhân
 

@@ -361,6 +361,8 @@ nav { display: grid; gap: 6px; }
 .connected-accounts div { background: #eff6f0; border-radius: 9px; padding: 7px 9px; display: grid; gap: 3px; }
 .connected-accounts span { font-size: 8px; font-weight: 700; }
 .connected-accounts small { color: #74857c; font-size: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connected-accounts .connection-account-error { color: #a23434; font-size: 13px; line-height: 1.5; margin: 4px 0; overflow-wrap: anywhere; }
+.connected-accounts .ui-button { justify-self: start; max-width: 100%; white-space: normal; font-size: 13px; }
 .provider-card details { margin: 0 0 10px; color: #8b6b36; font-size: 8px; }
 .provider-card summary { cursor: pointer; }
 .provider-card ul { margin: 6px 0 0; padding-left: 15px; line-height: 1.6; }
