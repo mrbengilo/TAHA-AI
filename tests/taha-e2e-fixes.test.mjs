@@ -20,7 +20,7 @@ test("channel UI renders real image previews", () => {
   assert.match(mediaRoute, /searchParams\.get\("inline"\)/);
 });
 
-test("daily automation requests four lifestyle images and limits background image work", () => {
+test("daily automation requests up to four lifestyle images and limits every post to six", () => {
   const daily = read("lib/daily-automation.ts");
   const cron = read("app/api/internal/cron/tick/route.ts");
   const publishing = read("lib/publishing.ts");
@@ -29,6 +29,8 @@ test("daily automation requests four lifestyle images and limits background imag
   assert.match(cron, /runAutomationWorker\(\{ limit: 1 \}\)/);
   assert.match(publishing, /slice\(0, 8\)/);
   const automation = read("lib/automation.ts");
+  assert.match(automation, /plannedGeneratedImageCount/);
+  assert.match(automation, /MAX_POST_IMAGES/);
   assert.match(automation, /publicationDayFromRequestKey/);
   assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
 });
