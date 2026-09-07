@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 9: verify six-image-cap pause.
+# Probe generation 12: verify deployed six-image runtime.
 import base64
 import json
 from pathlib import Path
