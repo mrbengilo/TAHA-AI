@@ -323,28 +323,34 @@ function canonicalSourceExternalId(sheetId: string, skuKey: string) {
 
 export async function syncGoogleCatalog(connectionId?: string) {
   const connection = await getConnectedIntegration<{ accessToken?: unknown; refreshToken?: unknown }>("google", connectionId);
+  const runtime = getRuntimeEnv();
+  const folderId = String(connection.config.folderId || runtime.GOOGLE_DRIVE_FOLDER_ID || "");
+  const sheetId = String(connection.config.sheetId || runtime.GOOGLE_SHEET_ID || "");
+  const range = String(connection.config.sheetRange || runtime.GOOGLE_SHEET_RANGE || "Products!A:Z");
+  if (!folderId || !sheetId) throw new GoogleDriveError("GOOGLE_SOURCE_NOT_CONFIGURED", "Chưa chọn thư mục Drive hoặc Google Sheet nguồn.", 409);
+  const configPredicate = `COALESCE(NULLIF(json_extract(config_json, '$.folderId'), ''), ?) = ?
+    AND COALESCE(NULLIF(json_extract(config_json, '$.sheetId'), ''), ?) = ?
+    AND COALESCE(NULLIF(json_extract(config_json, '$.sheetRange'), ''), ?) = ?`;
+  const configBindings = [runtime.GOOGLE_DRIVE_FOLDER_ID || "", folderId, runtime.GOOGLE_SHEET_ID || "", sheetId, runtime.GOOGLE_SHEET_RANGE || "Products!A:Z", range];
   const syncId = crypto.randomUUID();
   const acquiredAt = Date.now();
   const lock = await database().prepare(`UPDATE channel_connections
     SET config_json = json_set(config_json, '$._catalogSyncOwner', ?, '$._catalogSyncExpiresAt', ?)
     WHERE id = ? AND workspace_id = ? AND COALESCE(json_extract(config_json, '$._catalogSyncExpiresAt'), 0) <= ?
-    RETURNING id`).bind(syncId, acquiredAt + 15 * 60_000, connection.id, TAHA_WORKSPACE_ID, acquiredAt).first<{ id: string }>();
+    AND ${configPredicate}
+    RETURNING id`).bind(syncId, acquiredAt + 15 * 60_000, connection.id, TAHA_WORKSPACE_ID, acquiredAt, ...configBindings).first<{ id: string }>();
   if (!lock) throw new GoogleDriveError("GOOGLE_SYNC_IN_PROGRESS", "Nguồn Google đang được đồng bộ; hệ thống sẽ thử lại.", 503);
   async function renewSyncLease() {
     const now = Date.now();
     const owned = await database().prepare(`UPDATE channel_connections
       SET config_json = json_set(config_json, '$._catalogSyncExpiresAt', ?)
       WHERE id = ? AND json_extract(config_json, '$._catalogSyncOwner') = ?
-        AND json_extract(config_json, '$._catalogSyncExpiresAt') > ? RETURNING id`)
-      .bind(now + 15 * 60_000, connection.id, syncId, now).first<{ id: string }>();
+        AND json_extract(config_json, '$._catalogSyncExpiresAt') > ? AND ${configPredicate} RETURNING id`)
+      .bind(now + 15 * 60_000, connection.id, syncId, now, ...configBindings).first<{ id: string }>();
     if (!owned) throw new GoogleDriveError("GOOGLE_SYNC_IN_PROGRESS", "Lần đồng bộ đã hết hạn; hệ thống sẽ thử lại.", 503);
   }
   try {
     const token = await getGoogleAccessToken(connection);
-    const folderId = String(connection.config.folderId || getRuntimeEnv().GOOGLE_DRIVE_FOLDER_ID || "");
-    const sheetId = String(connection.config.sheetId || getRuntimeEnv().GOOGLE_SHEET_ID || "");
-    const range = String(connection.config.sheetRange || getRuntimeEnv().GOOGLE_SHEET_RANGE || "Products!A:Z");
-    if (!folderId || !sheetId) throw new GoogleDriveError("GOOGLE_SOURCE_NOT_CONFIGURED", "Chưa chọn thư mục Drive hoặc Google Sheet nguồn.", 409);
 
     const sheetUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(sheetId)}/values/${encodeURIComponent(range)}`);
     const sheet = await googleSheetJson<{ values?: unknown[][] }>(sheetUrl, token);
@@ -396,17 +402,25 @@ export async function syncGoogleCatalog(connectionId?: string) {
       matchedRootFiles: driveIndex.matchedRootFiles,
       unmatchedRootImages: driveIndex.unmatchedRootImages,
     };
-    await database().batch([
+    const guard = `EXISTS (SELECT 1 FROM channel_connections WHERE id = ? AND workspace_id = ?
+      AND json_extract(config_json, '$._catalogSyncOwner') = ?
+      AND json_extract(config_json, '$._catalogSyncExpiresAt') > ? AND ${configPredicate})`;
+    const guardBindings = [connection.id, TAHA_WORKSPACE_ID, syncId, now, ...configBindings];
+    const committed = await database().batch([
       database().prepare(`UPDATE products SET status = 'paused', updated_at = ?
         WHERE workspace_id = ? AND source_connection_id = ? AND deleted_at IS NULL
           AND json_extract(metadata_json, '$.source') = 'google_sheets'
-          AND COALESCE(json_extract(metadata_json, '$.googleSource.syncId'), '') != ?`)
-        .bind(now, TAHA_WORKSPACE_ID, connection.id, syncId),
-      database().prepare("UPDATE channel_connections SET last_synced_at = ?, last_error = NULL, updated_at = ? WHERE id = ?").bind(now, now, connection.id),
+          AND COALESCE(json_extract(metadata_json, '$.googleSource.syncId'), '') != ? AND ${guard}`)
+        .bind(now, TAHA_WORKSPACE_ID, connection.id, syncId, ...guardBindings),
+      database().prepare(`UPDATE channel_connections SET last_synced_at = ?, last_error = NULL, updated_at = ?,
+        config_json = json_set(config_json, '$._catalogSyncComplete', ?) WHERE id = ? AND ${guard}`)
+        .bind(now, now, syncId, connection.id, ...guardBindings),
       database().prepare(
-        "INSERT INTO audit_logs (id, workspace_id, actor_type, actor_label, action, entity_type, entity_id, metadata_json, created_at) VALUES (?, ?, 'connector', 'Google Drive & Sheets', 'google.catalog_synced', 'channel_connection', ?, ?, ?)",
-      ).bind(crypto.randomUUID(), TAHA_WORKSPACE_ID, connection.id, JSON.stringify(summary), now),
+        `INSERT INTO audit_logs (id, workspace_id, actor_type, actor_label, action, entity_type, entity_id, metadata_json, created_at)
+          SELECT ?, ?, 'connector', 'Google Drive & Sheets', 'google.catalog_synced', 'channel_connection', ?, ?, ? WHERE ${guard}`,
+      ).bind(crypto.randomUUID(), TAHA_WORKSPACE_ID, connection.id, JSON.stringify(summary), now, ...guardBindings),
     ]);
+    if (!committed[1].meta.changes) throw new GoogleDriveError("GOOGLE_SYNC_IN_PROGRESS", "Cấu hình nguồn đã thay đổi trong lúc đồng bộ; hệ thống sẽ thử lại.", 503);
     return { connectionId: connection.id, ...summary, syncedAt: now };
   } catch (error) {
     const code = error instanceof GoogleDriveError ? error.code : error instanceof Error ? error.message : "";

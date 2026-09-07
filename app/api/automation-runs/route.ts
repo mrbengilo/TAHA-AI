@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     const code = error instanceof Error ? error.message : "";
     const productErrors: Record<string, string> = {
       PRODUCT_NOT_ACTIVE: "Sản phẩm không ở trạng thái đang bán.",
+      PRODUCT_SOURCE_CHANGED: "Nguồn Google đã thay đổi. Đồng bộ lại để đối chiếu đúng SKU và ảnh.",
       PRODUCT_SKU_FOLDER_MISMATCH: "SKU trong Sheet chưa khớp thư mục Drive. Hãy đồng bộ lại nguồn.",
       SKU_SOURCE_IMAGES_REQUIRED: "Cần ít nhất một ảnh gốc Drive trong đúng thư mục SKU.",
       PRODUCT_MEDIA_MISMATCH: "Ảnh đã chọn không thuộc đúng sản phẩm.",

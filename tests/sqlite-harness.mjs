@@ -59,8 +59,9 @@ export function harness() {
   sqlite.prepare("INSERT INTO workspaces (id,name,slug,created_at,updated_at) VALUES (?,?,?,?,?)").run(WORKSPACE, "TAHA", "taha", now, now);
   for (const [id, provider] of [["google-1", "google"], ["facebook-1", "facebook"]]) sqlite.prepare(`INSERT INTO channel_connections
     (id,workspace_id,provider,role,display_name,status,publish_mode,created_at,updated_at) VALUES (?,?,?,?,?,'connected','api',?,?)`).run(id, WORKSPACE, provider, "both", provider, now, now);
+  sqlite.prepare("UPDATE channel_connections SET config_json = ? WHERE provider = 'google'").run(JSON.stringify({ sheetId: "sheet-1", folderId: "root" }));
   function seedProduct(id = "product-1", sku = "PH0001") {
-    const source = { connectionId: "google-1", sheetId: "sheet-1", sheetRange: "Products!A:Z", indexedAt: 0, skuKey: sku, sku, driveFolderId: `folder-${sku}`, driveFolderName: `SKU ${sku}`, driveFolderMatch: "sku_folder" };
+    const source = { connectionId: "google-1", sheetId: "sheet-1", sheetRange: "Products!A:Z", driveRootFolderId: "root", indexedAt: 0, skuKey: sku, sku, driveFolderId: `folder-${sku}`, driveFolderName: `SKU ${sku}`, driveFolderMatch: "sku_folder" };
     sqlite.prepare(`INSERT INTO products (id,workspace_id,source_connection_id,base_sku,name,slug,description,status,metadata_json,created_at,updated_at)
       VALUES (?,?,'google-1',?,?,?,?,'active',?,?,?)`).run(id, WORKSPACE, sku, `Giày ${sku}`, sku, `Mô tả gốc ${sku}`, JSON.stringify({ source: "google_sheets", googleSource: source }), now, now);
     sqlite.prepare(`INSERT INTO product_variants (id,workspace_id,product_id,sku,title,price_minor,inventory_quantity,status,created_at,updated_at)

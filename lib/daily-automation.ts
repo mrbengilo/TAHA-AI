@@ -85,7 +85,7 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
   let product: { id: string; base_sku: string } | null = null;
   for (const candidate of candidates.results ?? []) {
     try { await productSources(candidate.id); product = candidate; break; }
-    catch (error) { if (!(error instanceof Error) || !["PRODUCT_SKU_FOLDER_MISMATCH", "SKU_SOURCE_IMAGES_REQUIRED", "PRODUCT_NOT_ACTIVE"].includes(error.message)) throw error; }
+    catch (error) { if (!(error instanceof Error) || !["PRODUCT_SOURCE_CHANGED", "PRODUCT_SKU_FOLDER_MISMATCH", "SKU_SOURCE_IMAGES_REQUIRED", "PRODUCT_NOT_ACTIVE"].includes(error.message)) throw error; }
   }
   if (!product) return { queued: false, day, reason: "no_ready_product" };
 

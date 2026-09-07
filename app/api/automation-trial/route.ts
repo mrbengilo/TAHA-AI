@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     for (const product of candidates.results) {
       try { await productSources(product.id); }
       catch (error) {
-        if (error instanceof Error && ["PRODUCT_NOT_ACTIVE", "PRODUCT_SKU_FOLDER_MISMATCH", "SKU_SOURCE_IMAGES_REQUIRED"].includes(error.message)) continue;
+        if (error instanceof Error && ["PRODUCT_SOURCE_CHANGED", "PRODUCT_NOT_ACTIVE", "PRODUCT_SKU_FOLDER_MISMATCH", "SKU_SOURCE_IMAGES_REQUIRED"].includes(error.message)) continue;
         throw error;
       }
       return ok(await queueAutomationRun({ productId: product.id, targetProviders: ["facebook"], imageCount: 0, idempotencyKey: TRIAL_KEY }, "authorized-facebook-trial"), { status: 202 });

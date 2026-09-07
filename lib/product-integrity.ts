@@ -45,6 +45,14 @@ export async function productSources(productId: string, override?: ProductDataba
     GROUP BY p.id LIMIT 1`).bind(productId, TAHA_WORKSPACE_ID).first<SourceProduct>();
   if (!product) throw new Error("PRODUCT_NOT_ACTIVE");
   const source = record(objectJson(product.metadata_json).googleSource);
+  const connection = await db.prepare("SELECT config_json FROM channel_connections WHERE id = ? AND workspace_id = ? AND provider = 'google'")
+    .bind(product.source_connection_id, TAHA_WORKSPACE_ID).first<{ config_json: string }>();
+  const config = objectJson(connection?.config_json ?? null);
+  const runtime = getRuntimeEnv();
+  if (!connection || source.sheetId !== (config.sheetId || runtime.GOOGLE_SHEET_ID || "")
+    || source.sheetRange !== (config.sheetRange || runtime.GOOGLE_SHEET_RANGE || "Products!A:Z")
+    || source.driveRootFolderId !== (config.folderId || runtime.GOOGLE_DRIVE_FOLDER_ID || "")
+    || (config._catalogSyncComplete && source.syncId !== config._catalogSyncComplete)) throw new Error("PRODUCT_SOURCE_CHANGED");
   const sku = normalizeSkuKey(product.base_sku);
   if (!sku || source.skuKey !== sku || source.connectionId !== product.source_connection_id
       || source.driveFolderMatch !== "sku_folder" || !source.driveFolderId

@@ -260,3 +260,28 @@ test("idempotency cannot replay a confirmation for a different Facebook page", a
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   assert.equal(results.find((r) => r.status === "rejected").reason.code, "IDEMPOTENCY_KEY_REUSED");
 });
+
+test("a concurrent source configuration change aborts sync and cannot pause or publish the new catalog", async () => {
+  for (const boundary of ["acquire", "commit"]) {
+    const h = harness(); h.seedProduct(); h.seedProduct("product-2", "PH0002");
+    h.overrides.delete(path.join(ROOT, "lib/integrations/google-sync.ts"));
+    h.overrides.set(path.join(ROOT, "lib/integrations/connection-secrets.ts"), {
+      getConnectedIntegration: async () => ({ id: "google-1", config: { sheetId: "sheet-1", folderId: "root" } }), getGoogleAccessToken: async () => "test-token",
+    });
+    const change = () => h.sqlite.prepare("UPDATE channel_connections SET config_json = json_set(config_json, '$.sheetId', 'new-sheet') WHERE id = 'google-1'").run();
+    if (boundary === "acquire") h.hooks.beforeFirst = (sql) => {
+      if (sql.includes("COALESCE(json_extract(config_json, '$._catalogSyncExpiresAt')")) { h.hooks.beforeFirst = null; change(); }
+    };
+    else h.hooks.beforeBatch = change;
+    h.runtime.TEST_FETCH = async (input) => {
+      const url = new URL(input);
+      if (url.hostname === "sheets.googleapis.com") return Response.json({ values: [["SKU", "Tên sản phẩm"], ["PH0001", "Giày"]] });
+      if (url.searchParams.get("q").includes("'root'")) return Response.json({ files: [{ id: "folder-PH0001", name: "SKU PH0001", mimeType: "application/vnd.google-apps.folder" }] });
+      return Response.json({ files: [{ id: "file-product-1", name: "01.jpg", mimeType: "image/jpeg", parents: ["folder-PH0001"] }] });
+    };
+    await assert.rejects(h.load("lib/integrations/google-sync.ts").syncGoogleCatalog("google-1"), /GOOGLE_SYNC_IN_PROGRESS/);
+    assert.equal(h.sqlite.prepare("SELECT status FROM products WHERE id = 'product-2'").get().status, "active");
+    assert.equal(h.sqlite.prepare("SELECT last_synced_at FROM channel_connections WHERE id = 'google-1'").get().last_synced_at, null);
+    await assert.rejects(h.load("lib/product-integrity.ts").productSources("product-1"), /PRODUCT_SOURCE_CHANGED/);
+  }
+});
