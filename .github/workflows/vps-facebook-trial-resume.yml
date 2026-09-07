@@ -1,0 +1,56 @@
+name: TAHA authorized PH0014 Facebook trial resume
+
+on:
+  push:
+    branches: [codex/facebook-trial-resume]
+  workflow_dispatch:
+    inputs:
+      requeue:
+        description: Requeue the one authorized failed PH0014 trial after all preflight checks
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-facebook-trial-f2ced019-aa03-4600-973f-b0fee21c33bc
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+
+  resume:
+    needs: quality
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[resume-ph0014]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+      REQUEUE: ${{ github.event_name == 'push' || inputs.requeue }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Preflight and optionally requeue the exact saved trial
+        run: |
+          set -euo pipefail
+          remote=(ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST")
+          if [ "$REQUEUE" = "true" ]; then
+            "${remote[@]}" 'docker exec -i taha-ai node --input-type=module - --run --requeue' < deploy/vps/facebook-trial-resume.mjs
+          else
+            "${remote[@]}" 'docker exec -i taha-ai node --input-type=module - --run' < deploy/vps/facebook-trial-resume.mjs
+          fi
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
