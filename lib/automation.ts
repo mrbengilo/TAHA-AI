@@ -998,11 +998,19 @@ export async function runAutomationWorker(options: {
   now?: number;
   limit?: number;
   workerId?: string;
+  runIds?: string[];
 } = {}): Promise<AutomationWorkerResult> {
   const db = database(options.database);
   const now = Math.floor(options.now ?? Date.now());
   const limit = Math.max(1, Math.min(8, Math.floor(options.limit ?? 4)));
   const workerId = options.workerId ?? crypto.randomUUID();
+  const runIds = options.runIds;
+  if (runIds !== undefined && (!Array.isArray(runIds) || runIds.length < 1 || runIds.length > 50
+    || new Set(runIds).size !== runIds.length
+    || runIds.some((id) => typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)))) {
+    throw new Error("AUTOMATION_RUN_FILTER_INVALID");
+  }
+  const runFilter = runIds ? ` AND r.id IN (${runIds.map(() => "?").join(",")})` : "";
   await db.prepare(
     `UPDATE automation_steps SET status = 'retry_wait', available_at = ?, lease_owner = NULL,
      lease_expires_at = NULL, error_code = 'LEASE_EXPIRED_RETRY', updated_at = ?
@@ -1014,6 +1022,7 @@ export async function runAutomationWorker(options: {
      FROM automation_steps s JOIN automation_runs r ON r.id = s.run_id AND r.workspace_id = s.workspace_id
      WHERE s.workspace_id = ? AND s.status IN ('queued', 'retry_wait') AND s.available_at <= ?
        AND r.status IN ('queued', 'processing') AND s.step_type IN ('content', 'optimize', 'image', 'finalize')
+       ${runFilter}
        AND (s.step_type = 'content'
          OR (s.step_type = 'optimize' AND NOT EXISTS (
            SELECT 1 FROM automation_steps prior WHERE prior.run_id=s.run_id AND prior.workspace_id=s.workspace_id
@@ -1030,7 +1039,7 @@ export async function runAutomationWorker(options: {
      ORDER BY r.created_at,
               CASE s.step_type WHEN 'content' THEN 0 WHEN 'optimize' THEN 1 WHEN 'image' THEN 2 ELSE 3 END,
               s.available_at, s.ordinal, s.id LIMIT 20`,
-  ).bind(TAHA_WORKSPACE_ID, now).all<StepRow>();
+  ).bind(TAHA_WORKSPACE_ID, now, ...(runIds ?? [])).all<StepRow>();
   const summary: AutomationWorkerResult = {
     checked: 0,
     leased: 0,

@@ -289,3 +289,25 @@ test("an older ready SKU finalizes before a newer SKU's queued image work", asyn
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE run_id=? AND step_type='image' AND status='queued'")
     .get(later.run.id).n, 4);
 });
+
+test("a run filter never leases an earlier unrelated publish-capable run", async () => {
+  const h = harness();
+  h.overrides.set(path.join(ROOT, "lib/integrations/facebook-permissions.ts"), { verifyFacebookConnection: async () => ({ ready: true }) });
+  h.seedProduct("product-unrelated", "PH0001");
+  const automation = h.load("lib/automation.ts");
+  const unrelated = await automation.queueAutomationRun({ productId: "product-unrelated", targetProviders: ["facebook"],
+    idempotencyKey: "publish-unrelated", imageCount: 0 });
+  h.seedProduct("product-catalog", "PH0014");
+  const catalog = await automation.queueAutomationRun({ productId: "product-catalog", targetProviders: ["facebook"],
+    idempotencyKey: "prepare-catalog-filtered", prepareOnly: true, imageCount: 0 });
+  h.sqlite.prepare("UPDATE automation_runs SET created_at=1 WHERE id=?").run(unrelated.run.id);
+  h.sqlite.prepare("UPDATE automation_runs SET created_at=2 WHERE id=?").run(catalog.run.id);
+
+  const result = await automation.runAutomationWorker({ limit: 1, runIds: [catalog.run.id] });
+  assert.equal(result.completed, 1, JSON.stringify(result));
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE run_id=? AND step_type='content'")
+    .get(catalog.run.id).status, "completed");
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE run_id=? AND step_type='content'")
+    .get(unrelated.run.id).status, "queued");
+  await assert.rejects(automation.runAutomationWorker({ runIds: ["not-a-run-id"] }), /AUTOMATION_RUN_FILTER_INVALID/);
+});
