@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { isViewerRequest } from "../lib/operator-auth";
 import "./globals.css";
+import "./font.css";
 import "./ui/app-shell.css";
 import "./ui/domain.css";
 
