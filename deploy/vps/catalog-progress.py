@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 21: verify user-requested image pause.
+# Probe generation 22: verify recovery lock released after pause.
 import base64
 import json
 from pathlib import Path
