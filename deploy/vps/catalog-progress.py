@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 20: inspect first SKU retry.
+# Probe generation 21: verify user-requested image pause.
 import base64
 import json
 from pathlib import Path
