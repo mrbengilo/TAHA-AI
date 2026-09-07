@@ -52,7 +52,7 @@ export async function productSources(productId: string, override?: ProductDataba
   if (!connection || source.sheetId !== (config.sheetId || runtime.GOOGLE_SHEET_ID || "")
     || source.sheetRange !== (config.sheetRange || runtime.GOOGLE_SHEET_RANGE || "Products!A:Z")
     || source.driveRootFolderId !== (config.folderId || runtime.GOOGLE_DRIVE_FOLDER_ID || "")
-    || (config._catalogSyncComplete && source.syncId !== config._catalogSyncComplete)) throw new Error("PRODUCT_SOURCE_CHANGED");
+    || ((source.syncId || config._catalogSyncComplete) && (typeof source.syncId !== "string" || !source.syncId || source.syncId !== config._catalogSyncComplete))) throw new Error("PRODUCT_SOURCE_CHANGED");
   const sku = normalizeSkuKey(product.base_sku);
   if (!sku || source.skuKey !== sku || source.connectionId !== product.source_connection_id
       || source.driveFolderMatch !== "sku_folder" || !source.driveFolderId

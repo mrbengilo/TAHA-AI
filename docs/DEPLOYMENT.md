@@ -131,6 +131,8 @@ Theo dõi các mã lỗi an toàn và run/step ID; không log request header, to
 
 Workflow `TAHA validated VPS release` chạy lint, typecheck, build và test trước khi triển khai đúng SHA trên main. `deploy/vps/release.sh` dùng legacy Docker builder tương thích VPS, thử migration trên bản sao SQLite nhất quán và kiểm tra trang/API có xác thực. Khi chuyển bản, dừng timer, chờ cron đang chạy hoàn tất, dừng container cũ rồi sao lưu `/var/lib/taha-ai` dưới `/var/backups/taha-ai`. Container cũ được giữ để rollback; không prune image hoặc xóa dữ liệu dùng chung.
 
+CI build image có nhãn SHA và chuyển image cùng Git bundle qua SSH. VPS kiểm tra bundle và nhãn image trước cutover, không cần kết nối ra GitHub/npm/Docker Hub trong lúc phát hành. Khi chạy release script riêng mà chưa có image, legacy builder vẫn là fallback. Cron oneshot ở trạng thái `activating` cũng được chờ hoàn tất.
+
 Migration `0004` chỉ hủy run tạo ảnh cũ và tạm dừng lịch/jobs dùng ảnh generated; giữ nguyên sản phẩm, ảnh và lịch sử. Nếu health check thất bại sau cutover, khôi phục container cũ, giữ các hủy bỏ và để cron dừng để không chạy lại luồng ảnh cũ.
 
 Bài Facebook thử chỉ chạy khi commit merge chứa `[facebook-trial]` hoặc workflow dispatch bật tùy chọn tương ứng. Script `facebook-trial.py` gửi một yêu cầu idempotent rồi chỉ theo dõi; cron thực tế tự viết và đăng. Script chỉ thành công khi có đúng một job published kèm Post ID. Không bật thử cho các đợt phát hành khác nếu không có yêu cầu. Lập kế hoạch tự chọn SKU hằng ngày chỉ chạy cho connection đã bật `dailyAutomationEnabled` rõ ràng.

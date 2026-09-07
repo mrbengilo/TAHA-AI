@@ -22,6 +22,7 @@ jobs:
     uses: ./.github/workflows/quality.yml
   deploy:
     needs: quality
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
@@ -31,6 +32,16 @@ jobs:
       VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build exact production image and source bundle on CI
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker build -f deploy/vps/Dockerfile --label "org.opencontainers.image.revision=$TARGET_SHA" \
+            -t "tahashoes-taha-ai:$TARGET_SHA" .
+          git bundle create /tmp/taha-source.bundle HEAD
       - name: Configure deployment SSH
         run: |
           set -euo pipefail
@@ -38,6 +49,16 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
+      - name: Transfer verified release without requiring VPS GitHub access
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cat /tmp/taha-source.bundle | ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "umask 077; cat > /var/tmp/taha-source-$TARGET_SHA.bundle"
+          docker save "tahashoes-taha-ai:$TARGET_SHA" | gzip | ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'gunzip | docker load'
       - name: Back up, stage, migrate and verify exact release
         env:
           TARGET_SHA: ${{ github.sha }}
@@ -45,7 +66,7 @@ jobs:
           set -euo pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            bash -s -- "$TARGET_SHA" < deploy/vps/release.sh
+            bash -s -- "$TARGET_SHA" "/var/tmp/taha-source-$TARGET_SHA.bundle" < deploy/vps/release.sh
       - name: Run the authorized single Facebook trial and wait for receipt
         if: ${{ inputs.run_facebook_trial || contains(github.event.head_commit.message, '[facebook-trial]') }}
         timeout-minutes: 18

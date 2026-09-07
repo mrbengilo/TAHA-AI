@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 TARGET_SHA="$1"
+SOURCE_BUNDLE="${2:-}"
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
 exec 9>/var/lock/taha-ai-release.lock
 flock -n 9 || { echo 'RELEASE_ALREADY_RUNNING'; exit 21; }
@@ -67,13 +68,24 @@ PY
 )
 test -n "$secret" || { echo 'INTERNAL_API_SECRET_MISSING'; exit 24; }
 
-git -C "$REPO" fetch origin main
-git -C "$REPO" merge-base --is-ancestor "$TARGET_SHA" origin/main
+if [ -n "$SOURCE_BUNDLE" ]; then
+  [[ "$SOURCE_BUNDLE" = "/var/tmp/taha-source-${TARGET_SHA}.bundle" ]] || exit 28
+  git -C "$REPO" bundle verify "$SOURCE_BUNDLE"
+  git -C "$REPO" fetch "$SOURCE_BUNDLE" HEAD
+  test "$(git -C "$REPO" rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+  rm -- "$SOURCE_BUNDLE"
+else
+  git -C "$REPO" fetch origin main
+  git -C "$REPO" merge-base --is-ancestor "$TARGET_SHA" origin/main
+fi
 git -C "$REPO" checkout -q main
 CHECKOUT_CHANGED=yes
 git -C "$REPO" reset --hard "$TARGET_SHA" >/dev/null
 cd "$REPO"
-DOCKER_BUILDKIT=0 docker build -f deploy/vps/Dockerfile -t "$NEW_IMAGE" .
+if ! docker image inspect "$NEW_IMAGE" >/dev/null 2>&1; then
+  DOCKER_BUILDKIT=0 docker build -f deploy/vps/Dockerfile --label "org.opencontainers.image.revision=$TARGET_SHA" -t "$NEW_IMAGE" .
+fi
+test "$(docker inspect "$NEW_IMAGE" -f '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$TARGET_SHA"
 echo "IMAGE_READY=$TARGET_SHA"
 
 # SQLite backup API includes committed WAL records in a consistent staging snapshot.
@@ -117,11 +129,18 @@ rm -rf -- "$STAGE_DATA"
 if systemctl is-active --quiet taha-ai-cron.timer; then TIMER_WAS_ACTIVE=yes; fi
 systemctl stop taha-ai-cron.timer
 # Let any in-flight external publish finish; never kill a running publish to deploy.
+cron_busy() {
+  # Type=oneshot is "activating" while its HTTP request is still running.
+  case "$(systemctl show -p ActiveState --value taha-ai-cron.service)" in
+    active|activating|deactivating) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 for attempt in $(seq 1 90); do
-  if ! systemctl is-active --quiet taha-ai-cron.service; then break; fi
+  if ! cron_busy; then break; fi
   sleep 2
 done
-if systemctl is-active --quiet taha-ai-cron.service; then echo 'CRON_STILL_RUNNING'; exit 26; fi
+if cron_busy; then echo 'CRON_STILL_RUNNING'; exit 26; fi
 docker stop --time 120 taha-ai >/dev/null
 OLD_STOPPED=yes
 install -d -m 700 "$BACKUP_DIR"

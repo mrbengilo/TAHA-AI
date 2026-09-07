@@ -262,13 +262,15 @@ test("idempotency cannot replay a confirmation for a different Facebook page", a
 });
 
 test("a concurrent source configuration change aborts sync and cannot pause or publish the new catalog", async () => {
-  for (const boundary of ["acquire", "commit"]) {
+  for (const boundary of ["acquire", "commit", "same-config-overwrite"]) {
     const h = harness(); h.seedProduct(); h.seedProduct("product-2", "PH0002");
     h.overrides.delete(path.join(ROOT, "lib/integrations/google-sync.ts"));
     h.overrides.set(path.join(ROOT, "lib/integrations/connection-secrets.ts"), {
       getConnectedIntegration: async () => ({ id: "google-1", config: { sheetId: "sheet-1", folderId: "root" } }), getGoogleAccessToken: async () => "test-token",
     });
-    const change = () => h.sqlite.prepare("UPDATE channel_connections SET config_json = json_set(config_json, '$.sheetId', 'new-sheet') WHERE id = 'google-1'").run();
+    const change = () => boundary === "same-config-overwrite"
+      ? h.sqlite.prepare("UPDATE channel_connections SET config_json = ? WHERE id = 'google-1'").run(JSON.stringify({ sheetId: "sheet-1", folderId: "root" }))
+      : h.sqlite.prepare("UPDATE channel_connections SET config_json = json_set(config_json, '$.sheetId', 'new-sheet') WHERE id = 'google-1'").run();
     if (boundary === "acquire") h.hooks.beforeFirst = (sql) => {
       if (sql.includes("COALESCE(json_extract(config_json, '$._catalogSyncExpiresAt')")) { h.hooks.beforeFirst = null; change(); }
     };
