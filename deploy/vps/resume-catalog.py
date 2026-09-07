@@ -130,8 +130,9 @@ def read_runs(database, ids):
     with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
-            f"SELECT id,product_id,status,error_code,completed_image_count FROM automation_runs "
-            f"WHERE workspace_id=? AND id IN ({placeholders}) ORDER BY created_at", [WORKSPACE, *ids])]
+            f"SELECT r.id,r.product_id,p.base_sku,r.status,r.error_code,r.completed_image_count "
+            f"FROM automation_runs r JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
+            f"WHERE r.workspace_id=? AND r.id IN ({placeholders}) ORDER BY r.created_at", [WORKSPACE, *ids])]
 
 
 def retryable_ids(rows):
@@ -258,10 +259,19 @@ def main():
             if drained_database != database or drained_connection['id'] != google_connection['id']:
                 raise RuntimeError('CATALOG_STATE_CHANGED_DURING_DRAIN')
             initial = read_runs(database, ids)
+            print('CATALOG_PRE_RETRY_STATES=' + json.dumps([
+                {'sku': row['base_sku'], 'status': row['status'], 'code': row.get('error_code'),
+                 'images': row['completed_image_count']} for row in initial
+            ], separators=(',', ':')), flush=True)
             retry_ids = retryable_ids(initial)
             if APPLIED.exists():
                 applied = json.loads(APPLIED.read_text())
                 if applied.get('runIds') != ids: raise RuntimeError('CATALOG_RECOVERY_MARKER_MISMATCH')
+                print('CATALOG_APPLIED_MARKER=' + json.dumps({
+                    'stage': applied.get('stage'), 'retryCount': len(applied.get('retryIds', []))
+                }, separators=(',', ':')), flush=True)
+                if applied.get('stage') != 'applied':
+                    raise RuntimeError('CATALOG_RECOVERY_PARTIAL_APPLY')
                 retry_ids = []
             elif retry_ids:
                 write_applied({'runIds': ids, 'retryIds': retry_ids, 'stage': 'planned', 'createdAt': int(time.time())})
