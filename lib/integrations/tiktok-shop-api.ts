@@ -122,7 +122,7 @@ export async function callTikTokShopJson(
   try {
     response = await fetcher(url, {
       method,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         "content-type": "application/json",
@@ -175,7 +175,7 @@ export async function uploadTikTokShopProductImage(input: {
   try {
     response = await fetcher(url, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { "x-tts-access-token": input.accessToken },
       body: form,
