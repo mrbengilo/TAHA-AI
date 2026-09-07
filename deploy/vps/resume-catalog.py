@@ -339,10 +339,21 @@ const env = Object.fromEntries(fs.readFileSync('/app/.dev.vars', 'utf8').split(/
   const input = JSON.parse(await new Promise((resolve, reject) => { let value=''; process.stdin.on('data', c => value += c); process.stdin.on('end', () => resolve(value)); process.stdin.on('error', reject); }));
   const key = await webcrypto.subtle.importKey('raw', Buffer.from(env.INTEGRATION_TOKEN_ENCRYPTION_KEY, 'base64url'), {name:'AES-GCM'}, false, ['decrypt']);
   const plain = await webcrypto.subtle.decrypt({name:'AES-GCM', iv:Buffer.from(input.iv,'base64url'), additionalData:new TextEncoder().encode('taha-ai:integration-token:v1'), tagLength:128}, key, Buffer.from(input.ciphertext,'base64url'));
-  const token = JSON.parse(new TextDecoder().decode(plain)).accessToken;
-  if (typeof token !== 'string' || !token) process.exit(2);
-  const signal = AbortSignal.timeout(15000);
-  const infoResponse = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), {signal});
+  const credentials = JSON.parse(new TextDecoder().decode(plain));
+  let token = typeof credentials.accessToken === 'string' ? credentials.accessToken : '';
+  let infoResponse = token ? await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), {signal:AbortSignal.timeout(15000)}) : null;
+  if (!infoResponse?.ok) {
+    if (typeof credentials.refreshToken !== 'string' || !credentials.refreshToken) process.exit(2);
+    const refreshed = await fetch('https://oauth2.googleapis.com/token', {
+      method:'POST', headers:{'content-type':'application/x-www-form-urlencoded'}, signal:AbortSignal.timeout(15000),
+      body:new URLSearchParams({client_id:env.GOOGLE_CLIENT_ID, client_secret:env.GOOGLE_CLIENT_SECRET, refresh_token:credentials.refreshToken, grant_type:'refresh_token'})
+    });
+    if (!refreshed.ok) process.exit(3);
+    const tokens = await refreshed.json();
+    token = typeof tokens.access_token === 'string' ? tokens.access_token : '';
+    if (!token) process.exit(3);
+    infoResponse = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=' + encodeURIComponent(token), {signal:AbortSignal.timeout(15000)});
+  }
   if (!infoResponse.ok) process.exit(3);
   const info = await infoResponse.json();
   const scopes = new Set(String(info.scope || '').split(/\s+/));

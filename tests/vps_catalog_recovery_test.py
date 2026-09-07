@@ -83,6 +83,12 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
             recovery.validate_recovery_marker(
                 {**planned, 'stage': 'applied', 'resumedIds': []}, catalog)
 
+    def test_google_verifier_can_refresh_an_expired_access_token(self):
+        source = Path(recovery.__file__).read_text()
+        self.assertIn("credentials.refreshToken", source)
+        self.assertIn("https://oauth2.googleapis.com/token'", source)
+        self.assertIn("grant_type:'refresh_token'", source)
+
     def test_held_cron_requires_exact_applied_conflict_resolution(self):
         catalog_ids = ['catalog-run']
         with tempfile.TemporaryDirectory() as folder:
