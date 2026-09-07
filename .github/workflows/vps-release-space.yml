@@ -35,7 +35,7 @@ jobs:
           docker system df
           docker image ls tahashoes-taha-ai --no-trunc --format 'TAHA_IMAGE={{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}'
           for image in $(docker image ls tahashoes-taha-ai -q --no-trunc | sort -u); do
-            docker image inspect "$image" --format 'TAHA_IMAGE_INFO={{.Id}}|{{json .RepoTags}}|{{.Size}}|{{.Created}}|{{index .Config.Labels "org.opencontainers.image.revision"}}'
+            docker image inspect "$image" --format 'TAHA_IMAGE_INFO={{.Id}}|{{json .RepoTags}}|{{.Size}}|{{.Created}}'
           done
           for container in $(docker container ls -aq); do
             docker inspect "$container" --format 'CONTAINER_REFERENCE={{.Id}}|{{.Name}}|{{.Image}}|{{.State.Status}}|{{json .HostConfig.VolumesFrom}}|{{json .HostConfig.Links}}'
