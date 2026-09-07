@@ -1,0 +1,68 @@
+name: Recover and deploy TAHA font release
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+    paths:
+      - deploy/vps/recover-font-release.py
+      - tests/vps_font_release_recovery_test.py
+      - .github/workflows/vps-recover-font-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+
+jobs:
+  recover-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+      TARGET_SHA: 010c0193ab4ed57991a60e17aee2925a729ac117
+      EXPECTED_ACTIVE_SHA: b723d97c5bbb098a8aae6d48117e8421ec3a2473
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact recovery guards
+        run: python3 -m unittest discover -s tests -p vps_font_release_recovery_test.py
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Reclaim the single reviewed obsolete rollback
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'python3 - --apply' < deploy/vps/recover-font-release.py
+      - name: Deploy the already loaded reviewed image
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            bash -s -- "$TARGET_SHA" "" "$EXPECTED_ACTIVE_SHA" < deploy/vps/release.sh
+      - name: Verify deployed revision and IDOSI typography
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "test \"\$(git -C /var/www/taha-ai rev-parse HEAD)\" = '$TARGET_SHA' && \
+             test \"\$(docker inspect taha-ai -f '{{.Config.Image}}')\" = 'tahashoes-taha-ai:$TARGET_SHA' && \
+             test \"\$(docker inspect taha-ai -f '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')\" = '$TARGET_SHA' && \
+             docker exec taha-ai sh -lc 'grep -Rql \"Be Vietnam Pro\" /app/dist/client/_next/static/css' && \
+             systemctl is-active --quiet taha-ai-cron.timer && \
+             echo FONT_RELEASE_DEPLOYED=yes"
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps

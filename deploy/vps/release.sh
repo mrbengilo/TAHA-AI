@@ -2,7 +2,11 @@
 set -Eeuo pipefail
 TARGET_SHA="$1"
 SOURCE_BUNDLE="${2:-}"
+EXPECTED_ACTIVE_SHA="${3:-}"
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
+if [ -n "$EXPECTED_ACTIVE_SHA" ]; then
+  [[ "$EXPECTED_ACTIVE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
+fi
 exec 9>/var/lock/taha-ai-release.lock
 flock -n 9 || { echo 'RELEASE_ALREADY_RUNNING'; exit 21; }
 
@@ -54,6 +58,10 @@ test -d "$DATA" && test -f "$ENV_FILE"
 test -z "$(git -C "$REPO" status --porcelain)" || { echo 'VPS_CHECKOUT_HAS_LOCAL_CHANGES'; exit 22; }
 docker inspect taha-ai >/dev/null
 docker network inspect "$NETWORK" >/dev/null
+if [ -n "$EXPECTED_ACTIVE_SHA" ]; then
+  test "$(git -C "$REPO" rev-parse HEAD)" = "$EXPECTED_ACTIVE_SHA" || { echo 'EXPECTED_ACTIVE_SOURCE_CHANGED'; exit 30; }
+  test "$(docker inspect taha-ai -f '{{.Config.Image}}')" = "${IMAGE_REPO}:${EXPECTED_ACTIVE_SHA}" || { echo 'EXPECTED_ACTIVE_IMAGE_CHANGED'; exit 30; }
+fi
 FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
 [ "$FREE_KB" -ge 5242880 ] || { echo 'INSUFFICIENT_RELEASE_DISK'; exit 23; }
 secret=$(python3 - "$ENV_FILE" <<'PY'
