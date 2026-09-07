@@ -113,7 +113,8 @@ export async function assertGeneratedProductMedia(
   if (!db) throw new Error("DATABASE_UNAVAILABLE");
   const sources = await productSources(productId, db);
   if (fingerprint !== await productFingerprint(sources.product) || mediaIds.length !== variants.length
-    || mediaIds.length !== 4 || new Set(mediaIds).size !== mediaIds.length) throw new Error("PRODUCT_GENERATED_MEDIA_MISMATCH");
+    || mediaIds.length < 1 || mediaIds.length > LIFESTYLE_VARIANTS.length
+    || new Set(mediaIds).size !== mediaIds.length) throw new Error("PRODUCT_GENERATED_MEDIA_MISMATCH");
   const placeholders = mediaIds.map(() => "?").join(",");
   const rows = await db.prepare(`SELECT m.id, m.external_id, m.metadata_json, m.source_connection_id,
       m.mime_type, m.byte_size, m.origin, m.storage_provider, pm.product_id, pm.role
@@ -169,9 +170,15 @@ export async function verifiedProductGeneratedImages(productId: string, override
     if (!LIFESTYLE_VARIANTS.includes(variant as typeof LIFESTYLE_VARIANTS[number]) || byVariant.has(variant)) return [];
     byVariant.set(variant, row);
   }
-  const ordered = LIFESTYLE_VARIANTS.map((variant) => byVariant.get(variant)).filter((row): row is GeneratedImage => Boolean(row));
-  if (ordered.length !== LIFESTYLE_VARIANTS.length) return [];
-  await assertGeneratedProductMedia(productId, ordered.map((row) => row.id), fingerprint, LIFESTYLE_PROMPT_VERSION, LIFESTYLE_VARIANTS, db);
+  const ordered: GeneratedImage[] = [];
+  for (const variant of LIFESTYLE_VARIANTS) {
+    const row = byVariant.get(variant);
+    if (!row) break;
+    ordered.push(row);
+  }
+  if (!ordered.length || ordered.length !== byVariant.size) return [];
+  await assertGeneratedProductMedia(productId, ordered.map((row) => row.id), fingerprint,
+    LIFESTYLE_PROMPT_VERSION, LIFESTYLE_VARIANTS.slice(0, ordered.length), db);
   return ordered;
 }
 
