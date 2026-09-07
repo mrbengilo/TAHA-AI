@@ -30,6 +30,7 @@ RECOVERABLE_ERRORS = {
 MAX_RECOVERY_RETRIES = 3
 RECOVERY_RETRY_COOLDOWN_SECONDS = 75
 WORKER_INTERVAL_SECONDS = 25
+PAUSED_FOR_MEDIA_CAP = True
 RESOLVED_CONFLICTS = {
     '82af7bf1-2c99-479d-8922-afb90d595217': 'PH0014',
     'cdf173a1-4729-4fef-bd48-3c4e9c6abf3c': 'PH0021',
@@ -451,6 +452,10 @@ def main():
     with open('/var/lock/taha-ai-release.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         validate_runtime()
+        if PAUSED_FOR_MEDIA_CAP:
+            subprocess.run(['systemctl', 'stop', 'taha-ai-cron.timer'], check=True, timeout=30)
+            print('CATALOG_RECOVERY_PAUSED_FOR_MEDIA_CAP=yes', flush=True)
+            return
         if not MARKER.exists(): raise RuntimeError('CATALOG_MARKER_MISSING')
         marker = json.loads(MARKER.read_text())
         ids = marker_run_ids(marker)
