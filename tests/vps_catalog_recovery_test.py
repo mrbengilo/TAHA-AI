@@ -155,7 +155,7 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
             def fake_api(_secret, path, _body):
                 calls.append(path)
                 state.update(status='processing', requested_image_count=0)
-                return {'requestedImageCount': 0}
+                return {'run': {'requestedImageCount': 0}}
             recovery.read_runs = rows
             recovery.api = fake_api
             try:
