@@ -1,0 +1,5 @@
+Warning: Permanently added '14.225.254.65' (ED25519) to the list of known hosts.
+CATALOG_RECOVERY_PAUSED=yes
+CATALOG_RECOVERY_PROCESS_TERMINATED=already-stopped
+CATALOG_RECOVERY_SAFE_STATE={"completed":0,"competitors":0,"drafts":0,"schedules":0,"publishJobs":0}
+CATALOG_CRON_REMAINS_HELD=yes
