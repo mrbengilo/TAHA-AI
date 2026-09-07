@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 18: inspect paced catalog work.
+# Probe generation 19: inspect automation step progress.
 import base64
 import json
 from pathlib import Path
@@ -43,7 +43,7 @@ def main():
         with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
             db.row_factory = sqlite3.Row
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if not {'automation_runs', 'products', 'content_drafts', 'schedules', 'publish_jobs'}.issubset(tables):
+            if not {'automation_runs', 'automation_steps', 'products', 'content_drafts', 'schedules', 'publish_jobs'}.issubset(tables):
                 continue
             rows = [dict(row) for row in db.execute(
                 f"SELECT r.id,p.base_sku,r.status,r.error_code,r.requested_image_count,r.completed_image_count "
@@ -68,6 +68,12 @@ def main():
                 f"WHERE j.workspace_id=? AND s.created_by IN ({placeholders})",
                 [WORKSPACE, *creators],
             ).fetchone()[0]
+            steps = [dict(row) for row in db.execute(
+                f"SELECT step_type,status,count(*) AS total FROM automation_steps "
+                f"WHERE workspace_id=? AND run_id IN ({placeholders}) GROUP BY step_type,status "
+                f"ORDER BY step_type,status",
+                [WORKSPACE, *ids],
+            )]
             competitors = [dict(row) for row in db.execute(
                 f"SELECT r.id,p.base_sku,r.request_key,r.status,r.target_providers_json,r.content_json "
                 f"FROM automation_runs r JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
@@ -101,6 +107,7 @@ def main():
                 'drafts': drafts,
                 'schedules': schedules,
                 'publishJobs': jobs,
+                'steps': steps,
                 'competitors': safe_competitors,
                 'cronTimer': timer,
                 'recoveryLockHeld': subprocess.run(
