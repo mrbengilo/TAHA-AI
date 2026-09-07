@@ -1,5 +1,6 @@
 """Resume the authorized prepare-only SKU catalog after Google re-consent."""
 import fcntl
+import base64
 import json
 import os
 from pathlib import Path
@@ -153,7 +154,7 @@ def competing_active_runs(database, ids):
         except ValueError: content = {}
         try: providers = json.loads(row['target_providers_json'] or '[]')
         except ValueError: providers = []
-        result.append({'sku': row['base_sku'], 'kind': row['request_key'].split(':', 1)[0],
+        result.append({'id': row['id'], 'sku': row['base_sku'], 'kind': row['request_key'].split(':', 1)[0],
                        'status': row['status'], 'code': row['error_code'],
                        'prepareOnly': content.get('prepareOnly') is True,
                        'targets': providers, 'images': row['requested_image_count'],
@@ -265,6 +266,9 @@ def main():
         runtime = subprocess.run(['docker', 'inspect', 'taha-ai', '--format', '{{.Config.Image}}|{{.State.Status}}'],
                                  check=True, capture_output=True, text=True, timeout=30).stdout.strip()
         if runtime != IMAGE + '|running': raise RuntimeError('CATALOG_DEPLOYMENT_CHANGED')
+        digest = subprocess.run(['docker', 'inspect', 'taha-ai', '--format', '{{.Image}}'], check=True,
+                                capture_output=True, text=True, timeout=30).stdout.strip()
+        print('CATALOG_RUNTIME_IMAGE_B64=' + base64.b64encode(digest.encode()).decode(), flush=True)
         if not MARKER.exists(): raise RuntimeError('CATALOG_MARKER_MISSING')
         marker = json.loads(MARKER.read_text())
         ids = marker_run_ids(marker)
