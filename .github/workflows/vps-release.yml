@@ -24,7 +24,7 @@ jobs:
     needs: quality
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 85
     env:
       VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
       VPS_USER: ${{ secrets.TAHA_VPS_USER }}
@@ -82,6 +82,15 @@ jobs:
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             python3 -u - < deploy/vps/facebook-verify.py
+      - name: Prepare the authorized catalog images and drafts
+        if: ${{ contains(github.event.head_commit.message, '[prepare-sku-catalog]') }}
+        timeout-minutes: 36
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/prepare-catalog.py
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps

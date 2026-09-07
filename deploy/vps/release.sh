@@ -123,6 +123,12 @@ probe() {
 }
 probe 18787 || { echo 'CANDIDATE_PROBE_FAILED'; exit 25; }
 echo 'CANDIDATE_AUTHENTICATED_UI_OK=yes'
+image_probe() {
+  curl --fail --silent --show-error --max-time 30 -X POST \
+    -H "Authorization: Bearer $secret" "http://127.0.0.1:$1/api/internal/health/images" |
+    python3 -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); assert 0 < d.get("bytes",0) < 200000 and d.get("mimeType") == "image/jpeg" and d.get("width") == 1 and d.get("height") == 1; print("IMAGE_ENCODER_VERIFIED_BYTES="+str(d["bytes"]))'
+}
+image_probe 18787 || { echo 'CANDIDATE_IMAGE_ENCODER_FAILED'; exit 29; }
 docker rm -f "$CANDIDATE" >/dev/null
 rm -rf -- "$STAGE_DATA"
 
@@ -154,6 +160,7 @@ docker update --restart=no "$ROLLBACK" >/dev/null
 docker run -d --name taha-ai --restart always --network "$NETWORK" -p 127.0.0.1:8787:8787 \
   -v "$DATA:/data" -v "$ENV_FILE:/app/.dev.vars:ro" "$NEW_IMAGE" >/dev/null
 probe 8787 || { echo 'PRODUCTION_PROBE_FAILED'; exit 27; }
+image_probe 8787 || { echo 'PRODUCTION_IMAGE_ENCODER_FAILED'; exit 29; }
 docker tag "$NEW_IMAGE" "${IMAGE_REPO}:latest"
 systemctl start taha-ai-cron.timer
 systemctl is-active --quiet taha-ai-cron.timer
