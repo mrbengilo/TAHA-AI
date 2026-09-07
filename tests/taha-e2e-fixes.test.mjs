@@ -20,13 +20,13 @@ test("channel UI renders real image previews", () => {
   assert.match(mediaRoute, /searchParams\.get\("inline"\)/);
 });
 
-test("daily automation uses Drive originals and website supports existing media", () => {
+test("daily automation requests four lifestyle images and limits background image work", () => {
   const daily = read("lib/daily-automation.ts");
   const cron = read("app/api/internal/cron/tick/route.ts");
   const publishing = read("lib/publishing.ts");
   assert.match(daily, /idempotencyKey: `daily:/);
-  assert.match(daily, /imageCount: 0/);
-  assert.match(cron, /runAutomationWorker\(\{ limit: 8 \}\)/);
+  assert.match(daily, /imageCount: 4/);
+  assert.match(cron, /runAutomationWorker\(\{ limit: 1 \}\)/);
   assert.match(publishing, /slice\(0, 8\)/);
   const automation = read("lib/automation.ts");
   assert.match(automation, /publicationDayFromRequestKey/);

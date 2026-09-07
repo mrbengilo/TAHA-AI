@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 
     let automation: Awaited<ReturnType<typeof runAutomationWorker>> | { errorCode: string };
     try {
-      automation = await runAutomationWorker({ limit: 8 });
+      automation = await runAutomationWorker({ limit: 1 });
     } catch {
       automation = { errorCode: "AUTOMATION_TICK_FAILED" };
     }
