@@ -117,6 +117,8 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
         source = Path(recovery.__file__).read_text()
         self.assertIn("'/api/internal/automation/tick', {'runIds': ids}", source)
         self.assertNotIn("'/api/internal/cron/tick'", source)
+        self.assertGreaterEqual(recovery.WORKER_INTERVAL_SECONDS, 20)
+        self.assertGreaterEqual(recovery.RECOVERY_RETRY_COOLDOWN_SECONDS, 60)
         self.assertLess(source.index("CATALOG_PREPARE_ONLY_FINAL_STATE_INVALID"),
                         source.rindex("['systemctl', 'start', 'taha-ai-cron.timer']"))
 

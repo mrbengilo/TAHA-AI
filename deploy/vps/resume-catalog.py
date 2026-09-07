@@ -28,6 +28,8 @@ RECOVERABLE_ERRORS = {
     'GOOGLE_SYNC_IN_PROGRESS', 'PRODUCT_SOURCE_CHANGED',
 }
 MAX_RECOVERY_RETRIES = 3
+RECOVERY_RETRY_COOLDOWN_SECONDS = 75
+WORKER_INTERVAL_SECONDS = 25
 RESOLVED_CONFLICTS = {
     '82af7bf1-2c99-479d-8922-afb90d595217': 'PH0014',
     'cdf173a1-4729-4fef-bd48-3c4e9c6abf3c': 'PH0021',
@@ -330,6 +332,14 @@ def retry_recoverable_failures(secret, database, catalog_ids):
     if any(row.get('error_code') not in RECOVERABLE_ERRORS for row in failed) \
             or any(row['status'] == 'cancelled' for row in rows):
         raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
+    if failed:
+        print('CATALOG_RECOVERY_COOLDOWN_SECONDS=' + str(RECOVERY_RETRY_COOLDOWN_SECONDS), flush=True)
+        time.sleep(RECOVERY_RETRY_COOLDOWN_SECONDS)
+        rows = read_runs(database, catalog_ids)
+        failed = [row for row in rows if row['status'] == 'failed']
+        if any(row.get('error_code') not in RECOVERABLE_ERRORS for row in failed) \
+                or any(row['status'] == 'cancelled' for row in rows):
+            raise RuntimeError('CATALOG_RUN_UNEXPECTED_FAILURE')
     marker = repair_marker(catalog_ids)
     retried = 0
     for row in failed:
@@ -570,7 +580,7 @@ def main():
             except RuntimeError as error:
                 print(str(error), flush=True)
                 time.sleep(10)
-            time.sleep(2)
+            time.sleep(WORKER_INTERVAL_SECONDS)
         rows = read_runs(database, ids)
         failed = [{'skuRun': row['id'], 'code': row.get('error_code')} for row in rows if row['status'] != 'completed']
         if failed:
