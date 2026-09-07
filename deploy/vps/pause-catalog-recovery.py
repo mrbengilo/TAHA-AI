@@ -4,17 +4,19 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import sqlite3
 import subprocess
 import sys
 import time
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
-IMAGE = 'tahashoes-taha-ai:010c0193ab4ed57991a60e17aee2925a729ac117'
-IMAGE_ID = 'sha256:3c4035316ec16398880dbceab5bc422c0824279f7816ef01625f91dba1f7b434'
+IMAGE = 'tahashoes-taha-ai:ffc61121076d49bb6b9044940990f509af57efef'
+IMAGE_ID = 'sha256:f4410ccaf9fbc932de004a15ca5e2b017f5ba87ce772a7e3b86a2d8f0824760d'
+REVISION = 'ffc61121076d49bb6b9044940990f509af57efef'
 LOCK = Path('/var/lock/taha-ai-release.lock')
 CATALOG = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
-PAUSED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-paused.json')
+PAUSED = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-user-pause.json')
 
 
 def command(*args, check=True):
@@ -78,6 +80,37 @@ def validate_isolated_state(database, ids):
         ).fetchone()[0]
     if completed or competitors or drafts or schedules or jobs:
         raise RuntimeError('CATALOG_PAUSE_ISOLATION_LOST')
+    return {'completed': completed, 'competitors': competitors, 'drafts': drafts,
+            'schedules': schedules, 'publishJobs': jobs}
+
+
+def is_recovery_cmdline(parts):
+    return len(parts) >= 3 and Path(parts[0]).name.startswith('python3') and parts[1:3] == ['-u', '-']
+
+
+def recovery_lock_holders():
+    result = command('fuser', str(LOCK), check=False)
+    if result.returncode == 1: return []
+    if result.returncode != 0: raise RuntimeError('CATALOG_PAUSE_LOCK_INSPECTION_FAILED')
+    pids = [int(value) for value in re.findall(r'\d+', result.stdout)]
+    if len(pids) != 1: raise RuntimeError('CATALOG_PAUSE_LOCK_OWNER_INVALID')
+    try: parts = [value.decode() for value in Path(f'/proc/{pids[0]}/cmdline').read_bytes().split(b'\0') if value]
+    except (OSError, UnicodeDecodeError): raise RuntimeError('CATALOG_PAUSE_LOCK_OWNER_INVALID') from None
+    if not is_recovery_cmdline(parts): raise RuntimeError('CATALOG_PAUSE_LOCK_OWNER_INVALID')
+    return pids
+
+
+def acquire_recovery_lock(timeout=45):
+    lock = LOCK.open('a')
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock
+        except BlockingIOError:
+            time.sleep(0.25)
+    lock.close()
+    raise RuntimeError('CATALOG_PAUSE_PROCESS_DID_NOT_STOP')
 
 
 def replace_marker(value):
@@ -105,8 +138,9 @@ def main():
         time.sleep(1)
     else:
         raise RuntimeError('CATALOG_PAUSE_CRON_DRAIN_TIMEOUT')
-    with LOCK.open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    holders = recovery_lock_holders()
+    for pid in holders: os.kill(pid, signal.SIGTERM)
+    with acquire_recovery_lock() as lock:
         runtime = command('docker', 'inspect', 'taha-ai', '--format', '{{.Config.Image}}|{{.Image}}|{{.State.Status}}').stdout.strip()
         if runtime != IMAGE + '|' + IMAGE_ID + '|running':
             raise RuntimeError('CATALOG_PAUSE_DEPLOYMENT_CHANGED')
@@ -114,18 +148,19 @@ def main():
             raise RuntimeError('CATALOG_PAUSE_CRON_ACTIVE')
         ids = catalog_ids()
         database = find_database(ids)
-        validate_isolated_state(database, ids)
+        state = validate_isolated_state(database, ids)
         if PAUSED.exists():
             marker = json.loads(PAUSED.read_text())
             if (PAUSED.stat().st_mode & 0o777) != 0o600 or marker.get('stage') != 'paused' \
                     or marker.get('catalogRunIds') != ids \
-                    or marker.get('reason') != 'worker-only-isolation-required':
+                    or marker.get('reason') != 'user-requested-until-tomorrow':
                 raise RuntimeError('CATALOG_PAUSE_MARKER_CHANGED')
         else:
             replace_marker({'stage': 'paused', 'catalogRunIds': ids, 'pausedAt': int(time.time()),
-                            'reason': 'worker-only-isolation-required'})
+                            'reason': 'user-requested-until-tomorrow', 'revision': REVISION})
     print('CATALOG_RECOVERY_PAUSED=yes', flush=True)
-    print('CATALOG_RECOVERY_OUTPUTS=0', flush=True)
+    print('CATALOG_RECOVERY_PROCESS_TERMINATED=' + ('yes' if holders else 'already-stopped'), flush=True)
+    print('CATALOG_RECOVERY_SAFE_STATE=' + json.dumps(state, separators=(',', ':')), flush=True)
     print('CATALOG_CRON_REMAINS_HELD=yes', flush=True)
 
 
