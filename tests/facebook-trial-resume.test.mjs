@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   ResumeError,
   TRIAL,
   TRIAL_SELECT_SQL,
+  assertRequeueResult,
   assertNoPublishedMatch,
   buildRequeueSql,
   captionForPayload,
+  encodePublicReceipt,
   operationForRow,
   validateIndependentFacebookState,
   validateTrialRow,
@@ -71,6 +77,34 @@ test("eligible trial CAS requeues the exact failed job once and preserves payloa
   assert.equal(db.prepare(buildRequeueSql(row, 4_000)).all().length, 0);
 });
 
+test("real Wrangler D1 treats one UPDATE RETURNING row as the affected-row proof when meta.changes is absent", () => {
+  const directory = mkdtempSync(join(tmpdir(), "taha-wrangler-returning-"));
+  const config = join(directory, "wrangler.jsonc");
+  writeFileSync(config, JSON.stringify({
+    name: "d1-returning-regression",
+    compatibility_date: "2026-09-01",
+    d1_databases: [{ binding: "DB", database_name: "returning-test", database_id: "00000000-0000-0000-0000-000000000099" }],
+  }));
+  try {
+    const sql = `CREATE TABLE jobs(id TEXT PRIMARY KEY,status TEXT,attempt_count INTEGER);
+      INSERT INTO jobs VALUES('${TRIAL.jobId}','failed',1);
+      UPDATE jobs SET status='retry_wait' WHERE id='${TRIAL.jobId}' AND status='failed' RETURNING id,status,attempt_count;
+      SELECT id,status,attempt_count FROM jobs;`;
+    const raw = execFileSync("pnpm", ["exec", "wrangler", "d1", "execute", "DB", "--local",
+      `--persist-to=${join(directory, "data")}`, `--config=${config}`, "--json", "--command", sql], {
+      cwd: new URL("..", import.meta.url), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000,
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+    });
+    const statements = JSON.parse(raw);
+    const update = statements[2];
+    assert.equal(update.meta.changes, undefined);
+    assert.doesNotThrow(() => assertRequeueResult(update, { attempt_count: 1 }));
+    assert.deepEqual(statements[3].results, [{ id: TRIAL.jobId, status: "retry_wait", attempt_count: 1 }]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("replays already requeued, publishing, or published jobs without making them eligible again", () => {
   const { db, row } = fixture();
   for (const status of ["retry_wait", "publishing"]) {
@@ -121,4 +155,14 @@ test("published-post scan fails closed on Graph errors, matches, and incomplete 
   await assert.rejects(assertNoPublishedMatch({ ...base, fetcher: async () => Response.json({ data: [{ id: "post", message: "Bài PH0014" }] }) }), /FACEBOOK_TRIAL_POST_ALREADY_EXISTS/);
   await assert.rejects(assertNoPublishedMatch({ ...base, fetcher: async () => Response.json({ data: [], paging: { next: "unsafe" } }) }), /FACEBOOK_POST_LOOKUP_INCOMPLETE/);
   await assert.doesNotReject(assertNoPublishedMatch({ ...base, fetcher: async () => Response.json({ data: [] }) }));
+});
+
+test("machine-readable receipt encoding contains only verified public receipt fields", () => {
+  const receipt = { runId: TRIAL.runId, jobId: TRIAL.jobId, sku: TRIAL.sku,
+    postId: `${TRIAL.pageId}_123`, url: `https://www.facebook.com/${TRIAL.pageId}_123`, accessToken: "never-encode" };
+  const decoded = JSON.parse(Buffer.from(encodePublicReceipt(receipt), "base64url").toString("utf8"));
+  assert.deepEqual(decoded, {
+    runId: receipt.runId, jobId: receipt.jobId, sku: receipt.sku, postId: receipt.postId, url: receipt.url,
+  });
+  assert.equal("accessToken" in decoded, false);
 });

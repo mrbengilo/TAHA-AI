@@ -171,6 +171,18 @@ WHERE id=${sqlText(TRIAL.jobId)} AND workspace_id=${sqlText(TRIAL.workspaceId)}
 RETURNING id,status,attempt_count`;
 }
 
+export function assertRequeueResult(result, row) {
+  const returned = result?.results;
+  if (!Array.isArray(returned) || returned.length !== 1
+    || returned[0]?.id !== TRIAL.jobId || returned[0]?.status !== "retry_wait"
+    || Number(returned[0]?.attempt_count) !== Number(row.attempt_count)) {
+    fail("TRIAL_REQUEUE_CAS_FAILED");
+  }
+  // Wrangler's local D1 JSON omits meta.changes for UPDATE ... RETURNING. The
+  // one exact returned primary-key row is the authoritative affected-row proof.
+  return returned[0];
+}
+
 export function validateIndependentFacebookState({ pageId, appId, tasks, debugData, identity, page }) {
   if (String(identity?.id ?? "") !== pageId || String(page?.id ?? "") !== pageId) fail("FACEBOOK_PAGE_MISMATCH");
   if (debugData?.is_valid !== true || String(debugData.app_id ?? "") !== appId
@@ -418,7 +430,7 @@ function requeue(row) {
   createMarker(row);
   const now = Date.now();
   const result = d1(buildRequeueSql(row, now));
-  if ((result.results ?? []).length !== 1 || Number(result.meta?.changes ?? 0) !== 1) fail("TRIAL_REQUEUE_CAS_FAILED");
+  assertRequeueResult(result, row);
   finishMarker(row);
   console.log(`TRIAL_RESUME_REQUEUED=${JSON.stringify({ jobId: TRIAL.jobId, attemptCount: row.attempt_count })}`);
 }
@@ -448,6 +460,22 @@ async function verifiedReceipt(row) {
   return { runId: TRIAL.runId, jobId: TRIAL.jobId, sku: TRIAL.sku, postId: post.id, url: permalink.toString() };
 }
 
+export function encodePublicReceipt(receipt) {
+  const publicReceipt = {
+    runId: receipt.runId,
+    jobId: receipt.jobId,
+    sku: receipt.sku,
+    postId: receipt.postId,
+    url: receipt.url,
+  };
+  return Buffer.from(JSON.stringify(publicReceipt), "utf8").toString("base64url");
+}
+
+function emitReceipt(receipt) {
+  console.log(`FACEBOOK_TRIAL_RECEIPT=${JSON.stringify(receipt)}`);
+  console.log(`FACEBOOK_TRIAL_RECEIPT_BASE64=${encodePublicReceipt(receipt)}`);
+}
+
 async function waitForReceipt() {
   let previous = "";
   for (let index = 0; index < POLL_LIMIT; index += 1) {
@@ -459,7 +487,7 @@ async function waitForReceipt() {
     }
     if (row.job_status === "published") {
       if (!row.external_post_id) fail("TRIAL_PUBLISHED_RECEIPT_MISSING");
-      console.log(`FACEBOOK_TRIAL_RECEIPT=${JSON.stringify(await verifiedReceipt(row))}`);
+      emitReceipt(await verifiedReceipt(row));
       return;
     }
     if (["failed", "blocked", "cancelled", "awaiting_confirmation"].includes(row.job_status)) fail("TRIAL_RESUME_STOPPED");
@@ -474,7 +502,7 @@ async function main() {
   validateTrialRow(row);
   const operation = operationForRow(row, markerExists());
   if (operation === "published") {
-    console.log(`FACEBOOK_TRIAL_RECEIPT=${JSON.stringify(await verifiedReceipt(row))}`);
+    emitReceipt(await verifiedReceipt(row));
     return;
   }
   if (operation === "wait") {
