@@ -425,7 +425,7 @@ def replan_catalog_runs(secret, database, catalog_ids):
             current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
             if current['status'] in ('failed', 'cancelled'):
                 response = api(secret, '/api/automation-runs/' + run_id + '/retry', {})
-                expected = response.get('requestedImageCount')
+                expected = (response.get('run') or {}).get('requestedImageCount')
                 if not isinstance(expected, int) or not 0 <= expected <= 4:
                     raise RuntimeError('CATALOG_REPLAN_COUNT_INVALID')
                 current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
