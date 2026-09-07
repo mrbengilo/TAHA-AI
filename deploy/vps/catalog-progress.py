@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 13: inspect six-image recovery.
+# Probe generation 14: inspect post-replan recovery.
 import base64
 import json
 from pathlib import Path
