@@ -7,6 +7,7 @@ test("correction removes only requested prices and internal paragraph, preservin
   const after = cleanTrialCopy(before);
   assert.equal(after, "Giày PH0014\n• Bảo hành: 12 tháng\n• Size 36: 21.6 - 22.5 cm\n\n#PH0014");
   assert.equal(cleanTrialCopy(after), after);
+  assert.equal(cleanTrialCopy(before.replace('• Giá bán: 619.000 VND', '• Giá chỉ : 6xx')), after);
   assert.throws(() => cleanTrialCopy("PH0014 619.000 VND"), /STILL_INVALID/);
 });
 test("correction cannot edit another Page, job, SKU, unpublished job or human-changed draft", () => {

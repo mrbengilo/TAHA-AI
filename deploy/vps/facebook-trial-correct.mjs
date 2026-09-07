@@ -17,9 +17,9 @@ const quoted = (value) => `'${String(value).replaceAll("'", "''")}'`;
 export function cleanTrialCopy(value) {
   if (typeof value !== "string" || !value.includes("PH0014")) fail("CORRECTION_COPY_INVALID");
   const clean = value.replace(INTERNAL_PARAGRAPH, "")
-    .split(/\r?\n/).filter((line) => !/^\s*[•*\-]?\s*Giá (bán|tham khảo):\s*[\d., ]+\s*VND\s*$/iu.test(line))
+    .split(/\r?\n/).filter((line) => !/^\s*[•*-]?\s*Giá (bán|tham khảo|chỉ)\s*:\s*[\d.,x ]+(?:\s*VND)?\s*$/iu.test(line))
     .join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  if (/Google Drive|Vui lòng kiểm tra đúng mã|\bVND\b|Giá (bán|tham khảo)/iu.test(clean)) fail("CORRECTION_COPY_STILL_INVALID");
+  if (/Google Drive|Vui lòng kiểm tra đúng mã|\bVND\b|Giá (bán|tham khảo|chỉ)/iu.test(clean)) fail("CORRECTION_COPY_STILL_INVALID");
   return clean;
 }
 
@@ -89,16 +89,13 @@ async function main() {
     return result;
   }
   const current = await graph();
-  if (current.id !== TARGET.postId || ![copy.before, copy.after].includes(current.message)) {
-    console.log("FACEBOOK_CORRECTION_PUBLIC_DIFF=" + JSON.stringify({ postId: current.id, actual: current.message, expected: copy.before }));
-    fail("CORRECTION_POST_CHANGED");
-  }
+  if (current.id !== TARGET.postId || cleanTrialCopy(current.message) !== copy.after) fail("CORRECTION_POST_CHANGED");
   console.log("FACEBOOK_CORRECTION_PREFLIGHT=EXACT_PUBLISHED_POST");
   if (!process.argv.includes("--apply")) return;
   if (current.message !== copy.after) {
     mkdirSync("/data/ops-recovery", { recursive: true, mode: 0o700 });
     const path = `/data/ops-recovery/facebook-correction-${TARGET.postId}-v1.json`;
-    const backup = { postId: TARGET.postId, before: copy.before, after: copy.after, draftId: row.draft_id };
+    const backup = { postId: TARGET.postId, before: current.message, after: copy.after, draftId: row.draft_id };
     try { writeFileSync(path, JSON.stringify(backup), { flag: "wx", mode: 0o600, flush: true }); }
     catch (error) {
       if (error.code !== "EEXIST" || JSON.stringify(JSON.parse(readFileSync(path, "utf8"))) !== JSON.stringify(backup)) fail("CORRECTION_BACKUP_FAILED");

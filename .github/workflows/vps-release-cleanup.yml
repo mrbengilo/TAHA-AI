@@ -1,0 +1,40 @@
+name: Reclaim one obsolete TAHA rollback
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reclaim:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[reclaim-taha]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact cleanup eligibility guards
+        run: python3 -m unittest discover -s tests -p vps_release_space_test.py
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Reclaim the single reviewed obsolete rollback
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'python3 - --apply' < deploy/vps/release-space.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
