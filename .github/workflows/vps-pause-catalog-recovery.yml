@@ -6,7 +6,7 @@ on:
     paths: [deploy/vps/pause-catalog-recovery.py, .github/workflows/vps-pause-catalog-recovery.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   pause:
@@ -19,6 +19,8 @@ jobs:
       VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
+      - name: Verify pause safety contract
+        run: python3 -m unittest discover -s tests -p vps_catalog_pause_test.py
       - name: Configure SSH
         run: |
           install -m 700 -d ~/.ssh
@@ -26,9 +28,18 @@ jobs:
           chmod 600 ~/.ssh/id_taha_vps
       - name: Stop normal cron and pause recovery
         run: |
+          set -euo pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - < deploy/vps/pause-catalog-recovery.py
+            python3 -u - < deploy/vps/pause-catalog-recovery.py 2>&1 | tee deploy/vps/catalog-pause-output.txt
+      - name: Save pause snapshot
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/catalog-pause-output.txt
+          git commit -m "ops: record catalog pause result" || exit 0
+          git push origin HEAD:codex/vps-release-space
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps
