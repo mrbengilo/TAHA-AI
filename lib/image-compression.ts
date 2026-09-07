@@ -5,6 +5,16 @@ export const GENERATED_IMAGE_MAX_BYTES = 200_000;
 export const IMAGE_COMPRESSION_POLICY = "taha-jpeg-v1";
 export const LIFESTYLE_PROMPT_VERSION = "taha-lifestyle-v3";
 export const LIFESTYLE_VARIANTS = ["cycling", "running", "climbing", "stream"] as const;
+export const MAX_POST_IMAGES = 6;
+export const MAX_GENERATED_IMAGES = LIFESTYLE_VARIANTS.length;
+
+export function plannedGeneratedImageCount(sourceImageCount: number, requested = MAX_GENERATED_IMAGES) {
+  if (!Number.isInteger(sourceImageCount) || sourceImageCount < 1
+    || !Number.isInteger(requested) || requested < 0 || requested > MAX_GENERATED_IMAGES) {
+    throw new Error("IMAGE_COUNT_INVALID");
+  }
+  return Math.min(requested, Math.max(0, MAX_POST_IMAGES - sourceImageCount));
+}
 
 const MAX_INPUT_BYTES = 25 * 1024 * 1024;
 const MAX_DIMENSION = 12_000;
