@@ -186,7 +186,7 @@ class CatalogRecoverySafetyTests(unittest.TestCase):
 
     def test_catalog_is_driven_only_by_the_exact_filtered_worker(self):
         source = Path(recovery.__file__).read_text()
-        self.assertFalse(recovery.PAUSED_FOR_MEDIA_CAP)
+        self.assertTrue(recovery.PAUSED_FOR_MEDIA_CAP)
         self.assertIn(recovery.REVISION, recovery.IMAGE)
         self.assertRegex(recovery.IMAGE_ID, r'^sha256:[0-9a-f]{64}$')
         self.assertIn("'/api/internal/automation/tick', {'runIds': ids}", source)
