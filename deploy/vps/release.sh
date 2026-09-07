@@ -117,11 +117,18 @@ rm -rf -- "$STAGE_DATA"
 if systemctl is-active --quiet taha-ai-cron.timer; then TIMER_WAS_ACTIVE=yes; fi
 systemctl stop taha-ai-cron.timer
 # Let any in-flight external publish finish; never kill a running publish to deploy.
+cron_busy() {
+  # Type=oneshot is "activating" while its HTTP request is still running.
+  case "$(systemctl show -p ActiveState --value taha-ai-cron.service)" in
+    active|activating|deactivating) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 for attempt in $(seq 1 90); do
-  if ! systemctl is-active --quiet taha-ai-cron.service; then break; fi
+  if ! cron_busy; then break; fi
   sleep 2
 done
-if systemctl is-active --quiet taha-ai-cron.service; then echo 'CRON_STILL_RUNNING'; exit 26; fi
+if cron_busy; then echo 'CRON_STILL_RUNNING'; exit 26; fi
 docker stop --time 120 taha-ai >/dev/null
 OLD_STOPPED=yes
 install -d -m 700 "$BACKUP_DIR"
