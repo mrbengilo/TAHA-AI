@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 12: verify deployed six-image runtime.
+# Probe generation 13: inspect six-image recovery.
 import base64
 import json
 from pathlib import Path
@@ -31,7 +31,7 @@ def main():
             if not {'automation_runs', 'products', 'content_drafts', 'schedules', 'publish_jobs'}.issubset(tables):
                 continue
             rows = [dict(row) for row in db.execute(
-                f"SELECT r.id,p.base_sku,r.status,r.error_code,r.completed_image_count "
+                f"SELECT r.id,p.base_sku,r.status,r.error_code,r.requested_image_count,r.completed_image_count "
                 f"FROM automation_runs r JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
                 f"WHERE r.workspace_id=? AND r.id IN ({placeholders}) ORDER BY p.base_sku",
                 [WORKSPACE, *ids],
@@ -81,7 +81,8 @@ def main():
             ).stdout.strip()
             print('CATALOG_PROGRESS=' + json.dumps({
                 'states': [{'sku': row['base_sku'], 'status': row['status'],
-                            'code': row['error_code'], 'images': row['completed_image_count']} for row in rows],
+                            'code': row['error_code'], 'requestedImages': row['requested_image_count'],
+                            'images': row['completed_image_count']} for row in rows],
                 'drafts': drafts,
                 'schedules': schedules,
                 'publishJobs': jobs,
