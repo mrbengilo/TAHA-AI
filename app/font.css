@@ -10,7 +10,9 @@ html,
 body,
 *,
 *::before,
-*::after {
+*::after,
+.taha-shell,
+.taha-shell * {
   font-family: var(--font-ui) !important;
 }
 
