@@ -141,7 +141,7 @@ def competing_active_runs(database, ids):
     with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         rows = [dict(row) for row in db.execute(
-            f"SELECT p.base_sku,r.request_key,r.status,r.error_code,r.requested_image_count,"
+            f"SELECT r.id,p.base_sku,r.request_key,r.status,r.error_code,r.requested_image_count,"
             f"r.target_providers_json,r.content_json,r.created_at FROM automation_runs r "
             f"JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
             f"WHERE r.workspace_id=? AND r.product_id IN (SELECT product_id FROM automation_runs "
