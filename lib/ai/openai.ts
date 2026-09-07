@@ -229,12 +229,15 @@ async function openAiFetch(
   try {
     response = await fetcher(`${OPENAI_API_BASE_URL}${path}`, {
       ...init,
-      redirect: "error",
+      // workerd rejects redirect:"error" before any network request.
+      // Inspect redirects ourselves so credentials are never forwarded.
+      redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new OpenAiClientError(isAbortLike(error) ? "OPENAI_TIMEOUT" : "OPENAI_NETWORK_ERROR", true);
   }
+  if (response.status >= 300 && response.status < 400) throw new OpenAiClientError("OPENAI_REDIRECT_REJECTED", false, response.status);
   if (!response.ok) throw apiErrorForStatus(response.status);
   return response;
 }

@@ -162,7 +162,7 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(20_000),
       headers: {
         "content-type": "application/json",
