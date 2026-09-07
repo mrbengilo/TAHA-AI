@@ -11,6 +11,11 @@ MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 
 
 def main():
+    runtime = subprocess.run(
+        ['docker', 'inspect', 'taha-ai', '--format',
+         '{{.Config.Image}}|{{.Image}}|{{.State.Status}}|{{index .Config.Labels "org.opencontainers.image.revision"}}'],
+        check=True, capture_output=True, text=True, timeout=30,
+    ).stdout.strip()
     products = json.loads(MARKER.read_text()).get('products')
     if not isinstance(products, list) or len(products) != 15:
         raise RuntimeError('CATALOG_PROGRESS_MARKER_CHANGED')
@@ -81,6 +86,7 @@ def main():
                 'publishJobs': jobs,
                 'competitors': safe_competitors,
                 'cronTimer': timer,
+                'runtimeB64': base64.b64encode(runtime.encode()).decode(),
             }, separators=(',', ':')), flush=True)
             return
     raise RuntimeError('CATALOG_PROGRESS_DATABASE_MISSING')
