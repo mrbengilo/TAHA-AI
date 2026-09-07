@@ -33,22 +33,37 @@ test("publish media gate accepts only the exact current four generated variants 
   const h = harness(); h.seedProduct();
   const { mediaIds, fingerprint } = await generatedSet(h);
   const gate = h.load("lib/publish-media-integrity.ts");
-  const platformData = { generatedImageCount: 4, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint };
-  const accepted = await gate.assertPublishProductMedia("product-1", mediaIds, platformData);
+  const platformData = { sourceImageCount: 1, generatedImageCount: 4, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint };
+  const postMedia = ["image-product-1", ...mediaIds];
+  const accepted = await gate.assertPublishProductMedia("product-1", postMedia, platformData);
   assert.equal(accepted.sku, "PH0001");
-  await assert.rejects(gate.assertPublishProductMedia("product-1", mediaIds, { ...platformData, imagePromptVersion: "old-prompt" }), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
-  await assert.rejects(gate.assertPublishProductMedia("product-1", [...mediaIds].reverse(), platformData), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
-  await assert.rejects(gate.assertPublishProductMedia("product-1", mediaIds.slice(0, 3), platformData), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
+  await gate.assertPublishProductMedia("product-1", mediaIds, platformData);
+  await assert.rejects(gate.assertPublishProductMedia("product-1", postMedia, { ...platformData, imagePromptVersion: "old-prompt" }), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
+  await assert.rejects(gate.assertPublishProductMedia("product-1", ["image-product-1", ...[...mediaIds].reverse()], platformData), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
+  await assert.rejects(gate.assertPublishProductMedia("product-1", postMedia.slice(0, 4), platformData), /PRODUCT_MEDIA_MISMATCH|PRODUCT_GENERATED_MEDIA_MISMATCH/);
+});
+
+test("publish media gate accepts a contiguous subset of generated scenes and caps the post at six images", async () => {
+  const h = harness(); h.seedProduct();
+  const { mediaIds, fingerprint } = await generatedSet(h);
+  const gate = h.load("lib/publish-media-integrity.ts");
+  await gate.assertPublishProductMedia("product-1", ["image-product-1", ...mediaIds.slice(0, 2)], {
+    sourceImageCount: 1, generatedImageCount: 2, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint,
+  });
+  await assert.rejects(gate.assertPublishProductMedia("product-1", ["image-product-1", ...mediaIds, "extra", "extra-2"], {
+    sourceImageCount: 3, generatedImageCount: 4, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint,
+  }), /PRODUCT_MEDIA_MISMATCH/);
 });
 
 test("publish media gate rejects cross-SKU and replaced-source generated media", async () => {
   const h = harness(); h.seedProduct(); h.seedProduct("product-2", "PH0002");
   const { mediaIds, fingerprint } = await generatedSet(h);
   const gate = h.load("lib/publish-media-integrity.ts");
-  const platformData = { generatedImageCount: 4, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint };
-  await assert.rejects(gate.assertPublishProductMedia("product-2", mediaIds, platformData), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
+  const platformData = { sourceImageCount: 1, generatedImageCount: 4, imagePromptVersion: "taha-lifestyle-v3", sourceFingerprint: fingerprint };
+  const postMedia = ["image-product-1", ...mediaIds];
+  await assert.rejects(gate.assertPublishProductMedia("product-2", postMedia, platformData), /PRODUCT_MEDIA_MISMATCH/);
   h.sqlite.prepare("UPDATE media_assets SET metadata_json=json_set(metadata_json,'$.md5Checksum','replacement') WHERE id='image-product-1'").run();
-  await assert.rejects(gate.assertPublishProductMedia("product-1", mediaIds, platformData), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
+  await assert.rejects(gate.assertPublishProductMedia("product-1", postMedia, platformData), /PRODUCT_MEDIA_MISMATCH|PRODUCT_GENERATED_MEDIA_MISMATCH/);
 });
 
 test("zero-generated legacy path still requires exact raw product source media", async () => {
@@ -56,6 +71,6 @@ test("zero-generated legacy path still requires exact raw product source media",
   const integrity = h.load("lib/product-integrity.ts");
   const fingerprint = await integrity.productFingerprint((await integrity.productSources("product-1")).product);
   const gate = h.load("lib/publish-media-integrity.ts");
-  await gate.assertPublishProductMedia("product-1", ["image-product-1"], { generatedImageCount: 0, sourceFingerprint: fingerprint });
-  await assert.rejects(gate.assertPublishProductMedia("product-1", ["image-product-2"], { generatedImageCount: 0, sourceFingerprint: fingerprint }), /PRODUCT_MEDIA_MISMATCH/);
+  await gate.assertPublishProductMedia("product-1", ["image-product-1"], { sourceImageCount: 1, generatedImageCount: 0, sourceFingerprint: fingerprint });
+  await assert.rejects(gate.assertPublishProductMedia("product-1", ["image-product-2"], { sourceImageCount: 1, generatedImageCount: 0, sourceFingerprint: fingerprint }), /PRODUCT_MEDIA_MISMATCH/);
 });

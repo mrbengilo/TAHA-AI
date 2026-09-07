@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "AI Automation | TAHA AI",
-  description: "Tạo 4 ảnh đúng SKU, tối ưu ảnh gốc, viết bài không giá kèm hướng dẫn chăm sóc và bảng size giày.",
+  description: "Dùng tối đa 6 ảnh đúng SKU, chỉ tạo thêm ảnh khi cần, tối ưu ảnh gốc và viết bài không giá kèm hướng dẫn chăm sóc, bảng size giày.",
 };
 
 export default function AutomationPage() {

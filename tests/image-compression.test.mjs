@@ -18,6 +18,26 @@ function imageBinding(sizes, info = { format: "image/png", fileSize: 500_000, wi
   };
 }
 
+function addSourceImage(h, index, productId = "product-1", sku = "PH0001") {
+  const id = `image-${productId}-extra-${index}`;
+  const externalId = `file-${productId}-extra-${index}`;
+  const metadata = { name: `${sku}-${index + 1}.jpg`, md5Checksum: `md5-extra-${index}`, googleDriveSource: {
+    connectionId: "google-1", driveFileId: externalId, driveFolderId: `folder-${sku}`, skuKey: sku, matchKind: "sku_folder",
+  } };
+  h.sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,
+    external_id,mime_type,byte_size,status,metadata_json,created_at,updated_at) VALUES (?,?,'google-1','google_drive','image',
+    'source','google_drive',?,'image/jpeg',120000,'ready',?,?,?)`).run(id, WORKSPACE, externalId, JSON.stringify(metadata), Date.now(), Date.now());
+  h.sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,sort_order,created_at) VALUES (?,?,?,?,'gallery',?,?)")
+    .run(`pm-${id}`, WORKSPACE, productId, id, index + 1, Date.now());
+  return id;
+}
+
+test("generated image planning fills available post slots without exceeding six", () => {
+  const h = harness();
+  const compression = h.load("lib/image-compression.ts");
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((count) => compression.plannedGeneratedImageCount(count)), [4, 4, 3, 2, 1, 0, 0]);
+});
+
 test("bounded compressor checks actual bytes and advances through a finite fidelity ladder", async () => {
   const h = harness();
   const compression = h.load("lib/image-compression.ts");
@@ -235,6 +255,7 @@ test("prepare-only creates an unscheduled four-image draft and confirmation reus
   assert.deepEqual(h.sqlite.prepare("SELECT status FROM content_drafts").all().map((row) => row.status), ["draft"]);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM schedules").get().n, 0);
   assert.deepEqual(JSON.parse(h.sqlite.prepare("SELECT output_media_ids_json value FROM automation_runs").get().value), variants.map((variant) => `generated-${variant}`));
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_draft_media").get().n, 6);
 
   h.sqlite.prepare("UPDATE channel_connections SET status='connected' WHERE provider='facebook'").run();
   await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"], idempotencyKey: "confirm-product-1-v2" });
@@ -244,6 +265,51 @@ test("prepare-only creates an unscheduled four-image draft and confirmation reus
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE origin='generated'").get().n, 4);
   assert.deepEqual(h.sqlite.prepare("SELECT status FROM content_drafts ORDER BY created_at,id").all().map((row) => row.status), ["draft", "approved"]);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM schedules WHERE status='active'").get().n, 1);
+});
+
+test("six source images skip image generation and still create a six-image draft", async () => {
+  const h = harness(); h.seedProduct();
+  for (let index = 0; index < 5; index += 1) addSourceImage(h, index);
+  h.overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
+    async generateProductContent() {
+      return { model: "text-model", content: { productDescription: "Mô tả PH0001", hashtags: ["#TAHA"],
+        channels: { facebook: { title: "Giày", body: "Bài viết PH0001", hashtags: ["#TAHA"] } } } };
+    },
+    async editProductImage() { throw new Error("IMAGE_GENERATION_MUST_BE_SKIPPED"); },
+  });
+  const normalized = [];
+  h.overrides.set(path.join(ROOT, "lib/product-image-processing.ts"), {
+    LIFESTYLE_VARIANTS: ["cycling", "running", "climbing", "stream"],
+    normalizeProductSourceImages: async (_productId, ids) => { normalized.push(...ids); return { checked: ids.length }; },
+    async findOrPersistGeneratedImage() { throw new Error("IMAGE_GENERATION_MUST_BE_SKIPPED"); },
+  });
+  const automation = h.load("lib/automation.ts");
+  const queued = await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"],
+    idempotencyKey: "six-source-prepare", prepareOnly: true, imageCount: 4 });
+  assert.equal(queued.run.requestedImageCount, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type='image'").get().n, 0);
+  for (let tick = 0; tick < 9; tick += 1) await automation.runAutomationWorker({ limit: 1 });
+  assert.equal(normalized.length, 6);
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs").get().status, "completed");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_drafts WHERE status='draft'").get().n, 1);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_draft_media").get().n, 6);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE origin='generated'").get().n, 0);
+});
+
+test("retry replans an older failed run after the SKU reaches six source images", async () => {
+  const h = harness(); h.seedProduct();
+  const automation = h.load("lib/automation.ts");
+  const queued = await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"],
+    idempotencyKey: "old-four-image-run", prepareOnly: true, imageCount: 4 });
+  assert.equal(queued.run.requestedImageCount, 4);
+  h.sqlite.prepare("UPDATE automation_runs SET status='failed', error_code='OPENAI_RATE_LIMITED'").run();
+  h.sqlite.prepare("UPDATE automation_steps SET status='cancelled'").run();
+  for (let index = 0; index < 5; index += 1) addSourceImage(h, index);
+  const retried = await automation.retryAutomationRun(queued.run.id);
+  assert.equal(retried.requestedImageCount, 0);
+  assert.equal(h.sqlite.prepare("SELECT requested_image_count n FROM automation_runs").get().n, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type='image'").get().n, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type IN ('content','finalize') AND status='queued'").get().n, 2);
 });
 
 test("a source added after the durable optimization snapshot blocks generation and finalization", async () => {
