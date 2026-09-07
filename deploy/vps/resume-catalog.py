@@ -154,7 +154,8 @@ def competing_active_runs(database, ids):
         except ValueError: content = {}
         try: providers = json.loads(row['target_providers_json'] or '[]')
         except ValueError: providers = []
-        result.append({'id': row['id'], 'sku': row['base_sku'], 'kind': row['request_key'].split(':', 1)[0],
+        result.append({'idB64': base64.b64encode(row['id'].encode()).decode(),
+                       'sku': row['base_sku'], 'kind': row['request_key'].split(':', 1)[0],
                        'status': row['status'], 'code': row['error_code'],
                        'prepareOnly': content.get('prepareOnly') is True,
                        'targets': providers, 'images': row['requested_image_count'],
