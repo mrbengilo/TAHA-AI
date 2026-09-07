@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 19: inspect automation step progress.
+# Probe generation 20: inspect first SKU retry.
 import base64
 import json
 from pathlib import Path
