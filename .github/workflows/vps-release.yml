@@ -1,0 +1,59 @@
+name: TAHA validated VPS release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_facebook_trial:
+        description: Run the single authorized Drive-only Facebook trial (idempotent)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+  deploy:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure deployment SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Back up, stage, migrate and verify exact release
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            bash -s -- "$TARGET_SHA" < deploy/vps/release.sh
+      - name: Run the authorized single Facebook trial and wait for receipt
+        if: ${{ inputs.run_facebook_trial || contains(github.event.head_commit.message, '[facebook-trial]') }}
+        timeout-minutes: 18
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/facebook-trial.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps

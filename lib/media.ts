@@ -20,6 +20,14 @@ export type LoadedMedia = {
   size: number | null;
 };
 
+async function fetchDriveMedia(url: URL, token: string, timeout: number) {
+  let response: Response;
+  try { response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(timeout) }); }
+  catch { throw new Error("GOOGLE_MEDIA_UNAVAILABLE"); }
+  if (!response.ok) throw new Error(response.status === 429 || response.status >= 500 ? "GOOGLE_MEDIA_TEMPORARY_FAILURE" : "GOOGLE_MEDIA_FETCH_FAILED");
+  return response;
+}
+
 async function mediaRow(mediaId: string) {
   const database = getRuntimeEnv().DB;
   if (!database) throw new Error("DATABASE_UNAVAILABLE");
@@ -54,10 +62,19 @@ export async function loadMedia(mediaId: string): Promise<LoadedMedia> {
     const connection = await getConnectedIntegration<{ accessToken?: unknown; refreshToken?: unknown }>("google", row.source_connection_id);
     const token = await getGoogleAccessToken(connection);
     const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(row.external_id)}`);
+    const source = metadata.googleDriveSource as { driveFolderId?: string } | undefined;
+    if (source?.driveFolderId) {
+      url.searchParams.set("fields", "id,parents,trashed,mimeType");
+      url.searchParams.set("supportsAllDrives", "true");
+      const checked = await fetchDriveMedia(url, token, 30_000);
+      const file = await checked.json() as { parents?: string[]; trashed?: boolean; mimeType?: string };
+      if (file.trashed || !file.parents?.includes(source.driveFolderId) || !file.mimeType?.startsWith("image/")) throw new Error("PRODUCT_MEDIA_MISMATCH");
+      url.searchParams.delete("fields");
+    }
     url.searchParams.set("alt", "media");
     url.searchParams.set("supportsAllDrives", "true");
-    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (!response.ok || !response.body) throw new Error("GOOGLE_MEDIA_FETCH_FAILED");
+    const response = await fetchDriveMedia(url, token, 60_000);
+    if (!response.body) throw new Error("GOOGLE_MEDIA_FETCH_FAILED");
     return {
       body: response.body,
       mimeType: response.headers.get("content-type") || row.mime_type || "application/octet-stream",

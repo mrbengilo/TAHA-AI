@@ -8,7 +8,7 @@ import { markJobBlocked, markJobFailed, markJobPublished, startPublishJob } from
 type FacebookInput = { connectionId: string; message: string; mediaIds: string[]; idempotencyKey: string };
 type WebsiteInput = { connectionId: string; payload: Record<string, unknown>; idempotencyKey: string };
 
-export type FacebookRemoteInput = Omit<FacebookInput, "idempotencyKey">;
+export type FacebookRemoteInput = Omit<FacebookInput, "idempotencyKey"> & { assertLease?: () => Promise<void> };
 export type WebsiteRemoteInput = WebsiteInput & { jobId: string };
 
 export class PublishDeliveryError extends Error {
@@ -34,7 +34,7 @@ function database() {
 async function facebookJson(url: string | URL, init: RequestInit, phase: "media" | "publish") {
   let response: Response;
   try {
-    response = await fetch(url, init);
+    response = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) });
   } catch {
     throw new PublishDeliveryError(
       phase === "publish" ? "FACEBOOK_DELIVERY_OUTCOME_UNKNOWN" : "FACEBOOK_NETWORK_ERROR",
@@ -63,6 +63,7 @@ export async function sendFacebookPost(input: FacebookRemoteInput) {
   const version = requireEnv("META_GRAPH_API_VERSION");
   const mediaFbids: string[] = [];
   for (const mediaId of input.mediaIds.slice(0, 10)) {
+    await input.assertLease?.();
     const media = await mediaBlob(mediaId);
     const form = new FormData();
     form.set("source", media.blob, media.filename);
@@ -73,11 +74,14 @@ export async function sendFacebookPost(input: FacebookRemoteInput) {
       { method: "POST", body: form },
       "media",
     );
-    if (typeof result.id === "string") mediaFbids.push(result.id);
+    if (typeof result.id !== "string" || !result.id) throw new PublishDeliveryError("FACEBOOK_MEDIA_ID_MISSING", { retryable: true });
+    mediaFbids.push(result.id);
   }
 
   const body = new URLSearchParams({ message: input.message, access_token: accessToken });
   mediaFbids.forEach((id, index) => body.set(`attached_media[${index}]`, JSON.stringify({ media_fbid: id })));
+  // Refresh ownership immediately before the irreversible feed request.
+  await input.assertLease?.();
   const result = await facebookJson(
     `https://graph.facebook.com/${version}/${pageId}/feed`,
     {

@@ -29,6 +29,13 @@
       "when": 1787324762420,
       "tag": "0003_lazy_hellcat",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788771600000,
+      "tag": "0004_drive_only_automation",
+      "breakpoints": true
     }
   ]
 }

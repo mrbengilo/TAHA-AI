@@ -89,6 +89,10 @@ export function canonicalGoogleDriveSkuFolderName(value: unknown) {
   return skuKey ? `SKU ${skuKey}` : "";
 }
 
+export function isCanonicalSkuFolderName(name: unknown, sku: string) {
+  return typeof name === "string" && /^SKU\s+/i.test(name.normalize("NFKC").trim()) && normalizeSkuKey(name) === normalizeSkuKey(sku);
+}
+
 function isWordCharacter(value: string | undefined) {
   return Boolean(value && /[\p{L}\p{N}]/u.test(value));
 }
@@ -226,7 +230,7 @@ export async function indexGoogleDriveAssets(rootFolderId: string, skuValues: It
   for (const file of rootChildren) {
     if (file.mimeType !== FOLDER_MIME_TYPE) continue;
     const skuKey = normalizeSkuKey(file.name);
-    if (!skuSet.has(skuKey)) continue;
+    if (!skuSet.has(skuKey) || !isCanonicalSkuFolderName(file.name, skuKey)) continue;
     foldersBySku.set(skuKey, [...(foldersBySku.get(skuKey) ?? []), file]);
   }
 
@@ -243,17 +247,8 @@ export async function indexGoogleDriveAssets(rootFolderId: string, skuValues: It
   }
 
   const rootImages = rootChildren.filter((file) => file.mimeType.startsWith("image/") && !file.appProperties?.tahaMediaId);
-  let matchedRootFiles = 0;
-  for (const file of rootImages) {
-    const skuKey = matchSkuFromFilename(file.name, skuKeys);
-    if (!skuKey) continue;
-    const bucket = bySku.get(skuKey);
-    if (!bucket) continue;
-    bucket.targetFolderId = rootFolderId;
-    bucket.targetKind = "root";
-    bucket.files.push({ ...file, sourceFolderId: rootFolderId, matchKind: "filename" });
-    matchedRootFiles += 1;
-  }
+  // Root filenames are never sufficient evidence of a product's image source.
+  const matchedRootFiles = 0;
 
   const folderEntries = [...foldersBySku.entries()].map(([skuKey, folders]) => ({ skuKey, folder: folders[0] }));
   const folderResults = await mapInBatches(folderEntries, 5, async ({ skuKey, folder }) => ({

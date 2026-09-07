@@ -49,9 +49,9 @@ Body tùy chọn:
 { "connectionId": "google-connection-id" }
 ```
 
-Endpoint đọc Sheet, chuẩn hóa SKU, từ chối SKU trùng, tìm ảnh trong thư mục con có tên SKU hoặc tên file ở thư mục gốc có chứa SKU, rồi cập nhật sản phẩm/biến thể/media. Response gồm số sản phẩm, media, SKU folder khớp, file gốc khớp và sản phẩm chưa có ảnh.
+Endpoint đọc Sheet, chuẩn hóa SKU, từ chối SKU trùng, chỉ lấy ảnh trong thư mục chuẩn `SKU <SKU>`; bỏ qua ảnh thư mục gốc và thư mục thiếu tiền tố, rồi cập nhật sản phẩm/biến thể/media. Response gồm số sản phẩm, media, SKU folder khớp, file gốc khớp và sản phẩm chưa có ảnh.
 
-### Lưu ảnh generated về Google Drive
+### API xuất media cũ (không thuộc automation hiện tại)
 
 - `POST /api/integrations/google/drive/import`
 - `Content-Type: application/json`
@@ -84,20 +84,25 @@ Kết nối Google phải có quyền ghi `https://www.googleapis.com/auth/drive
   "productId": "product-id",
   "sourceMediaId": "media-id-tuy-chon",
   "idempotencyKey": "ai:product-id:2026-08-21:v1",
-  "imageCount": 6,
+  "imageCount": 0,
   "targetProviders": ["facebook", "zalo_personal", "website", "tiktok_shop", "shopee"]
 }
 ```
 
 - `productId` và `idempotencyKey` là bắt buộc; khóa chống trùng phải dài ít nhất 8 ký tự.
-- `sourceMediaId` có thể bỏ; hệ thống chọn ảnh `primary`, rồi `source`, rồi ảnh sẵn sàng đầu tiên của sản phẩm.
-- `imageCount` mặc định `6`, nhận số nguyên từ `1` đến `6`.
+- `sourceMediaId` có thể bỏ; chỉ nhận ảnh gốc Drive đã đối chiếu thư mục SKU.
+- `imageCount` được giữ để tương thích client cũ nhưng luôn được chuẩn hóa về `0`; không tạo bước ảnh.
 - `targetProviders` mặc định là cả năm kênh ở ví dụ. Hệ thống chỉ giữ năm identifier hợp lệ; nếu sau khi lọc không còn kênh nào thì request bị từ chối.
 - Lần đầu trả HTTP `202`; gửi lại đúng key và đúng payload trả HTTP `200` cùng run với `replayed: true`. Dùng lại key cho payload khác trả `409`.
 
-Mỗi run có step `content`, từ 1 đến 6 step `image`, rồi `finalize`. OpenAI Responses API tạo mô tả/hashtag/nội dung riêng theo kênh; Images Edits API tạo ảnh vuông 1024×1024 từ ảnh gốc. Ảnh được lưu R2 và gắn với sản phẩm/kênh trước, rồi thử xuất về Drive. Lỗi xuất Drive không làm mất ảnh R2; kết quả step ghi `driveExport.status = "pending"` để xử lý lại sau.
+Mỗi run chỉ có `content` và `finalize`. AI trả mô tả, hashtag, nội dung theo kênh và SKU khớp nguồn. Dữ liệu Sheet được đồng bộ lại trước khi viết. Run lưu dấu vân tay sản phẩm và danh sách ảnh gốc; trước đăng phải đồng bộ và khớp lại các giá trị này.
 
-Khi `finalize`, hệ thống tạo draft `approved` cho kênh đã chọn. Nếu có connection đang kết nối, Facebook, Zalo cá nhân và Website nhận lịch một lần ở khung giờ gần nhất tiếp theo lần lượt là 08:00, 09:00 và 12:00 giờ Việt Nam; Zalo luôn `assisted`. TikTok Shop/Shopee chỉ nhận `product_listing` draft, không tự đăng.
+Facebook/Website/Zalo cần đúng một connection đang kết nối trước khi xếp run (có thể chỉ định bằng `connectionIds`). Khi hoàn tất, draft tự chuyển `approved`; lịch Facebook 08:00, Zalo 09:00, Website 12:00 giờ Việt Nam gần nhất tiếp theo. Zalo vẫn assisted. TikTok/Shopee chỉ tạo listing draft.
+
+- `GET /api/products/:id`: dữ liệu thư mục SKU, ảnh, bài viết, lịch, jobs và quyền admin.
+- `PATCH /api/content-drafts/:id`: `{ "action": "edit", "version": 1, "title": "...", "body": "...", "hashtags": ["#TAHA"] }` hoặc `{ "action": "reject", "version": 1 }`. Cập nhật có kiểm tra version; từ chối nếu đã bắt đầu gửi/đã đăng. Chặn bài sẽ tạm dừng lịch và hủy jobs còn chờ trong cùng transaction.
+- `POST /api/publish/facebook` và `/website` nhận `draftId`, `connectionId`; nội dung và ảnh luôn đọc từ draft đã kiểm tra phía máy chủ. HTTP 202 nghĩa là đã lên lịch, chưa phải biên nhận đăng thành công.
+- `POST /api/automation-trial`: admin chạy đúng một SKU lên Facebook cho đợt triển khai này. Khóa cố định `trial:drive-only-facebook-v2`, gọi lại trả cùng run; không chọn sản phẩm khác. Lịch thử cách lúc hoàn tất 5 phút để admin có thời gian can thiệp. Xem `jobs.external_post_id` và `jobs.external_url` để xác nhận bài thật.
 
 ## Kho nội dung theo kênh
 

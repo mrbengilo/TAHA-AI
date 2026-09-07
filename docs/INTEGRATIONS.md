@@ -30,25 +30,14 @@ Sau khi kết nối, gọi `POST /api/integrations/google/sync` để:
 1. Đọc bảng sản phẩm.
 2. Tạo/cập nhật sản phẩm và biến thể mặc định.
 3. Chuẩn hóa SKU (Unicode, khoảng trắng, dấu gạch ngang, chữ hoa), từ chối SKU trùng trong Sheet.
-4. Ưu tiên thư mục con có tên trùng SKU; nếu không có, khớp file ảnh ở thư mục gốc khi tên file chứa SKU với ranh giới rõ ràng.
+4. Chỉ lấy ảnh trong đúng một thư mục chuẩn `SKU <SKU>`; bỏ qua tên file ở thư mục gốc.
 5. Lưu metadata ảnh và liên kết chúng với sản phẩm. Tối đa 20 ảnh nguồn được gắn cho mỗi sản phẩm trong một lần đồng bộ.
 
-Ảnh AI/derived được lưu bằng `POST /api/integrations/google/drive/import`. Hệ thống dùng thư mục đã ghi trong metadata lần sync, gắn app property `tahaMediaId` và không tạo bản sao khi gọi lại. Tài khoản phải có quyền chỉnh sửa thư mục SKU. Nếu không tìm thấy thư mục/ảnh nguồn để xác định vị trí đích, hệ thống giữ ảnh trong R2 và báo rõ lỗi thay vì tải sai chỗ.
+API xuất media cũ, không được automation gọi: ảnh AI/derived được lưu bằng `POST /api/integrations/google/drive/import`. Hệ thống dùng thư mục đã ghi trong metadata lần sync, gắn app property `tahaMediaId` và không tạo bản sao khi gọi lại. Tài khoản phải có quyền chỉnh sửa thư mục SKU. Nếu không tìm thấy thư mục/ảnh nguồn để xác định vị trí đích, hệ thống giữ ảnh trong R2 và báo rõ lỗi thay vì tải sai chỗ.
 
-## OpenAI tạo nội dung và hình ảnh
+## OpenAI viết nội dung
 
-Các biến runtime:
-
-```dotenv
-OPENAI_API_KEY=<SERVER_SECRET>
-OPENAI_TEXT_MODEL=gpt-5.6-luna
-OPENAI_IMAGE_MODEL=gpt-image-2
-OPENAI_IMAGE_QUALITY=medium
-```
-
-`OPENAI_API_KEY` chỉ lưu trong secret root-only của VPS, không commit, không đưa vào image Docker, trình duyệt, response hoặc log. Model text dùng Responses API với JSON Schema nghiêm ngặt để tạo mô tả, hashtag, sáu brief bố cục và nội dung riêng cho từng kênh. Model ảnh dùng Images Edits API với ảnh nguồn, tạo PNG vuông 1024×1024; prompt yêu cầu giữ nguyên hình dáng, tỷ lệ, màu, chất liệu, họa tiết, đường may, logo, nhãn và các chi tiết nhận diện sản phẩm, chỉ thay nền/bối cảnh/ánh sáng/cách trình bày.
-
-Mặc định UI yêu cầu 6 ảnh, nhưng API cho phép từ 1 đến 6. Ảnh hoàn tất được lưu R2 trước rồi mới xuất Drive, vì vậy lỗi Google tạm thời không làm mất kết quả AI.
+Runtime cần `OPENAI_API_KEY` và có thể chọn `OPENAI_TEXT_MODEL`. Khóa chỉ lưu root-only trên VPS. Responses API dùng JSON Schema nghiêm ngặt để viết mô tả, hashtag và bài theo kênh từ dữ liệu Sheet. Output phải khớp SKU. Automation không gọi Images API, không cần cấu hình model ảnh và không xuất ảnh mới về Drive.
 
 ## Facebook Page
 

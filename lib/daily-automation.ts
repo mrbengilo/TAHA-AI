@@ -1,6 +1,7 @@
 import { queueAutomationRun } from "./automation";
 import { getRuntimeEnv } from "./integrations/env";
 import { syncGoogleCatalog } from "./integrations/google-sync";
+import { productSources } from "./product-integrity";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -52,22 +53,24 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
   }
 
   const connections = await database.prepare(
-    `SELECT provider FROM channel_connections
+    `SELECT id, provider FROM channel_connections
      WHERE workspace_id = ? AND status = 'connected'
-       AND provider IN ('facebook', 'zalo_personal', 'website')`,
-  ).bind(TAHA_WORKSPACE_ID).all<{ provider: string }>();
+       AND provider IN ('facebook', 'zalo_personal', 'website') AND json_extract(config_json, '$.dailyAutomationEnabled') = 1`,
+  ).bind(TAHA_WORKSPACE_ID).all<{ id: string; provider: string }>();
   const connected = new Set((connections.results ?? []).map((row) => row.provider));
   const targets = TARGETS.filter((provider) => connected.has(provider)) as Target[];
   if (!targets.length) return { queued: false, day, reason: "no_publish_channels" };
+  if (targets.some((provider) => connections.results?.filter((row) => row.provider === provider).length !== 1)) return { queued: false, day, reason: "ambiguous_publish_channels" };
+  const connectionIds = Object.fromEntries((connections.results ?? []).map((row) => [row.provider, row.id]));
 
-  const product = await database.prepare(
+  const candidates = await database.prepare(
     `SELECT p.id, p.base_sku
      FROM products p
      WHERE p.workspace_id = ? AND p.deleted_at IS NULL AND p.status = 'active'
        AND (SELECT COUNT(DISTINCT m.id)
             FROM product_media pm JOIN media_assets m ON m.id = pm.media_id AND m.workspace_id = pm.workspace_id
             WHERE pm.workspace_id = p.workspace_id AND pm.product_id = p.id
-              AND m.media_type = 'image' AND m.origin = 'source' AND m.status = 'ready') >= 2
+              AND m.media_type = 'image' AND m.origin = 'source' AND m.status = 'ready') >= 1
        AND NOT EXISTS (
          SELECT 1 FROM automation_runs active
          WHERE active.workspace_id = p.workspace_id AND active.product_id = p.id
@@ -77,14 +80,20 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
        SELECT MAX(done.created_at) FROM automation_runs done
        WHERE done.workspace_id = p.workspace_id AND done.product_id = p.id AND done.status = 'completed'
      ), 0) ASC, p.updated_at ASC, p.base_sku ASC
-     LIMIT 1`,
-  ).bind(TAHA_WORKSPACE_ID).first<{ id: string; base_sku: string }>();
+     LIMIT 100`,
+  ).bind(TAHA_WORKSPACE_ID).all<{ id: string; base_sku: string }>();
+  let product: { id: string; base_sku: string } | null = null;
+  for (const candidate of candidates.results ?? []) {
+    try { await productSources(candidate.id); product = candidate; break; }
+    catch (error) { if (!(error instanceof Error) || !["PRODUCT_SOURCE_CHANGED", "PRODUCT_SKU_FOLDER_MISMATCH", "SKU_SOURCE_IMAGES_REQUIRED", "PRODUCT_NOT_ACTIVE"].includes(error.message)) throw error; }
+  }
   if (!product) return { queued: false, day, reason: "no_ready_product" };
 
   const queued = await queueAutomationRun({
     productId: product.id,
-    imageCount: 6,
+    imageCount: 0,
     targetProviders: targets,
+    connectionIds,
     idempotencyKey: `daily:${day}:${product.id}`,
   }, "daily-automation");
   return { queued: true, day, productId: product.id, sku: product.base_sku, run: queued.run };

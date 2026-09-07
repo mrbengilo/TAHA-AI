@@ -129,9 +129,9 @@ export function ProductsView({ products }: { products: ProductRow[] }) {
                       <td><span className={`ui-status ${statusTone(product.status)}`}>{statusLabels[product.status] || product.status}</span></td>
                       <td>
                         <div className="ui-table-actions">
-                          <Link href="/channels/google_sheets">Xem</Link>
-                          <Link href="/automation">Tạo AI</Link>
-                          <Link href="/automation">Đăng sản phẩm</Link>
+                          <Link href={`/products/${encodeURIComponent(product.id)}`}>Mở thư mục SKU</Link>
+                          <Link href={`/products/${encodeURIComponent(product.id)}`}>Xem bài viết</Link>
+                          <Link href={`/products/${encodeURIComponent(product.id)}`}>Tự viết và lên lịch</Link>
                         </div>
                       </td>
                     </tr>
@@ -156,8 +156,8 @@ export function ProductsView({ products }: { products: ProductRow[] }) {
                     <span><b>Hình ảnh</b><small>{imageMissing ? "Thiếu ảnh" : "Sẵn sàng"}</small></span>
                   </div>
                   <div className="ui-inline-actions">
-                    <Link className="ui-button" href="/automation">Tạo AI</Link>
-                    <Link className="ui-button is-primary" href="/automation">Đăng sản phẩm</Link>
+                    <Link className="ui-button" href={`/products/${encodeURIComponent(product.id)}`}>Xem bài viết</Link>
+                    <Link className="ui-button is-primary" href={`/products/${encodeURIComponent(product.id)}`}>Tự viết và lên lịch</Link>
                   </div>
                 </article>
               );

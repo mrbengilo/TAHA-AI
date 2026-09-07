@@ -23,6 +23,7 @@ type ChannelSummary = {
   actions?: string[];
 };
 type ChannelMedia = {
+  altText?: string | null;
   id: string;
   mediaType: "image" | "video";
   mimeType: string | null;
@@ -90,19 +91,9 @@ function contentTypeFor(provider: ChannelId) {
 }
 
 function publishLabel(provider: ChannelId) {
-  if (provider === "zalo_personal") return "Chuẩn bị đăng Zalo";
-  if (provider === "website") return "Gửi sang website";
-  return "Đăng lên Facebook";
-}
-
-function occurrenceAt(value: number | string) {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString();
-}
-
-function deterministicPublishKey(provider: ChannelId, connectionId: string, draft: ChannelDraft, mediaIds: string[]) {
-  const parts = [provider, connectionId, draft.id, occurrenceAt(draft.updatedAt), ...mediaIds.toSorted()];
-  return `channel-publish-v1:${parts.map((part) => encodeURIComponent(part)).join(":")}`;
+  if (provider === "zalo_personal") return "Lên lịch chuẩn bị Zalo";
+  if (provider === "website") return "Lên lịch gửi website";
+  return "Lên lịch Facebook";
 }
 
 export function ChannelWorkspace({
@@ -118,7 +109,6 @@ export function ChannelWorkspace({
   const [detail, setDetail] = useState<ChannelDetail | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? (provider === "google_drive" ? "media" : "overview"));
   const [selectedConnectionId, setSelectedConnectionId] = useState("");
-  const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
   const [sourceMedia, setSourceMedia] = useState<ChannelMedia[]>([]);
   const [selectedSourceMediaIds, setSelectedSourceMediaIds] = useState<string[]>([]);
   const [sourceLoading, setSourceLoading] = useState(false);
@@ -352,29 +342,7 @@ export function ChannelWorkspace({
       : provider === "zalo_personal"
         ? "/api/publish/zalo-personal/prepare"
         : "/api/publish/website";
-    const sortedMediaIds = selectedMediaIds.toSorted();
-    const idempotencyKey = deterministicPublishKey(provider, connectionId, draft, sortedMediaIds);
-    const message = [draft.title, draft.body, draft.hashtags.map((tag) => `#${tag}`).join(" ")].filter(Boolean).join("\n\n");
-    const requestBody = provider === "website"
-      ? {
-          connectionId,
-          payload: {
-            provider,
-            contentType: draft.contentType,
-            title: draft.title || draft.productName,
-            message,
-            body: draft.body,
-            hashtags: draft.hashtags,
-            mediaIds: sortedMediaIds,
-            productId: draft.productId,
-            draftId: draft.id,
-            platformData: {},
-            publishOptions: {},
-            occurrenceAt: occurrenceAt(draft.updatedAt),
-          },
-          idempotencyKey,
-        }
-      : { connectionId, message, mediaIds: sortedMediaIds, idempotencyKey };
+    const requestBody = { connectionId, draftId: draft.id };
     setBusy(`publish:${draft.id}`);
     setNotice(null);
     try {
@@ -386,8 +354,8 @@ export function ChannelWorkspace({
       const payload = await response.json() as ApiPayload<unknown>;
       if (!response.ok) throw new Error(payload.error?.message || "Kênh chưa nhận được nội dung.");
       const successText = provider === "zalo_personal"
-        ? "Bài Zalo đã được chuẩn bị. Hãy mở mục lịch sử để xác nhận sau khi đăng thủ công."
-        : "Nội dung đã được gửi sang kênh và lưu trong lịch sử.";
+        ? "Đã lên lịch chuẩn bị bài Zalo. Khi đến hạn, tác vụ hỗ trợ sẽ xuất hiện trong lịch sử để bạn đăng thủ công."
+        : "Đã ghi nhận lịch đăng bằng ảnh và nội dung của đúng SKU. Xem thư mục sản phẩm để sửa hoặc chặn.";
       setNotice({ tone: "success", text: successText });
       setActiveTab("activity");
       await loadChannel(true);
@@ -398,9 +366,7 @@ export function ChannelWorkspace({
     }
   }
 
-  function toggleMedia(id: string) {
-    setSelectedMediaIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  }
+
 
   function toggleSourceMedia(id: string) {
     if (selectedSourceMediaIds.includes(id)) {
@@ -548,13 +514,13 @@ export function ChannelWorkspace({
                       <div className="ch-draft-top"><span className={`ch-content-status is-${draft.status}`}>{contentStatusLabel(draft.status)}</span><time>{formatDate(draft.updatedAt)}</time></div>
                       <h3>{draft.title || draft.productName}</h3><small>{draft.productName}</small><p>{draft.body}</p>
                       {draft.hashtags.length > 0 ? <div className="ch-hashtags">{draft.hashtags.map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
-                      <div className="ch-draft-actions"><span>{selectedMediaIds.length} tệp đang chọn</span>{canPublish ? <button className="ch-primary-button" type="button" disabled={busy === `publish:${draft.id}` || !connected} onClick={() => void publishDraft(draft)}>{busy === `publish:${draft.id}` ? "Đang gửi…" : publishLabel(provider)}</button> : <span className="ch-muted-action">{definition.group === "source" ? "Bản nội dung tham chiếu của nguồn dữ liệu" : "Lưu nội dung trước khi bật API listing"}</span>}</div>
+                      <div className="ch-draft-actions"><Link href={`/products/${encodeURIComponent(draft.productId)}`}>Xem/sửa trong thư mục SKU</Link>{canPublish && draft.status === "approved" ? <button className="ch-primary-button" type="button" aria-busy={busy === `publish:${draft.id}`} disabled={!!busy || !connected} onClick={() => void publishDraft(draft)}>{busy === `publish:${draft.id}` ? "Đang lên lịch…" : publishLabel(provider)}</button> : <span className="ch-muted-action">{draft.status === "rejected" ? "Admin đã chặn bài này" : "Bản nháp đã lưu; xác nhận SKU để tạo bài tự động"}</span>}</div>
                     </article>
                   ))}
                 </div>
               )}
             </div>
-            <aside className="ch-selection-panel"><span className="ch-eyebrow">ẢNH ĐÍNH KÈM</span><h3>{selectedMediaIds.length} tệp đã chọn</h3><p>Chọn ảnh trong mục Hình ảnh, sau đó quay lại đây để đăng cùng nội dung.</p><button type="button" onClick={() => setActiveTab("media")}>Chọn hình ảnh →</button></aside>
+            <aside className="ch-selection-panel"><span className="ch-eyebrow">ẢNH ĐÍNH KÈM</span><h3>Ảnh theo đúng SKU</h3><p>Bài viết sử dụng ảnh Drive đã gắn và đối chiếu với SKU của bài. Xem bộ ảnh và lịch trong thư mục sản phẩm.</p><Link href="/products">Mở thư mục sản phẩm →</Link></aside>
           </div>
         ) : null}
 
@@ -609,10 +575,8 @@ export function ChannelWorkspace({
             ) : (
               <div className="ch-media-grid">
                 {media.map((item) => {
-                  const selected = selectedMediaIds.includes(item.id);
                   return (
-                    <article className={selected ? "is-selected" : ""} key={item.id}>
-                      <button type="button" className="ch-media-select" onClick={() => toggleMedia(item.id)} aria-pressed={selected} aria-label={`${selected ? "Bỏ chọn" : "Chọn"} ${item.filename}`}><span>{selected ? "✓" : "+"}</span></button>
+                    <article key={item.id}>
                       {item.mediaType === "image"
                         ? <img className="ch-media-preview" src={item.previewUrl} alt={item.altText || item.filename} loading="lazy" />
                         : <div className={`ch-media-placeholder is-${item.mediaType}`}><span>VIDEO</span></div>}

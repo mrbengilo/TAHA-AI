@@ -44,9 +44,9 @@ export type ChannelContent = {
 };
 
 export type GeneratedProductContent = {
+  sku: string;
   productDescription: string;
   hashtags: string[];
-  imageLayouts: [string, string, string, string, string, string];
   channels: Record<string, ChannelContent>;
 };
 
@@ -105,25 +105,20 @@ const channelSchema = {
   },
 } as const;
 
-function productContentJsonSchemaFor(targetProviders: string[]) {
+function productContentJsonSchemaFor(targetProviders: string[], sku?: string) {
   const channelProperties = Object.fromEntries(targetProviders.map((provider) => [provider, channelSchema]));
   return {
   type: "object",
   additionalProperties: false,
-  required: ["productDescription", "hashtags", "imageLayouts", "channels"],
+  required: ["sku", "productDescription", "hashtags", "channels"],
   properties: {
+    sku: { type: "string", ...(sku ? { enum: [sku] } : { minLength: 1, maxLength: 128 }) },
     productDescription: { type: "string", minLength: 1, maxLength: 8_000 },
     hashtags: {
       type: "array",
       minItems: 1,
       maxItems: 20,
       items: { type: "string", minLength: 2, maxLength: 80, pattern: "^#[^\\s#]+$" },
-    },
-    imageLayouts: {
-      type: "array",
-      minItems: 6,
-      maxItems: 6,
-      items: { type: "string", minLength: 10, maxLength: 500 },
     },
     channels: {
       type: "object",
@@ -292,15 +287,13 @@ function validatedChannel(value: unknown): value is ChannelContent {
     && validatedHashtags(value.hashtags, 15);
 }
 
-function validateGeneratedProductContent(value: unknown, targetProviders: string[]): GeneratedProductContent {
+function validateGeneratedProductContent(value: unknown, targetProviders: string[], sku: string): GeneratedProductContent {
   const channels = isRecord(value) && isRecord(value.channels) ? value.channels : null;
   const channelKeys = channels ? Object.keys(channels) : [];
   if (!isRecord(value)
+    || value.sku !== sku
     || !validatedString(value.productDescription, 8_000)
     || !validatedHashtags(value.hashtags, 20)
-    || !Array.isArray(value.imageLayouts)
-    || value.imageLayouts.length !== 6
-    || !value.imageLayouts.every((item) => typeof item === "string" && item.trim().length >= 10 && item.length <= 500)
     || !channels
     || channelKeys.length !== targetProviders.length
     || !targetProviders.every((key) => validatedChannel(channels[key]))) {
@@ -317,7 +310,7 @@ function contentInstructions(targetProviders: string[]) {
     "Tạo nội dung riêng phù hợp cho Facebook, Zalo cá nhân, website, TikTok Shop và Shopee.",
     `Chỉ tạo nội dung cho các kênh trong danh sách JSON này: ${JSON.stringify(targetProviders)}. Giữ nguyên chính xác tên khóa kênh trong kết quả.`,
     "Hashtag phải bắt đầu bằng #, không có khoảng trắng và không lặp.",
-    "Tạo đúng sáu mô tả bố cục ảnh vuông khác nhau. Mỗi bố cục chỉ thay bối cảnh, nền, ánh sáng và cách sắp đặt; không thay đổi sản phẩm.",
+    "Tự chọn hashtag liên quan đến tên, SKU, thương hiệu và danh mục sản phẩm; không khẳng định hashtag đang thịnh hành khi không có dữ liệu. Giữ nguyên mã SKU trong bài viết. Chỉ viết nội dung, dùng ảnh có sẵn từ Google Drive.",
   ].join("\n");
 }
 
@@ -353,7 +346,7 @@ export async function generateProductContent(
           type: "json_schema",
           name: "taha_product_content",
           strict: true,
-          schema: productContentJsonSchemaFor(targetProviders),
+          schema: productContentJsonSchemaFor(targetProviders, product.sku),
         },
       },
     }),
@@ -366,7 +359,7 @@ export async function generateProductContent(
   } catch {
     throw new OpenAiClientError("OPENAI_RESPONSE_INVALID");
   }
-  const content = validateGeneratedProductContent(parsed, targetProviders);
+  const content = validateGeneratedProductContent(parsed, targetProviders, product.sku);
   const returnedModel = typeof root.model === "string" && root.model.trim() && root.model.length <= 200
     ? root.model
     : requestedModel;

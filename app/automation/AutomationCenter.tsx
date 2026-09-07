@@ -60,7 +60,7 @@ export default function AutomationCenter() {
   const [products, setProducts] = useState<Product[]>([]);
   const [runs, setRuns] = useState<AutomationRun[]>([]);
   const [selectedProductId, setSelectedProductId] = useState("");
-  const [targets, setTargets] = useState<string[]>(providerOptions.map((item) => item.id));
+  const [targets, setTargets] = useState<string[]>(["facebook"]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -97,7 +97,8 @@ export default function AutomationCenter() {
       });
       setProducts(normalizedProducts);
       setRuns(runRows as AutomationRun[]);
-      setSelectedProductId((current) => current || normalizedProducts[0]?.id || "");
+      const requested = new URLSearchParams(window.location.search).get("productId");
+      setSelectedProductId((current) => current || (normalizedProducts.some((p) => p.id === requested) ? requested! : normalizedProducts[0]?.id) || "");
       setError("");
     } catch (loadError) {
       if (!quiet) setError(loadError instanceof Error ? loadError.message : "Không thể tải dữ liệu AI.");
@@ -143,9 +144,9 @@ export default function AutomationCenter() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             productId: selectedProductId,
-            imageCount: 6,
+            imageCount: 0,
             targetProviders: targets,
-            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:ai-v1`,
+            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:drive-only-v2`,
           }),
         });
         const run = payload.data?.run as AutomationRun | undefined;
@@ -248,7 +249,7 @@ export default function AutomationCenter() {
         <div>
           <span className="automation-eyebrow">TRUNG TÂM NỘI DUNG TỰ ĐỘNG</span>
           <h1 id="automation-title">Tạo bộ nội dung sản phẩm bằng AI</h1>
-          <p>Đối chiếu SKU từ Google Sheets với ảnh gốc trên Drive, tạo 6 bố cục, nội dung riêng và lịch đăng cho từng kênh.</p>
+          <p>Xác nhận một lần để tự lấy ảnh đúng SKU từ Drive, viết bài và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
         </div>
         <button className="automation-refresh" type="button" onClick={() => void refresh()} disabled={loading || isPending}>↻ Làm mới</button>
       </div>
@@ -294,13 +295,14 @@ export default function AutomationCenter() {
           </div>
 
           <div className="automation-output-preview">
-            <div><b>6</b><span>ảnh bố cục mới</span></div>
+            <div><b>Drive</b><span>ảnh gốc đúng SKU</span></div>
             <div><b>{targets.length}</b><span>bộ nội dung</span></div>
             <div><b>1</b><span>lịch tự động / kênh</span></div>
           </div>
           <button
             className="automation-run-button"
             type="button"
+            aria-busy={isPending}
             onClick={queueRun}
             disabled={!selectedProductId || targets.length === 0 || selectedHasActiveRun || loading || isPending}
           >
@@ -308,17 +310,17 @@ export default function AutomationCenter() {
               ? "Đang xử lý…"
               : selectedHasActiveRun
                 ? "SKU này đang được xử lý"
-                : "✦ Tạo 6 ảnh và nội dung tự động"}
+                : "Xác nhận · Tự viết bài và lên lịch"}
           </button>
-          <p className="automation-safety">AI giữ nguyên nhận diện sản phẩm; ảnh và nội dung được lưu theo SKU. Zalo cá nhân luôn cần bạn xác nhận đăng.</p>
+          <p className="automation-safety">Ảnh Drive và nội dung được lưu chung trong thư mục sản phẩm theo SKU. Zalo cá nhân luôn cần bạn xác nhận đăng.</p>
         </section>
 
         <aside className="automation-card automation-flow">
           <div className="automation-card-title"><div><span>✓</span><h2>Quy trình hệ thống</h2></div></div>
           <ol>
             <li><i>1</i><div><strong>Đọc Google Sheets</strong><span>Tên, SKU, mô tả, giá và tồn kho</span></div></li>
-            <li><i>2</i><div><strong>Ghép ảnh Google Drive</strong><span>Thư mục hoặc tên file chứa đúng SKU</span></div></li>
-            <li><i>3</i><div><strong>Tạo 6 bố cục ảnh</strong><span>Lưu R2 và ghi trả về thư mục Drive gốc</span></div></li>
+            <li><i>2</i><div><strong>Ghép ảnh Google Drive</strong><span>Thư mục sản phẩm khớp chính xác SKU</span></div></li>
+            <li><i>3</i><div><strong>Kiểm tra ảnh đúng SKU</strong><span>Dùng ảnh có sẵn trong thư mục sản phẩm</span></div></li>
             <li><i>4</i><div><strong>Viết nội dung đa kênh</strong><span>Bài viết, mô tả và hashtag tiếng Việt</span></div></li>
             <li><i>5</i><div><strong>Lên lịch và xuất bản</strong><span>Facebook, Zalo, Website; sàn dùng nút đăng</span></div></li>
           </ol>
@@ -351,14 +353,14 @@ export default function AutomationCenter() {
         {runs.length ? <div className="automation-run-list">
           {runs.map((run) => {
             const product = products.find((item) => item.id === run.productId);
-            const progress = Math.round((run.completedImageCount / Math.max(1, run.requestedImageCount)) * 100);
+            const progress = run.status === "completed" ? 100 : run.status === "processing" ? 50 : 0;
             const active = run.status === "queued" || run.status === "processing";
             return (
               <article key={run.id}>
                 <div className={`automation-run-status is-${run.status}`}><i>{run.status === "completed" ? "✓" : active ? "✦" : "!"}</i></div>
                 <div className="automation-run-info">
                   <div><strong>{product?.sku ?? "SKU"} · {product?.name ?? "Sản phẩm"}</strong><span>{formatDate(run.createdAt)}</span></div>
-                  <p>{statusLabels[run.status] ?? run.status} · {run.completedImageCount}/{run.requestedImageCount} ảnh</p>
+                  <p>{statusLabels[run.status] ?? run.status} · {run.targetProviders.length} kênh · ảnh gốc Drive</p>
                   <div className="automation-progress"><i style={{ width: `${progress}%` }} /></div>
                   {run.errorCode ? <small>{run.errorMessage || run.errorCode}</small> : null}
                 </div>
@@ -373,7 +375,7 @@ export default function AutomationCenter() {
                       <button type="button" onClick={() => publishCommerce("shopee", run.productId)} disabled={isPending}>Đăng Shopee</button>
                     </>
                   ) : null}
-                  <Link href={`/channels/google_drive`}>Xem media</Link>
+                  <Link href={`/products/${encodeURIComponent(run.productId)}`}>Xem bài viết và lịch đăng</Link>
                 </div>
               </article>
             );

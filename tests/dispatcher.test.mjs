@@ -62,6 +62,13 @@ class FakeDispatcherD1 {
           return { results: rows };
         },
         first: async () => {
+          if (sql.includes("SET lease_expires_at = ?")) {
+            const [expires, now, id, workspaceId, workerId] = values;
+            const job = this.jobs.get(id);
+            if (!job || job.workspace_id !== workspaceId || job.status !== "publishing" || job.lease_owner !== workerId || job.lease_expires_at <= now) return null;
+            job.lease_expires_at = expires;
+            return { id };
+          }
           if (sql.includes("attempt_count = attempt_count + 1")) {
             const [workerId, leaseExpiresAt, startedAt, updatedAt, id, workspaceId, availableAt] = values;
             const job = this.jobs.get(id);
@@ -327,6 +334,8 @@ async function loadDispatcher() {
     crypto: webcrypto,
     console,
     require(specifier) {
+      if (specifier === "./integrations/google-sync") return { syncGoogleCatalog: async () => {} };
+      if (specifier === "./product-integrity") return { productSourceConnection: async () => "google-test", assertProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };
       if (specifier === "./integrations/env") return { getRuntimeEnv: () => ({}) };
       if (specifier === "./publishing") {
         return {

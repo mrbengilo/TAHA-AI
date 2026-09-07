@@ -29,6 +29,7 @@ type ScheduleRow = {
   content_type: string;
   title: string | null;
   body: string;
+  version: number;
   hashtags_json: string | null;
   platform_data_json: string | null;
   provider: string;
@@ -247,6 +248,9 @@ async function enqueueOccurrence(
     : "active";
   const dedupeKey = `schedule:${row.id}:${occurrenceAt}`;
   const payload = {
+    draftVersion: row.version,
+    productId: row.product_id,
+    draftId: row.draft_id,
     scheduleId: row.id,
     provider: row.provider,
     contentType: row.content_type,
@@ -265,7 +269,10 @@ async function enqueueOccurrence(
      (id, workspace_id, schedule_id, connection_id, product_id, draft_id, job_kind, dedupe_key,
       status, scheduled_for, available_at, payload_snapshot_json, attempt_count, max_attempts,
       provider_response_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 5, '{}', ?, ?)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 5, '{}', ?, ?
+     WHERE EXISTS (SELECT 1 FROM schedules s JOIN content_drafts d ON d.id = s.draft_id AND d.workspace_id = s.workspace_id
+       WHERE s.id = ? AND s.status = 'active' AND d.status = 'approved' AND d.version = ?
+         AND COALESCE(s.next_run_at, s.run_at) = ?)
      ON CONFLICT(dedupe_key) DO NOTHING`,
   ).bind(
     crypto.randomUUID(),
@@ -282,6 +289,7 @@ async function enqueueOccurrence(
     JSON.stringify(payload),
     now,
     now,
+    row.id, row.version, occurrenceAt,
   );
 
   const updateSql = row.next_run_at == null
@@ -289,13 +297,14 @@ async function enqueueOccurrence(
        WHERE id = ? AND status = 'active' AND next_run_at IS NULL AND run_at = ?`
     : `UPDATE schedules SET status = ?, next_run_at = ?, last_run_at = ?, updated_at = ?
        WHERE id = ? AND status = 'active' AND next_run_at = ?`;
-  const update = database.prepare(updateSql).bind(
+  const update = database.prepare(updateSql + " AND EXISTS (SELECT 1 FROM publish_jobs j WHERE j.dedupe_key = ?)").bind(
     scheduleStatus,
     nextRunAt,
     occurrenceAt,
     now,
     row.id,
     occurrenceAt,
+    dedupeKey,
   );
 
   const results = await database.batch([insert, update]);
@@ -314,12 +323,12 @@ export async function runSchedulerTick(options: SchedulerTickOptions = {}): Prom
     `SELECT s.id, s.workspace_id, s.draft_id, s.connection_id, s.schedule_kind, s.run_at,
             s.local_time, s.weekdays_json, s.timezone, s.next_run_at, s.last_run_at, s.ends_at,
             s.execution_mode, s.publish_options_json, d.product_id, d.content_type, d.title, d.body,
-            d.hashtags_json, d.platform_data_json, c.provider, c.publish_mode,
+            d.hashtags_json, d.platform_data_json, d.version, c.provider, c.publish_mode,
             c.status AS connection_status
      FROM schedules s
      JOIN content_drafts d ON d.id = s.draft_id AND d.workspace_id = s.workspace_id
      JOIN channel_connections c ON c.id = s.connection_id AND c.workspace_id = s.workspace_id
-     WHERE s.status = 'active' AND (s.next_run_at IS NULL OR s.next_run_at <= ?)
+     WHERE s.status = 'active' AND d.status = 'approved' AND (s.next_run_at IS NULL OR s.next_run_at <= ?)
      ORDER BY CASE WHEN s.next_run_at IS NULL THEN 1 ELSE 0 END, s.next_run_at ASC, s.created_at ASC
      LIMIT ?`,
   ).bind(now, limit).all<ScheduleRow>();

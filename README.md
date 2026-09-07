@@ -2,17 +2,7 @@
 
 TAHA AI là trung tâm vận hành nội dung và sản phẩm đa kênh dành cho một doanh nghiệp:
 
-```text
-Google Drive + Google Sheets
-              ↓
-    Đối chiếu sản phẩm theo SKU
-              ↓
- OpenAI viết nội dung + tạo tối đa 6 ảnh
-              ↓
-  Bản nháp · duyệt · lịch · đăng theo kênh
-              ↓
-Facebook · Zalo cá nhân · Website · Shopee · TikTok Shop
-```
+Một lần xác nhận → đối chiếu Sheet và thư mục Drive theo SKU → AI viết bài, mô tả, hashtag → tự lên lịch → tự đăng Facebook. Admin có thể sửa hoặc chặn trước khi bắt đầu gửi.
 
 ## Trạng thái MVP
 
@@ -24,9 +14,9 @@ Facebook · Zalo cá nhân · Website · Shopee · TikTok Shop
 - Mỗi kho kênh cho phép xem ảnh/video, bài viết, hàng đợi và sản phẩm; tạo bản nháp, tải media vào R2 và dùng lại ảnh Drive ở nhiều kênh mà không nhân bản tệp.
 - OAuth có `state` dùng một lần; token kết nối được mã hóa AES-GCM trước khi lưu.
 - Đồng bộ Google Sheet thành sản phẩm/biến thể và gắn ảnh theo thư mục SKU trên Google Drive.
-- Trung tâm **AI Automation** tạo nội dung có cấu trúc riêng cho từng kênh, mô tả sản phẩm, hashtag và từ 1 đến 6 biến thể ảnh vuông. Mặc định hệ thống tạo đủ 6 ảnh bằng OpenAI Images API, chỉ thay bố cục/nền/ánh sáng và yêu cầu giữ nguyên nhận diện sản phẩm.
-- Ảnh AI được lưu an toàn vào R2 trước, gắn với sản phẩm và từng kênh, sau đó tải idempotent về đúng thư mục SKU trên Google Drive. Nếu Drive tạm lỗi hoặc thiếu quyền ghi, bản R2 vẫn được giữ và lần xuất Drive được ghi nhận là đang chờ.
-- Worker automation có lease, retry giới hạn, chống chạy trùng, theo dõi từng bước nội dung/ảnh/hoàn tất và tạo bản nháp đã duyệt cho các kênh được chọn.
+- Trung tâm **AI Automation** tự viết nội dung, mô tả sản phẩm và hashtag từ dữ liệu Sheet; sử dụng từ 1 đến 10 ảnh gốc đúng thư mục `SKU <SKU>` trên Drive. Không tạo ảnh mới.
+- Trước khi viết và đăng, hệ thống đồng bộ lại nguồn, đối chiếu SKU, thư mục, ảnh và dấu vân tay thông tin sản phẩm. Sai nguồn hoặc dữ liệu đã đổi sẽ chặn đăng.
+- Worker automation có lease, retry giới hạn, chống chạy trùng, theo dõi từng bước nội dung/hoàn tất và tạo bản nháp đã duyệt cho các kênh được chọn.
 - Đăng bài Facebook Page bằng API chính thức, gồm bài chữ và tối đa 10 ảnh.
 - Gửi nội dung sang website bằng webhook ký HMAC.
 - Zalo cá nhân ở chế độ hỗ trợ: chuẩn bị caption, tải ảnh, chờ người dùng đăng và xác nhận.
@@ -47,13 +37,15 @@ Facebook · Zalo cá nhân · Website · Shopee · TikTok Shop
 - `/channels/:provider` — ảnh, bài viết, hàng đợi và sản phẩm của một kênh. Giá trị `provider` hợp lệ: `google_drive`, `google_sheets`, `facebook`, `zalo_personal`, `tiktok_shop`, `shopee`, `website`.
 - `/connections` — trạng thái kết nối và thao tác OAuth.
 - `/connections/guide` — hướng dẫn kết nối từng nền tảng theo từng bước.
-- `/automation` — chọn sản phẩm/ảnh nguồn, kênh đích, tạo tối đa 6 ảnh, theo dõi tiến độ và bấm đăng listing khi sàn đã đủ điều kiện.
+- `/automation` — xác nhận SKU và kênh; theo dõi bước viết bài, hoàn tất và lịch đăng.
+- `/products/:id` — thư mục riêng của SKU, tách ảnh gốc, mô tả Sheet, bài AI, lịch đăng và kết quả; admin sửa/chặn tại đây.
+- `/content` — danh sách thư mục nội dung theo SKU.
 
 ## Mức tự động hiện tại
 
 | Kênh | Trạng thái thực tế |
 |---|---|
-| Google Drive và Google Sheets | Đã có OAuth, đồng bộ Sheet, đối chiếu ảnh theo SKU và lưu ảnh generated về Drive. Hai kho hiển thị riêng nhưng dùng chung kết nối Google; tài khoản cũ cấp `drive.readonly` phải kết nối lại với quyền `drive`. |
+| Google Drive và Google Sheets | OAuth và đồng bộ Sheet; chỉ lấy ảnh gốc trong thư mục chuẩn `SKU <SKU>`. Không yêu cầu ghi ảnh cho automation. |
 | Facebook Page | Đã có OAuth, đăng bài chữ/ảnh bằng API chính thức, lưu Post ID và dispatcher tự xử lý job đến hạn. |
 | Zalo cá nhân | Chỉ hỗ trợ chuẩn bị caption/ảnh và chờ chủ tài khoản xác nhận đã đăng. Không tự động điều khiển Zalo Web, cookie hay phiên QR. |
 | Website | Đã gửi được payload qua webhook ký HMAC và dispatcher tự xử lý job đến hạn. Website nhận phải triển khai endpoint tương thích. |
@@ -71,7 +63,7 @@ pnpm run dev
 pnpm run build
 ```
 
-Mở `http://localhost:3000` và chọn **Kết nối kênh**.
+Mở địa chỉ Vite in ra khi chạy `pnpm dev` và chọn **Kết nối kênh**.
 
 ## Cấu hình an toàn
 
@@ -89,20 +81,20 @@ Không nhập access token cố định vào source code. Access/refresh token p
 - Google Sheet dùng hàng đầu tiên làm tiêu đề.
 - Cột tối thiểu: `SKU`, `Tên sản phẩm`, `Giá bán`, `Tồn kho`, `Trạng thái`.
 - Cột nên có thêm: `Thương hiệu`, `Danh mục`, `Mô tả`, `Giá sale`.
-- Trong thư mục Drive nguồn, mỗi sản phẩm dùng thư mục chuẩn `SKU <mã SKU>`, ví dụ Sheet `PH0006` ↔ Drive `SKU PH0006`. Hệ thống vẫn nhận thư mục cũ chỉ có `PH0006` để tương thích ngược.
-- Nếu ảnh nằm trực tiếp ở thư mục gốc, tên file phải chứa SKU với ranh giới rõ ràng, ví dụ `NIKE-PG41-WHITE-01.jpg`. Thư mục SKU được ưu tiên khi cả hai cách cùng tồn tại.
-- Tài khoản Google phải có quyền chỉnh sửa thư mục đích. Cấu hình hiện dùng `https://www.googleapis.com/auth/drive` và `spreadsheets.readonly`; sau khi đổi từ quyền chỉ đọc phải ngắt/kết nối lại để Google cấp consent mới.
+- Trong thư mục Drive nguồn, mỗi sản phẩm phải dùng đúng một thư mục `SKU <mã SKU>`, ví dụ Sheet `PH0006` ↔ Drive `SKU PH0006`.
+- Ảnh ở thư mục gốc hoặc thư mục thiếu tiền tố `SKU ` không được dùng để tự động đăng.
+- Tài khoản Google cần quyền đọc Sheet và thư mục ảnh. Quyền ghi hiện hữu chỉ phục vụ API xuất media cũ, không bắt buộc cho luồng này.
 
 Ví dụ:
 
 ```text
 /SAN-PHAM-MOI
-  /NIKE-PG41-WHITE
+  /SKU NIKE-PG41-WHITE
     01-mat-truoc.jpg
     02-goc-nghieng.jpg
 ```
 
-Mỗi sản phẩm phải có tối thiểu 2 ảnh gốc. AI dùng đồng thời 2 ảnh gốc làm tham chiếu và tạo 6 ảnh mới; bộ media chuẩn của một lượt automation là 2 ảnh gốc + 6 ảnh AI. Ảnh AI được đặt tên dạng `<SKU>-AI-01.png` đến `<SKU>-AI-06.png` và ghi trở lại đúng thư mục `SKU <SKU>`. Việc tải lại cùng media là idempotent nhờ app property trên Drive, nên không tạo bản sao ngoài ý muốn.
+Mỗi sản phẩm cần ít nhất một ảnh gốc. Một bài Facebook dùng tối đa 10 ảnh đã kiểm tra của cùng SKU. Xác nhận tự tạo draft đã sẵn sàng đăng và lịch, không có bước duyệt bắt buộc thứ hai. Admin có thể sửa nội dung/hashtag hoặc chọn **Không cho đăng** khi bài còn chờ.
 
 ## Nguyên tắc Zalo cá nhân
 

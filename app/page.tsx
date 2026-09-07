@@ -167,7 +167,7 @@ export default async function Home() {
               </div>
               <div className="ui-list-row">
                 <span className="ui-list-icon"><AppIcon name="image" size={19} /></span>
-                <div><strong>Google Drive & R2</strong><p>{snapshot.readyMedia} media sẵn sàng · {snapshot.generatedImages} ảnh AI</p></div>
+                <div><strong>Ảnh nguồn Google Drive</strong><p>{snapshot.readyMedia} media sẵn sàng · Phân theo SKU sản phẩm</p></div>
                 <span className={`ui-status ${snapshot.readyMedia > 0 ? "is-success" : "is-warning"}`}>{snapshot.readyMedia > 0 ? "Có dữ liệu" : "Chưa có ảnh"}</span>
               </div>
             </div>

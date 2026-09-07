@@ -57,14 +57,15 @@ test("matches filename SKU on token boundaries and prefers the longest SKU", asy
   assert.equal(matchSkuFromFilename("TAHA-0010.jpg", skus), null);
 });
 
-test("indexes exact SKU folders plus root filenames and skips prior generated exports", async () => {
+test("indexes only canonical SKU folders and ignores root filenames, bare folders and generated exports", async () => {
   const fetchImpl = async (input) => {
     const url = new URL(String(input));
     const query = url.searchParams.get("q") ?? "";
     if (query.includes("'root' in parents")) {
       return jsonResponse({
         files: [
-          { id: "folder-a", name: "taha-001", mimeType: "application/vnd.google-apps.folder" },
+          { id: "folder-a", name: "SKU taha-001", mimeType: "application/vnd.google-apps.folder" },
+          { id: "bare-folder", name: "TAHA-001-BLACK", mimeType: "application/vnd.google-apps.folder" },
           { id: "root-a", name: "TAHA-001_side.jpg", mimeType: "image/jpeg", parents: ["root"] },
           { id: "root-black", name: "TAHA-001-BLACK_main.png", mimeType: "image/png", parents: ["root"] },
           { id: "wrong-boundary", name: "TAHA-0010.jpg", mimeType: "image/jpeg", parents: ["root"] },
@@ -85,18 +86,18 @@ test("indexes exact SKU folders plus root filenames and skips prior generated ex
   assert.equal(beige.targetFolderId, "folder-a");
   assert.equal(beige.targetKind, "sku_folder");
   assert.equal(beige.files[0].id, "folder-image");
-  assert.deepEqual([...beige.files].map((file) => file.id).sort(), ["folder-image", "root-a"]);
-  assert.equal(black.targetFolderId, "root");
-  assert.deepEqual(JSON.parse(JSON.stringify(black.files.map((file) => file.id))), ["root-black"]);
-  assert.equal(index.matchedRootFiles, 2);
-  assert.equal(index.unmatchedRootImages, 1);
+  assert.deepEqual([...beige.files].map((file) => file.id), ["folder-image"]);
+  assert.equal(black.targetFolderId, null);
+  assert.equal(black.files.length, 0);
+  assert.equal(index.matchedRootFiles, 0);
+  assert.equal(index.unmatchedRootImages, 3);
 });
 
 test("refuses duplicate normalized SKU folders instead of attaching an arbitrary folder", async () => {
   const fetchImpl = async () => jsonResponse({
     files: [
-      { id: "folder-a", name: "TAHA-001", mimeType: "application/vnd.google-apps.folder" },
-      { id: "folder-b", name: "taha‑001", mimeType: "application/vnd.google-apps.folder" },
+      { id: "folder-a", name: "SKU TAHA-001", mimeType: "application/vnd.google-apps.folder" },
+      { id: "folder-b", name: "SKU taha‑001", mimeType: "application/vnd.google-apps.folder" },
     ],
   });
   const { indexGoogleDriveAssets } = await loadGoogleDrive({ fetchImpl });
@@ -174,5 +175,5 @@ test("Google Drive import route is authenticated and delegates to the high-level
 
 test("catalog sync never detaches valid Drive media merely because a SKU exceeds the local image cap", async () => {
   const input = await readFile(new URL("../lib/integrations/google-sync.ts", import.meta.url), "utf8");
-  assert.match(input, /files\.length <= MAX_PRODUCT_SOURCE_IMAGES\s*\?\s*\(linkedAssets\.results/);
+  assert.match(input, /remoteIds\.has\(link\.external_id\)/);
 });

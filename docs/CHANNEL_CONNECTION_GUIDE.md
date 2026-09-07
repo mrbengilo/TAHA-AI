@@ -56,7 +56,7 @@ GOOGLE_DRIVE_FOLDER_ID=<ID_THU_MUC_GOC>
 
 ### 2.3. Điểm cần chủ tài khoản xác nhận
 
-- Tài khoản Google dùng để bấm **Kết nối** phải xem và chỉnh sửa được thư mục gốc/thư mục SKU, vì ảnh AI sẽ được lưu lại đúng vị trí nguồn.
+- Tài khoản Google cần quyền xem Sheet và thư mục ảnh đúng SKU; automation không ghi ảnh mới.
 - Nếu thư mục thuộc tài khoản khác hoặc Shared Drive, chủ thư mục phải cấp quyền chỉnh sửa cho tài khoản kết nối.
 - Không đặt thông tin bí mật trong tên file hoặc metadata ảnh.
 
@@ -156,7 +156,7 @@ Kết hợp với `GOOGLE_DRIVE_FOLDER_ID` và `GOOGLE_SHEET_ID` ở hai phần 
 - Trạng thái Google chuyển thành đã kết nối.
 - Đồng bộ không báo `redirect_uri_mismatch` hoặc thiếu quyền.
 - Sản phẩm từ Sheet xuất hiện và mỗi SKU nhận đúng ảnh trong thư mục Drive tương ứng.
-- Tạo thử một ảnh và xác nhận file được lưu đúng thư mục SKU; gọi lại cùng media không tạo file trùng.
+- Kiểm tra ảnh nguồn và mô tả cùng SKU trong trang thư mục sản phẩm.
 
 ### 4.6. Cấu hình OpenAI cho AI Automation
 
@@ -165,11 +165,11 @@ Khóa OpenAI chỉ lưu trong file secret root-only của VPS, không commit Git
 ```dotenv
 OPENAI_API_KEY=<SERVER_SECRET>
 OPENAI_TEXT_MODEL=gpt-5.6-luna
-OPENAI_IMAGE_MODEL=gpt-image-2
-OPENAI_IMAGE_QUALITY=medium
+
+
 ```
 
-Sau khi restart container, mở `https://tahashoes.store/automation`, chọn một SKU đã có ảnh nguồn và chạy thử `imageCount: 1`. Kiểm tra nội dung/hashtag, ảnh R2 và file Drive trước khi chạy đủ 6 ảnh. Sáu ảnh chỉ được thay bố cục, nền, ánh sáng và cách trình bày; cần kiểm tra thủ công nhận diện sản phẩm trước khi duyệt đăng.
+Sau khi restart, mở `https://tahashoes.store/automation`, chọn SKU có ảnh Drive khớp và xác nhận. Hệ thống tự viết bài/hashtag, tạo lịch và đăng khi đến hạn. Theo dõi hoặc sửa/chặn tại thư mục sản phẩm; không có bước tạo ảnh.
 
 Tài liệu chính thức: [tạo OAuth client](https://developers.google.com/workspace/guides/create-credentials), [OAuth cho web server](https://developers.google.com/identity/protocols/oauth2/web-server), [scope Google Drive](https://developers.google.com/workspace/drive/api/guides/api-specific-auth), [scope Google Sheets](https://developers.google.com/workspace/sheets/api/scopes).
 
@@ -425,7 +425,7 @@ Một nội dung sửa cho Facebook không được tự ghi đè bản Zalo/Tik
 - [ ] Email Google sẽ cấp quyền và `GOOGLE_DRIVE_FOLDER_ID`.
 - [ ] `GOOGLE_SHEET_ID`, tên tab/range và xác nhận cột SKU.
 - [ ] Google OAuth Client ID; Client Secret nhập trực tiếp vào secret manager.
-- [ ] `OPENAI_API_KEY` đã lưu root-only trên VPS, không nằm trong Git; thử một ảnh thành công trước khi chạy 6 ảnh.
+- [ ] `OPENAI_API_KEY` lưu root-only trên VPS; bài thử trả về Post ID và URL thật.
 - [ ] Meta App ID, Graph API version và xác nhận tài khoản Facebook có quyền Content trên Page; App Secret nhập trực tiếp vào secret manager.
 - [ ] Nền tảng/domain/repository của website bán hàng.
 - [ ] TikTok Shop App Key, Service ID và trạng thái app; App Secret nhập trực tiếp vào secret manager.
