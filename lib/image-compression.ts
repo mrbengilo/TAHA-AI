@@ -8,7 +8,7 @@ export const LIFESTYLE_VARIANTS = ["cycling", "running", "climbing", "stream"] a
 export const MAX_POST_IMAGES = 6;
 export const MAX_GENERATED_IMAGES = LIFESTYLE_VARIANTS.length;
 
-export function plannedGeneratedImageCount(sourceImageCount: number, requested = MAX_GENERATED_IMAGES) {
+export function plannedGeneratedImageCount(sourceImageCount: number, requested: number = MAX_GENERATED_IMAGES) {
   if (!Number.isInteger(sourceImageCount) || sourceImageCount < 1
     || !Number.isInteger(requested) || requested < 0 || requested > MAX_GENERATED_IMAGES) {
     throw new Error("IMAGE_COUNT_INVALID");
