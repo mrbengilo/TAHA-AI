@@ -1,0 +1,42 @@
+name: Resume verified SKU catalog after Google consent
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+    paths: [deploy/vps/resume-catalog.py, .github/workflows/vps-resume-catalog.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-catalog-recovery-v3
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify recovery safety contract
+        run: python3 -m unittest discover -s tests -p vps_catalog_recovery_test.py
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Resume prepare-only catalog and verify every image
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/resume-catalog.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
