@@ -1,0 +1,65 @@
+name: Verify prepared SKU catalog without publishing
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+    paths: [deploy/vps/catalog-status.py, .github/workflows/vps-catalog-review.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+  VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+  VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+  VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Wait for verified pilot and retrieve four review images
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'python3 -u - --pilot' < deploy/vps/catalog-status.py > /tmp/PH0014-review.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PH0014-generated-review
+          path: /tmp/PH0014-review.zip
+          retention-days: 7
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
+  catalog:
+    needs: pilot
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 33
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Read final catalog state
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/catalog-status.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
