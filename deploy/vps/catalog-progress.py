@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 6: paced bounded retry recovery.
+# Probe generation 7: paced bounded retry recovery.
 import base64
 import json
 from pathlib import Path
