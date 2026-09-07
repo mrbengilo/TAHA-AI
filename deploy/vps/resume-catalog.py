@@ -13,19 +13,21 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
-IMAGE = 'tahashoes-taha-ai:e2340bf0a521075945edc7d1f52283d90806ef69'
-IMAGE_ID = 'sha256:f0bd747d917a3b23d05907922adf9498646ff24b8309a1ef7730662d4b4574e8'
-REVISION = 'e2340bf0a521075945edc7d1f52283d90806ef69'
+IMAGE = 'tahashoes-taha-ai:ffc61121076d49bb6b9044940990f509af57efef'
+IMAGE_ID = 'sha256:f4410ccaf9fbc932de004a15ca5e2b017f5ba87ce772a7e3b86a2d8f0824760d'
+REVISION = 'ffc61121076d49bb6b9044940990f509af57efef'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 APPLIED = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v3-applied.json')
-REPAIR = Path('/var/lib/taha-ai/ops-recovery/catalog-recovery-v4-retries.json')
+REPAIR = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-recovery-v1-retries.json')
+REPLAN = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-replan-v1.json')
 RESOLUTION = Path('/var/lib/taha-ai/ops-recovery/catalog-conflicts-v3-resolved.json')
 PROMPT_VERSION = 'taha-lifestyle-v3'
+DRIVE_ONLY_PROMPT_VERSION = 'taha-drive-only-v2'
 WRITE_SCOPES = {'https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.file'}
-VARIANTS = {'cycling', 'running', 'climbing', 'stream'}
+VARIANTS = ('cycling', 'running', 'climbing', 'stream')
 RECOVERABLE_ERRORS = {
     'GOOGLE_WRITE_SCOPE_REQUIRED', 'CONNECTION_NOT_FOUND', 'OPENAI_RATE_LIMITED',
-    'GOOGLE_SYNC_IN_PROGRESS', 'PRODUCT_SOURCE_CHANGED',
+    'GOOGLE_SYNC_IN_PROGRESS', 'PRODUCT_SOURCE_CHANGED', 'PRODUCT_MEDIA_CAP_CHANGED',
 }
 MAX_RECOVERY_RETRIES = 3
 RECOVERY_RETRY_COOLDOWN_SECONDS = 75
@@ -80,8 +82,7 @@ def validate_run_contract(rows, expected_ids, marker_products=None):
     unexpected = [
         {'sku': row.get('base_sku'), 'status': row.get('status'), 'code': row.get('error_code')}
         for row in rows
-        if row.get('status') == 'cancelled'
-        or (row.get('status') == 'failed' and row.get('error_code') not in RECOVERABLE_ERRORS)
+        if row.get('status') == 'failed' and row.get('error_code') not in RECOVERABLE_ERRORS
     ]
     if unexpected:
         print('CATALOG_UNEXPECTED_STATES=' + json.dumps(unexpected, separators=(',', ':')), flush=True)
@@ -89,11 +90,16 @@ def validate_run_contract(rows, expected_ids, marker_products=None):
     for row in rows:
         try: content = json.loads(row['content_json'] or '{}')
         except ValueError: raise RuntimeError('CATALOG_RUN_CONTENT_INVALID') from None
-        if content.get('prepareOnly') is not True or row['requested_image_count'] != 4 \
-                or row['prompt_version'] != PROMPT_VERSION \
+        image_count = row.get('requested_image_count')
+        prompt_version = row.get('prompt_version')
+        if content.get('prepareOnly') is not True \
+                or not isinstance(image_count, int) or not 0 <= image_count <= 4 \
+                or (image_count > 0 and prompt_version != PROMPT_VERSION) \
+                or (image_count == 0 and prompt_version not in (PROMPT_VERSION, DRIVE_ONLY_PROMPT_VERSION)) \
                 or not row['request_key'].startswith('catalog:' + PROMPT_VERSION + ':') \
                 or json.loads(row['target_providers_json'] or '[]') != ['facebook'] \
-                or content.get('targetConnections') != {}:
+                or content.get('targetConnections') != {} \
+                or ('requestedImageLimit' in content and content.get('requestedImageLimit') != 4):
             raise RuntimeError('CATALOG_RUN_NOT_PREPARE_ONLY')
         if expected_products is not None and (row['id'], row['product_id'], row['base_sku']) not in expected_products:
             raise RuntimeError('CATALOG_MARKER_PRODUCT_MISMATCH')
@@ -106,7 +112,7 @@ def find_database(ids):
             db.row_factory = sqlite3.Row
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {'automation_runs', 'channel_connections', 'publish_jobs', 'schedules', 'products',
-                    'product_media', 'media_assets', 'content_drafts'}.issubset(tables): continue
+                    'product_media', 'media_assets', 'content_drafts', 'content_draft_media'}.issubset(tables): continue
             rows = [dict(row) for row in db.execute(
                 f"SELECT r.id,r.product_id,r.request_key,r.status,r.error_code,r.requested_image_count,r.prompt_version,"
                 f"r.content_json,r.target_providers_json,r.source_media_id,p.base_sku FROM automation_runs r "
@@ -146,7 +152,8 @@ def read_runs(database, ids):
     with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
         db.row_factory = sqlite3.Row
         return [dict(row) for row in db.execute(
-            f"SELECT r.id,r.product_id,p.base_sku,r.status,r.error_code,r.completed_image_count "
+            f"SELECT r.id,r.product_id,p.base_sku,r.status,r.error_code,r.requested_image_count,"
+            f"r.completed_image_count,r.output_media_ids_json "
             f"FROM automation_runs r JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
             f"WHERE r.workspace_id=? AND r.id IN ({placeholders}) ORDER BY r.created_at", [WORKSPACE, *ids])]
 
@@ -327,6 +334,115 @@ def repair_marker(catalog_ids):
     return marker
 
 
+def replace_replan(value):
+    REPLAN.parent.mkdir(parents=True, exist_ok=True)
+    temporary = REPLAN.with_name(REPLAN.name + '.tmp-' + str(os.getpid()))
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w') as output:
+        json.dump(value, output, separators=(',', ':')); output.flush(); os.fsync(output.fileno())
+    os.replace(temporary, REPLAN)
+    directory = os.open(REPLAN.parent, os.O_RDONLY)
+    try: os.fsync(directory)
+    finally: os.close(directory)
+
+
+def replan_marker(catalog_ids):
+    if not REPLAN.exists(): return None
+    if not REPLAN.is_file() or (REPLAN.stat().st_mode & 0o777) != 0o600:
+        raise RuntimeError('CATALOG_REPLAN_MARKER_INVALID')
+    try: marker = json.loads(REPLAN.read_text())
+    except ValueError: raise RuntimeError('CATALOG_REPLAN_MARKER_INVALID') from None
+    states = marker.get('states')
+    allowed = {'planned', 'cancelled', 'retried', 'completed'}
+    if marker.get('runIds') != catalog_ids or marker.get('stage') not in ('planned', 'applied') \
+            or not isinstance(states, dict) or set(states) != set(catalog_ids) \
+            or any(value not in allowed for value in states.values()) \
+            or (marker.get('stage') == 'applied' and any(value not in ('retried', 'completed') for value in states.values())):
+        raise RuntimeError('CATALOG_REPLAN_MARKER_INVALID')
+    return marker
+
+
+def assert_replan_has_no_outputs(database, rows, catalog_ids):
+    if any(row['completed_image_count'] != 0 or json.loads(row['output_media_ids_json'] or '[]') for row in rows):
+        raise RuntimeError('CATALOG_REPLAN_HAS_OUTPUTS')
+    placeholders = ','.join('?' for _ in catalog_ids)
+    creators = ['automation:' + value for value in catalog_ids]
+    with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
+        drafts = db.execute(
+            f"SELECT count(*) FROM content_drafts WHERE workspace_id=? AND "
+            f"json_extract(generation_meta_json,'$.automationRunId') IN ({placeholders})",
+            [WORKSPACE, *catalog_ids],
+        ).fetchone()[0]
+        schedules = db.execute(
+            f"SELECT count(*) FROM schedules WHERE workspace_id=? AND created_by IN ({placeholders})",
+            [WORKSPACE, *creators],
+        ).fetchone()[0]
+        jobs = db.execute(
+            f"SELECT count(*) FROM publish_jobs j JOIN schedules s ON s.id=j.schedule_id "
+            f"WHERE j.workspace_id=? AND s.created_by IN ({placeholders})",
+            [WORKSPACE, *creators],
+        ).fetchone()[0]
+    if drafts or schedules or jobs: raise RuntimeError('CATALOG_REPLAN_HAS_OUTPUTS')
+
+
+def replan_catalog_runs(secret, database, catalog_ids):
+    marker = replan_marker(catalog_ids)
+    if marker is None:
+        rows = read_runs(database, catalog_ids)
+        assert_replan_has_no_outputs(database, rows, catalog_ids)
+        marker = {'runIds': catalog_ids, 'stage': 'planned',
+                  'states': {row['id']: 'completed' if row['status'] == 'completed' else 'planned' for row in rows},
+                  'createdAt': int(time.time())}
+        replace_replan(marker)
+    states = dict(marker['states'])
+    for run_id in catalog_ids:
+        stage = states[run_id]
+        current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
+        if stage == 'completed':
+            if current['status'] != 'completed': raise RuntimeError('CATALOG_REPLAN_STATE_CHANGED')
+            continue
+        if stage == 'retried':
+            if current['status'] not in ('queued', 'processing', 'completed', 'failed') \
+                    or (current['status'] == 'failed' and current.get('error_code') not in RECOVERABLE_ERRORS):
+                raise RuntimeError('CATALOG_REPLAN_STATE_CHANGED')
+            continue
+        if stage == 'planned':
+            if current['status'] in ('queued', 'processing'):
+                api(secret, '/api/automation-runs/' + run_id + '/cancel', {})
+                current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
+            if current['status'] == 'completed':
+                states[run_id] = 'completed'
+                marker = {**marker, 'states': states, 'updatedAt': int(time.time())}
+                replace_replan(marker)
+                continue
+            if current['status'] not in ('failed', 'cancelled'):
+                raise RuntimeError('CATALOG_REPLAN_CANCEL_NOT_APPLIED')
+            states[run_id] = 'cancelled'
+            marker = {**marker, 'states': states, 'updatedAt': int(time.time())}
+            replace_replan(marker)
+            stage = 'cancelled'
+        if stage == 'cancelled':
+            current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
+            if current['status'] in ('failed', 'cancelled'):
+                response = api(secret, '/api/automation-runs/' + run_id + '/retry', {})
+                expected = response.get('requestedImageCount')
+                if not isinstance(expected, int) or not 0 <= expected <= 4:
+                    raise RuntimeError('CATALOG_REPLAN_COUNT_INVALID')
+                current = {row['id']: row for row in read_runs(database, catalog_ids)}[run_id]
+                if current['requested_image_count'] != expected:
+                    raise RuntimeError('CATALOG_REPLAN_COUNT_INVALID')
+            if current['status'] not in ('queued', 'processing', 'completed'):
+                raise RuntimeError('CATALOG_REPLAN_RETRY_NOT_APPLIED')
+            states[run_id] = 'retried'
+            marker = {**marker, 'states': states, 'updatedAt': int(time.time())}
+            replace_replan(marker)
+    marker = {**marker, 'stage': 'applied', 'states': states, 'appliedAt': int(time.time())}
+    replace_replan(marker)
+    counts = {row['base_sku']: row['requested_image_count'] for row in read_runs(database, catalog_ids)}
+    print('CATALOG_SIX_IMAGE_REPLAN=' + json.dumps(counts, separators=(',', ':')), flush=True)
+    return counts
+
+
 def retry_recoverable_failures(secret, database, catalog_ids):
     rows = read_runs(database, catalog_ids)
     failed = [row for row in rows if row['status'] == 'failed']
@@ -381,21 +497,24 @@ def download_and_verify(secret, image, ceiling, generated):
         raise RuntimeError('CATALOG_MEDIA_BYTES_MISMATCH')
 
 
-def verify_product(secret, product_id):
+def verify_product(secret, product_id, expected_generated):
+    if not isinstance(expected_generated, int) or not 0 <= expected_generated <= 4:
+        raise RuntimeError('CATALOG_GENERATED_IMAGE_COUNT_INVALID')
     folder = api(secret, '/api/products/' + product_id, timeout=90)
     originals, generated = folder['images'], folder['generatedImages']
     if folder.get('validationError') or folder.get('imageValidationError'):
         raise RuntimeError('CATALOG_FOLDER_VALIDATION_FAILED')
     if not originals or any(not image['optimized'] or not 0 < image['byteSize'] < 300000 for image in originals):
         raise RuntimeError('CATALOG_ORIGINAL_IMAGE_LIMIT_FAILED')
-    if len(generated) != 4 or {image.get('variant') for image in generated} != VARIANTS \
+    if len(generated) != expected_generated \
+            or [image.get('variant') for image in generated] != list(VARIANTS[:expected_generated]) \
             or any(not 0 < image['byteSize'] < 200000 for image in generated):
         raise RuntimeError('CATALOG_GENERATED_IMAGE_LIMIT_FAILED')
     for image in originals: download_and_verify(secret, image, 300000, False)
     for image in generated: download_and_verify(secret, image, 200000, True)
     receipt = {'sku': folder['product']['base_sku'], 'originalImages': len(originals),
                'generatedImages': len(generated), 'maxOriginalBytes': max(image['byteSize'] for image in originals),
-               'maxGeneratedBytes': max(image['byteSize'] for image in generated)}
+               'maxGeneratedBytes': max((image['byteSize'] for image in generated), default=0)}
     print('CATALOG_SKU_VERIFIED=' + json.dumps(receipt, separators=(',', ':')), flush=True)
     return receipt
 
@@ -444,7 +563,7 @@ const env = Object.fromEntries(fs.readFileSync('/app/.dev.vars', 'utf8').split(/
 def validate_final_drafts(rows, ids):
     if len(rows) != len(ids) or {row['run_id'] for row in rows} != set(ids):
         raise RuntimeError('CATALOG_DRAFT_COUNT_INVALID')
-    if any(row['status'] != 'draft' or row['total'] != 1 for row in rows):
+    if any(row['status'] != 'draft' or row['total'] != 1 or not 1 <= row['media_count'] <= 6 for row in rows):
         raise RuntimeError('CATALOG_DRAFT_STATE_INVALID')
 
 
@@ -480,6 +599,7 @@ def main():
             if drained_database != database or drained_connection['id'] != google_connection['id']:
                 raise RuntimeError('CATALOG_STATE_CHANGED_DURING_DRAIN')
             validate_runtime()
+            replan_catalog_runs(secret, database, ids)
             initial = read_runs(database, ids)
             print('CATALOG_PRE_RETRY_STATES=' + json.dumps([
                 {'sku': row['base_sku'], 'status': row['status'], 'code': row.get('error_code'),
@@ -561,7 +681,8 @@ def main():
             rows = read_runs(database, ids)
             for row in rows:
                 if row['status'] == 'completed' and row['product_id'] not in verified:
-                    verified[row['product_id']] = verify_product(secret, row['product_id'])
+                    verified[row['product_id']] = verify_product(
+                        secret, row['product_id'], row['requested_image_count'])
             progress = {'total': len(rows), 'completed': sum(row['status'] == 'completed' for row in rows),
                         'failed': sum(row['status'] in ('failed', 'cancelled') for row in rows),
                         'generatedImages': sum(row['completed_image_count'] for row in rows)}
@@ -599,10 +720,12 @@ def main():
             jobs = db.execute(f"SELECT count(*) FROM publish_jobs j JOIN schedules s ON s.id=j.schedule_id "
                               f"WHERE j.workspace_id=? AND s.created_by IN ({placeholders})",
                               [WORKSPACE, *['automation:' + value for value in ids]]).fetchone()[0]
-            drafts = [dict(zip(('run_id', 'status', 'total'), row)) for row in db.execute(
-                f"SELECT json_extract(generation_meta_json,'$.automationRunId'),status,count(*) FROM content_drafts "
-                f"WHERE workspace_id=? AND json_extract(generation_meta_json,'$.automationRunId') IN ({placeholders}) "
-                f"GROUP BY json_extract(generation_meta_json,'$.automationRunId'),status", [WORKSPACE, *ids])]
+            drafts = [dict(zip(('run_id', 'status', 'total', 'media_count'), row)) for row in db.execute(
+                f"SELECT json_extract(d.generation_meta_json,'$.automationRunId'),d.status,count(DISTINCT d.id),count(dm.id) "
+                f"FROM content_drafts d LEFT JOIN content_draft_media dm "
+                f"ON dm.draft_id=d.id AND dm.workspace_id=d.workspace_id "
+                f"WHERE d.workspace_id=? AND json_extract(d.generation_meta_json,'$.automationRunId') IN ({placeholders}) "
+                f"GROUP BY json_extract(d.generation_meta_json,'$.automationRunId'),d.status", [WORKSPACE, *ids])]
             validate_final_drafts(drafts, ids)
             if schedules or jobs: raise RuntimeError('CATALOG_PREPARE_ONLY_FINAL_STATE_INVALID')
         validate_runtime()
@@ -614,7 +737,8 @@ def main():
         if subprocess.run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer']).returncode != 0:
             raise RuntimeError('CATALOG_CRON_TIMER_RESTORE_FAILED')
         print('CATALOG_ALL_15_SKUS_VERIFIED=yes', flush=True)
-        print('CATALOG_GENERATED_IMAGES_VERIFIED=60', flush=True)
+        print('CATALOG_GENERATED_IMAGES_VERIFIED=' + str(sum(
+            row['requested_image_count'] for row in rows)), flush=True)
         print('CATALOG_PREPARE_ONLY_VERIFIED=yes', flush=True)
         print('CATALOG_CRON_RESTORED=yes', flush=True)
 
