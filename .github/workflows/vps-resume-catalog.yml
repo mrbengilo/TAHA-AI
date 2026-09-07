@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: taha-catalog-recovery-v3
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   resume:
