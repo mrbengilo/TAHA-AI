@@ -34,7 +34,7 @@ systemd timer/cron root-only
 7. Cấu hình reverse proxy HTTPS cho `tahashoes.store` đến `127.0.0.1:8787`.
 8. Đăng ký callback production chính xác ở Google/Meta/TikTok/Shopee.
 9. Kết nối lại Google để nhận quyền Drive ghi, rồi đồng bộ một SKU thử.
-10. Chạy một automation 1 ảnh, kiểm tra R2, Drive, draft và lịch trước khi dùng 6 ảnh.
+10. Chạy một SKU có ảnh Drive đúng thư mục; kiểm tra bài/hashtag, lịch và biên nhận Facebook.
 11. Bật cron mỗi phút; theo dõi log và chỉ thử publish kênh đã được nền tảng phê duyệt.
 
 ## Migration và dữ liệu bền vững
@@ -84,23 +84,9 @@ OPENAI_IMAGE_QUALITY=medium
 
 Điền App ID/secret/key còn lại theo `.env.example`. Không commit `OPENAI_API_KEY`, Google Client Secret, Meta App Secret, TikTok App Secret, Shopee Partner Key hay webhook secret. `OPENAI_API_KEY` chỉ cần ở runtime server; không đặt tiền tố public và không truyền vào HTML/JavaScript trình duyệt. Khi xoay key, cập nhật file root-only, restart container, chạy một job thử, rồi vô hiệu hóa key cũ.
 
-## Google phải kết nối lại sau khi đổi scope
+## Google cho luồng dùng ảnh Drive
 
-Automation cần tải ảnh generated về thư mục SKU hiện hữu, nên production dùng:
-
-```text
-https://www.googleapis.com/auth/drive
-https://www.googleapis.com/auth/spreadsheets.readonly
-```
-
-Token đã cấp `drive.readonly` không tự nâng quyền. Sau deploy:
-
-1. cập nhật scope trên Google consent screen;
-2. xác nhận callback `https://tahashoes.store/api/integrations/google/callback`;
-3. tại `/connections`, kết nối lại đúng tài khoản sở hữu/có quyền chỉnh sửa thư mục;
-4. kiểm tra sync một SKU và upload một ảnh generated.
-
-Không tiếp tục automation 6 ảnh nếu bước upload thử báo `GOOGLE_WRITE_SCOPE_REQUIRED`, `GOOGLE_DRIVE_FOLDER_NOT_WRITABLE` hoặc `GOOGLE_SKU_FOLDER_NOT_FOUND`.
+Luồng mới chỉ đọc Sheet và ảnh trong thư mục `SKU <SKU>`. Quyền đọc hiện hữu đủ dùng; không bắt buộc kết nối lại để cấp quyền ghi. API xuất media cũ vẫn yêu cầu `drive` hoặc `drive.file` nếu được sử dụng riêng.
 
 ## Xác thực API quản trị trên VPS
 
@@ -121,9 +107,9 @@ POST https://tahashoes.store/api/internal/cron/tick
 Authorization: Bearer <INTERNAL_API_SECRET>
 ```
 
-Mỗi tick ưu tiên scheduler và dispatcher trước, sau đó xử lý tối đa một step AI. Một run 6 ảnh vì vậy cần nhiều tick; đây là chủ ý để giới hạn thời gian thực thi và hỗ trợ retry/lease. Lưu Bearer trong file environment chỉ root đọc được, không ghi trực tiếp secret vào unit/timer hoặc crontab có quyền đọc rộng.
+Mỗi tick ưu tiên scheduler và dispatcher, sau đó lập kế hoạch và xử lý worker. Run mới có hai bước viết nội dung/hoàn tất, không có bước tạo ảnh. Lưu Bearer trong file environment chỉ root đọc được, không ghi trực tiếp secret vào unit/timer hoặc crontab có quyền đọc rộng.
 
-Theo dõi các mã lỗi an toàn và run/step ID; không log request header, token, raw response nhà cung cấp hoặc nội dung file secret. Lỗi xuất Drive được ghi `pending` trong step trong khi ảnh R2 vẫn còn; xử lý quyền/kết nối rồi chạy lại thao tác xuất Drive thay vì tạo ảnh trùng.
+Theo dõi các mã lỗi an toàn và run/step ID; không log request header, token, raw response nhà cung cấp hoặc nội dung file secret.
 
 ## Ranh giới trạng thái kênh
 
@@ -137,6 +123,14 @@ Theo dõi các mã lỗi an toàn và run/step ID; không log request header, to
 - `https://tahashoes.store/` và `/automation` tải đúng giao diện Arial, không lỗi asset/font.
 - Request không xác thực không thể gọi API operator.
 - `POST /api/internal/cron/tick` sai Bearer trả `401`; đúng Bearer trả ba nhóm kết quả `automation`, `scheduler`, `dispatcher`.
-- Google sync trả đúng số SKU/media; một ảnh AI xuất về đúng thư mục SKU và gọi lại không tạo bản sao.
+- Google sync trả đúng SKU/media; bài thử có ảnh Drive của đúng SKU, mô tả/hashtag và Post ID thật.
 - Secret scan của repository không tìm thấy giá trị thật; file secret VPS là `root:root` mode `600`.
 - Không hiển thị TikTok/Shopee là “đã đăng” khi nền tảng chưa phê duyệt hoặc chưa trả external product ID.
+
+## Phát hành đã kiểm thử
+
+Workflow `TAHA validated VPS release` chạy lint, typecheck, build và test trước khi triển khai đúng SHA trên main. `deploy/vps/release.sh` dùng legacy Docker builder tương thích VPS, thử migration trên bản sao SQLite nhất quán và kiểm tra trang/API có xác thực. Khi chuyển bản, dừng timer, chờ cron đang chạy hoàn tất, dừng container cũ rồi sao lưu `/var/lib/taha-ai` dưới `/var/backups/taha-ai`. Container cũ được giữ để rollback; không prune image hoặc xóa dữ liệu dùng chung.
+
+Migration `0004` chỉ hủy run tạo ảnh cũ và tạm dừng lịch/jobs dùng ảnh generated; giữ nguyên sản phẩm, ảnh và lịch sử. Nếu health check thất bại sau cutover, khôi phục container cũ, giữ các hủy bỏ và để cron dừng để không chạy lại luồng ảnh cũ.
+
+Bài Facebook thử chỉ chạy khi commit merge chứa `[facebook-trial]` hoặc workflow dispatch bật tùy chọn tương ứng. Script `facebook-trial.py` gửi một yêu cầu idempotent rồi chỉ theo dõi; cron thực tế tự viết và đăng. Script chỉ thành công khi có đúng một job published kèm Post ID. Không bật thử cho các đợt phát hành khác nếu không có yêu cầu. Lập kế hoạch tự chọn SKU hằng ngày chỉ chạy cho connection đã bật `dailyAutomationEnabled` rõ ràng.

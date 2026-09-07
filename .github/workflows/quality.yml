@@ -1,6 +1,7 @@
 name: TAHA AI quality
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
@@ -30,5 +31,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm lint
+      - name: Type check
+        run: pnpm exec tsc --noEmit
       - name: Build and test
         run: pnpm test
