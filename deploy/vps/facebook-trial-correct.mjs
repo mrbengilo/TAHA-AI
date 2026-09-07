@@ -89,7 +89,10 @@ async function main() {
     return result;
   }
   const current = await graph();
-  if (current.id !== TARGET.postId || ![copy.before, copy.after].includes(current.message)) fail("CORRECTION_POST_CHANGED");
+  if (current.id !== TARGET.postId || ![copy.before, copy.after].includes(current.message)) {
+    console.log("FACEBOOK_CORRECTION_PUBLIC_DIFF=" + JSON.stringify({ postId: current.id, actual: current.message, expected: copy.before }));
+    fail("CORRECTION_POST_CHANGED");
+  }
   console.log("FACEBOOK_CORRECTION_PREFLIGHT=EXACT_PUBLISHED_POST");
   if (!process.argv.includes("--apply")) return;
   if (current.message !== copy.after) {
