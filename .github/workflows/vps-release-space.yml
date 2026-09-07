@@ -33,6 +33,7 @@ jobs:
           set -euo pipefail
           df -kP /
           docker system df
+          docker system df -v | awk '$1 == "tahashoes-taha-ai" {print "TAHA_DISK_DETAIL=" $0}'
           docker image ls tahashoes-taha-ai --no-trunc --format 'TAHA_IMAGE={{.Repository}}:{{.Tag}}|{{.ID}}|{{.Size}}'
           for image in $(docker image ls tahashoes-taha-ai -q --no-trunc | sort -u); do
             docker image inspect "$image" --format 'TAHA_IMAGE_INFO={{.Id}}|{{json .RepoTags}}|{{.Size}}|{{.Created}}'
