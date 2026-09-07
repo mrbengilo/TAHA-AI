@@ -6,7 +6,7 @@ on:
     paths: [deploy/vps/resume-catalog.py, .github/workflows/vps-resume-catalog.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: taha-catalog-recovery-v3
@@ -36,7 +36,15 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - < deploy/vps/resume-catalog.py
+            python3 -u - < deploy/vps/resume-catalog.py 2>&1 | tee deploy/vps/catalog-recovery-output.txt
+      - name: Save recovery snapshot
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/catalog-recovery-output.txt
+          git commit -m "ops: record catalog recovery result" || exit 0
+          git push origin HEAD:codex/vps-release-space
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps
