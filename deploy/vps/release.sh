@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 TARGET_SHA="$1"
+SOURCE_BUNDLE="${2:-}"
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 20
 exec 9>/var/lock/taha-ai-release.lock
 flock -n 9 || { echo 'RELEASE_ALREADY_RUNNING'; exit 21; }
@@ -67,13 +68,24 @@ PY
 )
 test -n "$secret" || { echo 'INTERNAL_API_SECRET_MISSING'; exit 24; }
 
-git -C "$REPO" fetch origin main
-git -C "$REPO" merge-base --is-ancestor "$TARGET_SHA" origin/main
+if [ -n "$SOURCE_BUNDLE" ]; then
+  [[ "$SOURCE_BUNDLE" = "/var/tmp/taha-source-${TARGET_SHA}.bundle" ]] || exit 28
+  git -C "$REPO" bundle verify "$SOURCE_BUNDLE"
+  git -C "$REPO" fetch "$SOURCE_BUNDLE" HEAD
+  test "$(git -C "$REPO" rev-parse FETCH_HEAD)" = "$TARGET_SHA"
+  rm -- "$SOURCE_BUNDLE"
+else
+  git -C "$REPO" fetch origin main
+  git -C "$REPO" merge-base --is-ancestor "$TARGET_SHA" origin/main
+fi
 git -C "$REPO" checkout -q main
 CHECKOUT_CHANGED=yes
 git -C "$REPO" reset --hard "$TARGET_SHA" >/dev/null
 cd "$REPO"
-DOCKER_BUILDKIT=0 docker build -f deploy/vps/Dockerfile -t "$NEW_IMAGE" .
+if ! docker image inspect "$NEW_IMAGE" >/dev/null 2>&1; then
+  DOCKER_BUILDKIT=0 docker build -f deploy/vps/Dockerfile --label "org.opencontainers.image.revision=$TARGET_SHA" -t "$NEW_IMAGE" .
+fi
+test "$(docker inspect "$NEW_IMAGE" -f '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$TARGET_SHA"
 echo "IMAGE_READY=$TARGET_SHA"
 
 # SQLite backup API includes committed WAL records in a consistent staging snapshot.
