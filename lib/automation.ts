@@ -1011,11 +1011,13 @@ export async function runAutomationWorker(options: {
     throw new Error("AUTOMATION_RUN_FILTER_INVALID");
   }
   const runFilter = runIds ? ` AND r.id IN (${runIds.map(() => "?").join(",")})` : "";
+  const stepRunFilter = runIds ? ` AND run_id IN (${runIds.map(() => "?").join(",")})` : "";
   await db.prepare(
     `UPDATE automation_steps SET status = 'retry_wait', available_at = ?, lease_owner = NULL,
      lease_expires_at = NULL, error_code = 'LEASE_EXPIRED_RETRY', updated_at = ?
-     WHERE status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
-  ).bind(now, now, now).run();
+     WHERE workspace_id = ? AND status = 'processing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+       ${stepRunFilter}`,
+  ).bind(now, now, TAHA_WORKSPACE_ID, now, ...(runIds ?? [])).run();
   const candidates = await db.prepare(
     `SELECT s.id, s.workspace_id, s.run_id, s.step_type, s.ordinal, s.status, s.available_at,
             s.attempt_count, s.max_attempts, s.result_json

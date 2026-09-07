@@ -302,12 +302,15 @@ test("a run filter never leases an earlier unrelated publish-capable run", async
     idempotencyKey: "prepare-catalog-filtered", prepareOnly: true, imageCount: 0 });
   h.sqlite.prepare("UPDATE automation_runs SET created_at=1 WHERE id=?").run(unrelated.run.id);
   h.sqlite.prepare("UPDATE automation_runs SET created_at=2 WHERE id=?").run(catalog.run.id);
+  h.sqlite.prepare("UPDATE automation_runs SET status='processing' WHERE id=?").run(unrelated.run.id);
+  h.sqlite.prepare("UPDATE automation_steps SET status='processing', lease_owner='unrelated-worker', lease_expires_at=0 WHERE run_id=? AND step_type='content'")
+    .run(unrelated.run.id);
 
   const result = await automation.runAutomationWorker({ limit: 1, runIds: [catalog.run.id] });
   assert.equal(result.completed, 1, JSON.stringify(result));
   assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE run_id=? AND step_type='content'")
     .get(catalog.run.id).status, "completed");
   assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE run_id=? AND step_type='content'")
-    .get(unrelated.run.id).status, "queued");
+    .get(unrelated.run.id).status, "processing");
   await assert.rejects(automation.runAutomationWorker({ runIds: ["not-a-run-id"] }), /AUTOMATION_RUN_FILTER_INVALID/);
 });
