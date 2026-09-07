@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -106,21 +105,6 @@ def main():
         time.sleep(1)
     else:
         raise RuntimeError('CATALOG_PAUSE_CRON_DRAIN_TIMEOUT')
-    holders = command('fuser', str(LOCK), check=False).stdout.split()
-    if len(holders) != 1 or not holders[0].isdigit():
-        raise RuntimeError('CATALOG_PAUSE_LOCK_HOLDER_CHANGED')
-    pid = int(holders[0])
-    cmdline = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-    if len(cmdline) < 4 or not cmdline[0].decode(errors='ignore').endswith('python3') \
-            or cmdline[1:3] != [b'-u', b'-']:
-        raise RuntimeError('CATALOG_PAUSE_LOCK_HOLDER_CHANGED')
-    os.kill(pid, signal.SIGTERM)
-    for _ in range(30):
-        if not Path(f'/proc/{pid}').exists():
-            break
-        time.sleep(1)
-    else:
-        raise RuntimeError('CATALOG_PAUSE_RECOVERY_DID_NOT_STOP')
     with LOCK.open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         runtime = command('docker', 'inspect', 'taha-ai', '--format', '{{.Config.Image}}|{{.Image}}|{{.State.Status}}').stdout.strip()
@@ -131,8 +115,15 @@ def main():
         ids = catalog_ids()
         database = find_database(ids)
         validate_isolated_state(database, ids)
-        replace_marker({'stage': 'paused', 'catalogRunIds': ids, 'pausedAt': int(time.time()),
-                        'reason': 'worker-only-isolation-required'})
+        if PAUSED.exists():
+            marker = json.loads(PAUSED.read_text())
+            if (PAUSED.stat().st_mode & 0o777) != 0o600 or marker.get('stage') != 'paused' \
+                    or marker.get('catalogRunIds') != ids \
+                    or marker.get('reason') != 'worker-only-isolation-required':
+                raise RuntimeError('CATALOG_PAUSE_MARKER_CHANGED')
+        else:
+            replace_marker({'stage': 'paused', 'catalogRunIds': ids, 'pausedAt': int(time.time()),
+                            'reason': 'worker-only-isolation-required'})
     print('CATALOG_RECOVERY_PAUSED=yes', flush=True)
     print('CATALOG_RECOVERY_OUTPUTS=0', flush=True)
     print('CATALOG_CRON_REMAINS_HELD=yes', flush=True)
