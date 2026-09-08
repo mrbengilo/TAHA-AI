@@ -8,7 +8,7 @@ import { ChannelWorkspace } from "./ChannelWorkspace";
 
 type PageProps = {
   params: Promise<{ provider: string }>;
-  searchParams: Promise<{ compose?: string; draft?: string }>;
+  searchParams: Promise<{ compose?: string; draft?: string; tab?: string; job?: string }>;
 };
 
 export const dynamic = "force-dynamic";
@@ -28,13 +28,20 @@ export default async function ChannelPage({ params, searchParams }: PageProps) {
   if (!isChannelId(provider)) notFound();
   const channel = channelDefinitions[provider];
   const openContent = query.compose === "1" || typeof query.draft === "string";
+  const openActivity = query.tab === "activity" || typeof query.job === "string";
+  const focusedJobId = typeof query.job === "string" && query.job.length <= 128 ? query.job : undefined;
   return (
     <AppShell
       active="connections"
       contextTitle={channel.name}
       headerActions={<Link className="ui-button" href="/channels"><AppIcon name="arrow-right" size={17} /> Tất cả connector</Link>}
     >
-      <ChannelWorkspace provider={provider} initialTab={openContent ? "content" : undefined} openComposer={query.compose === "1"} />
+      <ChannelWorkspace
+        provider={provider}
+        initialTab={openActivity ? "activity" : openContent ? "content" : undefined}
+        openComposer={query.compose === "1"}
+        focusedJobId={focusedJobId}
+      />
     </AppShell>
   );
 }

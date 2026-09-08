@@ -1687,6 +1687,11 @@
   align-items: start;
 }
 
+.ch-job-list article.is-focused {
+  outline: 3px solid rgba(8, 104, 242, 0.2);
+  outline-offset: 2px;
+}
+
 .ch-job-content {
   min-width: 0;
 }
@@ -1707,6 +1712,13 @@
   font-size: 8px;
   font-weight: 900;
   letter-spacing: 0.12em;
+}
+
+.ch-zalo-confirmation .ch-zalo-manual-note {
+  margin: 0 0 10px;
+  color: #55645b;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .ch-zalo-confirmation blockquote {
@@ -1746,7 +1758,11 @@
   border-top: 1px solid #dde6e0;
 }
 
-.ch-zalo-actions button {
+.ch-zalo-actions button,
+.ch-zalo-actions a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 36px;
   padding: 0 12px;
   border: 1px solid #d0dad3;
@@ -1756,6 +1772,7 @@
   cursor: pointer;
   font-size: 10px;
   font-weight: 800;
+  text-decoration: none;
 }
 
 .ch-zalo-actions button:disabled {
@@ -2068,7 +2085,8 @@
     flex-direction: column-reverse;
   }
 
-  .ch-zalo-actions button {
+  .ch-zalo-actions button,
+  .ch-zalo-actions a {
     width: 100%;
   }
 }

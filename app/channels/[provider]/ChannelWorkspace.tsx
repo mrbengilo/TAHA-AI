@@ -100,10 +100,12 @@ export function ChannelWorkspace({
   provider,
   initialTab,
   openComposer = false,
+  focusedJobId,
 }: {
   provider: ChannelId;
   initialTab?: TabId;
   openComposer?: boolean;
+  focusedJobId?: string;
 }) {
   const definition = channelDefinitions[provider];
   const [detail, setDetail] = useState<ChannelDetail | null>(null);
@@ -125,7 +127,9 @@ export function ChannelWorkspace({
     if (!quiet) setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/channels/${encodeURIComponent(provider)}?limit=50`, {
+      const query = new URLSearchParams({ limit: "50" });
+      if (focusedJobId) query.set("job", focusedJobId);
+      const response = await fetch(`/api/channels/${encodeURIComponent(provider)}?${query.toString()}`, {
         headers: { accept: "application/json" },
       });
       const payload = await response.json() as ApiPayload<ChannelDetail>;
@@ -145,12 +149,22 @@ export function ChannelWorkspace({
     } finally {
       setLoading(false);
     }
-  }, [provider]);
+  }, [focusedJobId, provider]);
 
   useEffect(() => {
     const task = window.setTimeout(() => void loadChannel(), 0);
     return () => window.clearTimeout(task);
   }, [loadChannel]);
+
+  useEffect(() => {
+    if (!focusedJobId || activeTab !== "activity" || !detail?.jobs.some((job) => job.id === focusedJobId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(`channel-job-${focusedJobId}`);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, detail, focusedJobId]);
 
   async function syncSource() {
     setBusy("sync");
@@ -286,7 +300,7 @@ export function ChannelWorkspace({
   }
 
   async function confirmZaloJob(job: ChannelJob, result: "published" | "failed") {
-    const action = result === "published" ? "xác nhận đã đăng" : "đánh dấu không đăng được";
+    const action = result === "published" ? "ghi nhận bạn đã tự đăng" : "đánh dấu không đăng được";
     if (!window.confirm(`Bạn muốn ${action} bài Zalo này?`)) return;
     setBusy(`confirm:${job.id}:${result}`);
     setNotice(null);
@@ -298,7 +312,7 @@ export function ChannelWorkspace({
       });
       const payload = await response.json() as ApiPayload<{ id: string; status: string }>;
       if (!response.ok || !payload.data) throw new Error(payload.error?.message || "Không thể xác nhận bài Zalo.");
-      setNotice({ tone: "success", text: result === "published" ? "Đã ghi nhận bài Zalo được đăng." : "Đã ghi nhận bài Zalo không đăng được." });
+      setNotice({ tone: "success", text: result === "published" ? "Đã ghi nhận bạn báo đã tự đăng; TAHA AI không kiểm chứng bài trên Zalo cá nhân." : "Đã ghi nhận bài Zalo không đăng được." });
       await loadChannel(true);
     } catch (reason) {
       setNotice({ tone: "error", text: reason instanceof Error ? reason.message : "Không thể xác nhận bài Zalo." });
@@ -351,11 +365,17 @@ export function ChannelWorkspace({
         headers: { "content-type": "application/json", accept: "application/json" },
         body: JSON.stringify(requestBody),
       });
-      const payload = await response.json() as ApiPayload<unknown>;
+      const payload = await response.json() as ApiPayload<{ status?: string; replayed?: boolean }>;
       if (!response.ok) throw new Error(payload.error?.message || "Kênh chưa nhận được nội dung.");
       const successText = provider === "zalo_personal"
         ? "Đã lên lịch chuẩn bị bài Zalo. Khi đến hạn, tác vụ hỗ trợ sẽ xuất hiện trong lịch sử để bạn đăng thủ công."
-        : "Đã ghi nhận lịch đăng bằng ảnh và nội dung của đúng SKU. Xem thư mục sản phẩm để sửa hoặc chặn.";
+        : provider === "facebook" && payload.data?.status === "queued"
+          ? "Đã đưa lại bài Facebook vào hàng đợi. Hệ thống sẽ xử lý và cập nhật kết quả thật trong lịch sử."
+          : provider === "facebook" && payload.data?.status === "published"
+            ? "Bài Facebook này đã được ghi nhận là đã đăng; hệ thống không tạo thêm lần đăng."
+            : provider === "facebook" && ["publishing", "retry_wait"].includes(payload.data?.status ?? "")
+              ? "Bài Facebook đang được xử lý hoặc chờ thử lại; hệ thống không tạo thêm lần đăng."
+              : "Đã ghi nhận lịch đăng bằng ảnh và nội dung của đúng SKU. Xem thư mục sản phẩm để sửa hoặc chặn.";
       setNotice({ tone: "success", text: successText });
       setActiveTab("activity");
       await loadChannel(true);
@@ -597,20 +617,22 @@ export function ChannelWorkspace({
                 {jobs.map((job) => {
                   const awaitingZalo = provider === "zalo_personal" && job.status === "awaiting_confirmation";
                   return (
-                    <article className={awaitingZalo ? "ch-zalo-job" : ""} key={job.id}>
+                    <article id={`channel-job-${job.id}`} tabIndex={job.id === focusedJobId ? -1 : undefined} className={`${awaitingZalo ? "ch-zalo-job" : ""}${job.id === focusedJobId ? " is-focused" : ""}`.trim()} key={job.id}>
                       <span className={`ch-job-icon is-${job.status}`}>{job.status === "published" ? "✓" : job.status === "failed" || job.status === "blocked" ? "!" : "↗"}</span>
                       <div className="ch-job-content">
-                        <div><strong>{job.jobKind === "social_post" ? "Bài viết" : job.jobKind === "listing_upsert" ? "Sản phẩm" : "Công việc xuất bản"}</strong><span className={`ch-content-status is-${job.status}`}>{contentStatusLabel(job.status)}</span></div>
+                        <div><strong>{job.jobKind === "social_post" ? "Bài viết" : job.jobKind === "listing_upsert" ? "Sản phẩm" : "Công việc xuất bản"}</strong><span className={`ch-content-status is-${job.status}`}>{provider === "zalo_personal" && job.status === "published" ? "Đã tự xác nhận" : contentStatusLabel(job.status)}</span></div>
                         <p>{job.errorMessage || `Được tạo lúc ${formatDate(job.scheduledFor)}`}</p>
                         {awaitingZalo ? (
                           <div className="ch-zalo-confirmation">
                             <span>CAPTION ĐÃ CHUẨN BỊ</span>
+                            <p className="ch-zalo-manual-note">TAHA AI chưa tự đăng Nhật ký Zalo cá nhân. Hãy sao chép nội dung, tải ảnh, dùng ứng dụng Zalo trên điện thoại để đăng Nhật ký rồi quay lại ghi nhận kết quả. Zalo Web chỉ hỗ trợ mở tài khoản trò chuyện.</p>
                             <blockquote>{job.payload?.message || "Caption chưa sẵn sàng."}</blockquote>
                             {job.payload && job.payload.mediaIds.length > 0 ? <div className="ch-zalo-downloads">{job.payload.mediaIds.map((id, index) => <a href={`/api/media/${encodeURIComponent(id)}/download`} download key={id}>↓ Tải ảnh {index + 1}</a>)}</div> : null}
                             <div className="ch-zalo-actions">
                               <button type="button" onClick={() => void copyZaloCaption(job)}>Sao chép caption</button>
+                              <a href="https://chat.zalo.me/" target="_blank" rel="noreferrer">Mở Zalo Web ↗</a>
                               <button type="button" disabled={busy?.startsWith(`confirm:${job.id}:`) === true} onClick={() => void confirmZaloJob(job, "failed")}>{busy === `confirm:${job.id}:failed` ? "Đang lưu…" : "Không đăng được"}</button>
-                              <button className="ch-primary-button" type="button" disabled={busy?.startsWith(`confirm:${job.id}:`) === true} onClick={() => void confirmZaloJob(job, "published")}>{busy === `confirm:${job.id}:published` ? "Đang lưu…" : "Đã đăng"}</button>
+                              <button className="ch-primary-button" type="button" disabled={busy?.startsWith(`confirm:${job.id}:`) === true} onClick={() => void confirmZaloJob(job, "published")}>{busy === `confirm:${job.id}:published` ? "Đang lưu…" : "Tôi đã tự đăng"}</button>
                             </div>
                           </div>
                         ) : null}

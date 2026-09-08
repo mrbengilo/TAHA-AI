@@ -33,10 +33,25 @@ function statusTone(status: string) {
   return "is-info";
 }
 
+function jobStatusLabel(status: string, scheduledFor: number, now: number) {
+  if (status === "awaiting_confirmation") return "Cần tự đăng";
+  if (status === "retry_wait") return "Sẽ thử lại";
+  if (status === "failed") return "Đăng thất bại";
+  if (status === "blocked") return "Bị chặn";
+  if (status === "queued" && scheduledFor <= now) return "Quá giờ · đang chờ";
+  return "Đang chờ";
+}
+
+function jobStatusTone(status: string, scheduledFor: number, now: number) {
+  if (status === "queued" && scheduledFor <= now) return "is-warning";
+  return statusTone(status);
+}
+
 export default async function CalendarPage() {
   const snapshot = await getDashboardSnapshot();
-  const waitingCount = snapshot.upcoming.filter((item) => item.status === "queued" || item.status === "retry_wait").length;
-  const assistedCount = snapshot.upcoming.filter((item) => item.status === "awaiting_confirmation").length;
+  const now = snapshot.capturedAt;
+  const waitingCount = snapshot.calendarJobs.filter((item) => item.status === "queued" || item.status === "retry_wait").length;
+  const assistedCount = snapshot.calendarJobs.filter((item) => item.status === "awaiting_confirmation").length;
 
   return (
     <AppShell
@@ -59,7 +74,7 @@ export default async function CalendarPage() {
 
       <section className="ui-kpi-grid" aria-label="Tổng quan lịch đăng">
         <article className="ui-kpi"><span className="ui-kpi-icon"><AppIcon name="calendar" size={21} /></span><span>Lịch hoạt động</span><strong>{snapshot.activeScheduleCount}</strong><small>Đang được scheduler theo dõi.</small></article>
-        <article className="ui-kpi"><span className="ui-kpi-icon"><AppIcon name="clock" size={21} /></span><span>Sắp tới</span><strong>{snapshot.upcoming.length}</strong><small>Tác vụ có trong hàng đợi gần nhất.</small></article>
+        <article className="ui-kpi"><span className="ui-kpi-icon"><AppIcon name="clock" size={21} /></span><span>Cần theo dõi</span><strong>{snapshot.calendarJobs.length}</strong><small>Tác vụ chờ, quá hạn hoặc cần xử lý.</small></article>
         <article className={waitingCount ? "ui-kpi is-warning" : "ui-kpi is-success"}><span className="ui-kpi-icon"><AppIcon name="publish" size={21} /></span><span>Đang chờ</span><strong>{waitingCount}</strong><small>Chờ đến giờ hoặc chờ thử lại.</small></article>
         <article className={assistedCount ? "ui-kpi is-warning" : "ui-kpi is-success"}><span className="ui-kpi-icon"><AppIcon name="check" size={21} /></span><span>Cần xác nhận</span><strong>{assistedCount}</strong><small>Chủ tài khoản cần hoàn tất thao tác.</small></article>
       </section>
@@ -70,19 +85,19 @@ export default async function CalendarPage() {
           {snapshot.activeSchedules.length ? <div className="ui-list">{snapshot.activeSchedules.map((item) => (
             <div className="ui-list-row" key={item.id}>
               <span className="ui-list-icon"><AppIcon name="calendar" size={19} /></span>
-              <div><strong>{item.title || `Tự động đăng ${providerNames[item.provider] || item.provider}`}</strong><p>{providerNames[item.provider] || item.provider} · {item.local_time || (item.next_run_at ? dateTime.format(item.next_run_at) : "Theo lịch")}</p></div>
+              <div><strong>{item.title || (item.provider === "zalo_personal" ? "Chuẩn bị bài Zalo cá nhân" : `Tự động đăng ${providerNames[item.provider] || item.provider}`)}</strong><p>{providerNames[item.provider] || item.provider} · {item.local_time || (item.next_run_at ? dateTime.format(item.next_run_at) : "Theo lịch")}{item.provider === "zalo_personal" ? " · đăng thủ công" : ""}</p></div>
               <span className="ui-status is-success">Đang chạy</span>
             </div>
           ))}</div> : <div className="ui-empty"><span className="ui-empty-icon"><AppIcon name="calendar" size={22} /></span><strong>Chưa có lịch hoạt động</strong><p>Tạo nội dung, duyệt và kích hoạt lịch để bắt đầu.</p><Link className="ui-button" href="/automation">Tạo nội dung</Link></div>}
         </article>
 
         <article className="ui-panel">
-          <header className="ui-panel-header"><div><h2>Bài sắp được xử lý</h2><p>Trạng thái thật từ hàng đợi xuất bản.</p></div></header>
-          {snapshot.upcoming.length ? <div className="ui-list">{snapshot.upcoming.map((item, index) => (
-            <div className="ui-list-row" key={`${item.scheduled_for}-${item.provider}-${index}`}>
-              <span className="ui-list-icon"><AppIcon name="clock" size={19} /></span>
-              <div><strong>{item.title || item.body || "Nội dung đã lên lịch"}</strong><p>{providerNames[item.provider] || item.provider} · {dateTime.format(item.scheduled_for)}</p></div>
-              <span className={`ui-status ${statusTone(item.status)}`}>{item.status === "awaiting_confirmation" ? "Chờ xác nhận" : item.status === "retry_wait" ? "Sẽ thử lại" : "Đang chờ"}</span>
+          <header className="ui-panel-header"><div><h2>Tác vụ cần theo dõi</h2><p>Hiển thị cả bài quá giờ, thất bại, bị chặn và Zalo cần đăng thủ công.</p></div></header>
+          {snapshot.calendarJobs.length ? <div className="ui-list">{snapshot.calendarJobs.map((item) => (
+            <div className="ui-list-row" key={item.id}>
+              <span className="ui-list-icon"><AppIcon name={item.status === "failed" || item.status === "blocked" ? "alert" : "clock"} size={19} /></span>
+              <div><strong>{item.title || item.body || "Nội dung đã lên lịch"}</strong><p>{providerNames[item.provider] || item.provider} · {dateTime.format(item.scheduled_for)}{item.error_message ? ` · ${item.error_message}` : ""}</p>{item.provider === "zalo_personal" && item.status === "awaiting_confirmation" ? <Link className="ui-link" href={`/channels/zalo_personal?tab=activity&job=${encodeURIComponent(item.id)}`}>Mở đúng bài để sao chép và tự đăng <AppIcon name="arrow-right" size={14} /></Link> : null}</div>
+              <span className={`ui-status ${jobStatusTone(item.status, item.scheduled_for, now)}`}>{jobStatusLabel(item.status, item.scheduled_for, now)}</span>
             </div>
           ))}</div> : <div className="ui-empty"><span className="ui-empty-icon"><AppIcon name="clock" size={22} /></span><strong>Chưa có bài sắp đăng</strong><p>Các tác vụ đến hạn sẽ xuất hiện tại đây.</p></div>}
         </article>

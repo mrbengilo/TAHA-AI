@@ -2,11 +2,13 @@ import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 
 type UpcomingRow = {
+  id: string;
   scheduled_for: number;
   status: string;
   provider: string;
   title: string | null;
   body: string | null;
+  error_message: string | null;
 };
 
 type ReviewRow = {
@@ -44,6 +46,7 @@ type ActivityRow = {
 };
 
 export type DashboardSnapshot = {
+  capturedAt: number;
   publishedThisMonth: number;
   generatedImages: number;
   readyMedia: number;
@@ -56,10 +59,12 @@ export type DashboardSnapshot = {
   activeSchedules: ActiveScheduleRow[];
   recentActivity: ActivityRow[];
   upcoming: UpcomingRow[];
+  calendarJobs: UpcomingRow[];
   review: ReviewRow | null;
 };
 
 const emptySnapshot: DashboardSnapshot = {
+  capturedAt: 0,
   publishedThisMonth: 0,
   generatedImages: 0,
   readyMedia: 0,
@@ -72,6 +77,7 @@ const emptySnapshot: DashboardSnapshot = {
   activeSchedules: [],
   recentActivity: [],
   upcoming: [],
+  calendarJobs: [],
   review: null,
 };
 
@@ -86,7 +92,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   const now = new Date();
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   try {
-    const [publishedThisMonth, generatedImages, readyMedia, activeProducts, activeScheduleCount, failedJobs, connectionErrors, reviewCount, connections, upcoming, activeSchedules, recentActivity, review] = await Promise.all([
+    const [publishedThisMonth, generatedImages, readyMedia, activeProducts, activeScheduleCount, failedJobs, connectionErrors, reviewCount, connections, upcoming, calendarJobs, activeSchedules, recentActivity, review] = await Promise.all([
       count(database, "SELECT COUNT(*) AS total FROM publish_jobs WHERE workspace_id = ? AND status = 'published' AND completed_at >= ?", TAHA_WORKSPACE_ID, monthStart),
       count(database, "SELECT COUNT(*) AS total FROM media_assets WHERE workspace_id = ? AND origin = 'generated' AND status = 'ready'", TAHA_WORKSPACE_ID),
       count(database, "SELECT COUNT(*) AS total FROM media_assets WHERE workspace_id = ? AND status = 'ready'", TAHA_WORKSPACE_ID),
@@ -102,13 +108,31 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
          ORDER BY updated_at DESC`,
       ).bind(TAHA_WORKSPACE_ID).all<ConnectionRow>(),
       database.prepare(
-        `SELECT j.scheduled_for, j.status, c.provider, d.title, d.body
+        `SELECT j.id, j.scheduled_for, j.status, c.provider, d.title, d.body, j.error_message
          FROM publish_jobs j
          JOIN channel_connections c ON c.id = j.connection_id
          LEFT JOIN content_drafts d ON d.id = j.draft_id
          WHERE j.workspace_id = ? AND j.status IN ('queued', 'awaiting_confirmation', 'retry_wait')
          ORDER BY j.scheduled_for ASC LIMIT 5`,
       ).bind(TAHA_WORKSPACE_ID).all<UpcomingRow>(),
+      database.prepare(
+        `SELECT j.id, j.scheduled_for, j.status, c.provider, d.title, d.body, j.error_message
+         FROM publish_jobs j
+         JOIN channel_connections c ON c.id = j.connection_id
+         LEFT JOIN content_drafts d ON d.id = j.draft_id
+         WHERE j.workspace_id = ?
+           AND j.status IN ('queued', 'awaiting_confirmation', 'retry_wait', 'failed', 'blocked')
+         ORDER BY
+           CASE
+             WHEN c.provider = 'zalo_personal' AND j.status = 'awaiting_confirmation' THEN 0
+             WHEN j.status IN ('failed', 'blocked') THEN 1
+             WHEN j.scheduled_for <= ? THEN 2
+             ELSE 3
+           END,
+           CASE WHEN j.status IN ('failed', 'blocked') THEN j.updated_at END DESC,
+           CASE WHEN j.status NOT IN ('failed', 'blocked') THEN j.scheduled_for END ASC
+         LIMIT 8`,
+      ).bind(TAHA_WORKSPACE_ID, now.getTime()).all<UpcomingRow>(),
       database.prepare(
         `SELECT s.id, c.provider, d.title, s.local_time, s.next_run_at, s.execution_mode
          FROM schedules s
@@ -133,6 +157,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
       ).bind(TAHA_WORKSPACE_ID).first<ReviewRow>(),
     ]);
     return {
+      capturedAt: now.getTime(),
       publishedThisMonth,
       generatedImages,
       readyMedia,
@@ -145,6 +170,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
       activeSchedules: activeSchedules.results ?? [],
       recentActivity: recentActivity.results ?? [],
       upcoming: upcoming.results ?? [],
+      calendarJobs: calendarJobs.results ?? [],
       review: review ?? null,
     };
   } catch {
