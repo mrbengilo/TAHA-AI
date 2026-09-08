@@ -27,12 +27,22 @@ test("daily automation requests up to four lifestyle images and limits every pos
   assert.match(daily, /idempotencyKey: `daily:/);
   assert.match(daily, /imageCount: 4/);
   assert.match(cron, /runAutomationWorker\(\{ limit: 1 \}\)/);
-  assert.match(publishing, /slice\(0, 8\)/);
+  assert.match(publishing, /WEBSITE_PRODUCT_MAX_IMAGES/);
   const automation = read("lib/automation.ts");
   assert.match(automation, /plannedGeneratedImageCount/);
   assert.match(automation, /MAX_POST_IMAGES/);
   assert.match(automation, /publicationDayFromRequestKey/);
   assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
+  assert.match(automation, /provider === "website" \? now : nextLocalSlot/);
+});
+
+test("website publishing uses a versioned SKU upsert and no more than six images", () => {
+  const publishing = read("lib/publishing.ts");
+  const contract = read("lib/website-product.ts");
+  assert.match(publishing, /buildWebsiteProductPayload/);
+  assert.match(contract, /taha\.website\.product\.v1/);
+  assert.match(contract, /WEBSITE_PRODUCT_MAX_IMAGES = 6/);
+  assert.match(contract, /operation: "upsert_product"/);
 });
 
 test("product tables expose real primary-image thumbnails", () => {

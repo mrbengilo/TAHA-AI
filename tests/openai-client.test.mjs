@@ -235,6 +235,7 @@ test("generation removes embedded price/provenance phrases and appends exact cus
       sku: "TAHA-001", name: "Sneaker nữ", brand: "TAHA",
       description: "Thân giày thoáng nhẹ. Giá bán: 619.000 VND\nGiá tham khảo: 990.000 VND\nĐế cao su; chỉ 619k; bảo hành 12 tháng. Hình ảnh có sẵn từ Google Drive.",
       priceMinor: 619000, compareAtPriceMinor: 990000, currency: "VND",
+      sizes: ["37", "39", "44"], colors: ["Trắng", "Xám"],
     },
     targetProviders: ["facebook"],
   }, async (_url, init) => {
@@ -253,6 +254,10 @@ test("generation removes embedded price/provenance phrases and appends exact cus
   assert.doesNotMatch(body, /Nam — size VN\/EU/);
   assert.match(body, /37 → 22\.6–23\.5/);
   assert.match(body, /44 → 28\.6–30\.0/);
+  assert.doesNotMatch(body, /38 →/);
+  assert.match(body, /Mã sản phẩm: TAHA-001/);
+  assert.match(body, /Màu: Trắng, Xám/);
+  assert.match(body, /Size hiện có: 37, 39, 44/);
   assert.equal(body.split("VỆ SINH & BẢO QUẢN").length - 1, 1);
   assert.match(result.content.productDescription, /CHỌN SIZE THEO CHIỀU DÀI CHÂN/);
 });
@@ -305,6 +310,15 @@ test("generation cannot add an invented size table beside the exact supplied app
   await assert.rejects(client.generateProductContent({
     product: { sku: "TAHA-001", name: "Sneaker" }, targetProviders: ["facebook"],
   }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_SIZE_REFERENCE_DUPLICATED");
+});
+
+test("generation rejects a SKU copied from another product", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const content = validGeneratedContent();
+  content.channels = { facebook: { ...content.channels.facebook, body: "Mẫu TAHA-002 phù hợp cho ngày năng động." } };
+  await assert.rejects(client.generateProductContent({
+    product: { sku: "TAHA-001", name: "Sneaker", sizes: ["39"] }, targetProviders: ["facebook"],
+  }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_SKU_MISMATCH");
 });
 
 test("image generation accepts the four requested scenes and rejects retired layouts before API calls", async () => {

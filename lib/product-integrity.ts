@@ -83,9 +83,11 @@ export async function productSources(productId: string, override?: ProductDataba
 
 export async function productFingerprint(product: SourceProduct) {
   // Exclude timestamps/inventory: an unchanged sync or stock movement must not invalidate a caption.
+  const website = record(objectJson(product.metadata_json).website);
   const bytes = new TextEncoder().encode(JSON.stringify([
     product.base_sku, product.name, product.description, product.brand, product.category,
     product.currency, product.price_minor, product.compare_at_price_minor,
+    Array.isArray(website.sizes) ? website.sizes : [],
   ]));
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (v) => v.toString(16).padStart(2, "0")).join("");
 }
