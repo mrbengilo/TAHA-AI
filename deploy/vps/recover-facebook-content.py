@@ -17,6 +17,7 @@ DRAFT_ID = 'draft_ab03ca69262f4408be0858cee3cea2ca2c96d044'
 DAY_START = 1788800400000  # 2026-09-08 00:00 Asia/Ho_Chi_Minh
 DAY_END = DAY_START + 86400000
 PRICE_LINE = '💰 Giá: 6xx'
+INTERNAL_LINE = 'Vui lòng kiểm tra mã sản phẩm PH0027 và thương hiệu LITUO SPORT để đảm bảo bạn chọn đúng sản phẩm.'
 RECEIPT = Path('/var/lib/taha-ai/ops-recovery/facebook-sep8-content-recovery.json')
 
 
@@ -59,9 +60,9 @@ def validate_unsent(job):
 
 def corrected_body(body):
     lines = body.splitlines()
-    if sum(line.strip() == PRICE_LINE for line in lines) != 1:
+    if any(sum(line.strip() == clause for line in lines) != 1 for clause in (PRICE_LINE, INTERNAL_LINE)):
         raise RuntimeError('RECOVERY_PRICE_LINE_CHANGED')
-    return '\n'.join(line for line in lines if line.strip() != PRICE_LINE).strip()
+    return '\n'.join(line for line in lines if line.strip() not in (PRICE_LINE, INTERNAL_LINE)).strip()
 
 
 def call_api(route, body, secret, method='POST'):
@@ -117,7 +118,7 @@ def main():
             if job['body'] != expected_body:
                 call_api('/api/content-drafts/' + DRAFT_ID, {'action': 'edit', 'version': job['version'],
                          'title': job['title'], 'body': expected_body, 'hashtags': json.loads(job['hashtags_json'])}, secret, 'PATCH')
-                report('FACEBOOK_RECOVERY_CONTENT', {'jobId': JOB_ID, 'removedPriceLines': 1})
+                report('FACEBOOK_RECOVERY_CONTENT', {'jobId': JOB_ID, 'removedPriceLines': 1, 'removedInternalLines': 1})
             result = call_api('/api/publish/facebook', {'draftId': DRAFT_ID, 'connectionId': job['connection_id']}, secret)
             if result.get('status') not in ('queued', 'retry_wait', 'publishing', 'published'):
                 raise RuntimeError('RECOVERY_DID_NOT_QUEUE')
