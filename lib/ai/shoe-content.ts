@@ -49,6 +49,8 @@ export type ShoeCustomerReferenceProduct = {
   gender?: string | null;
   name?: string | null;
   category?: string | null;
+  sizes?: readonly string[] | null;
+  colors?: readonly string[] | null;
 };
 
 export type CustomerCopy = { title?: string; body: string; hashtags?: readonly string[] };
@@ -133,12 +135,27 @@ const CUSTOMER_CARE_HEADING = "🧼 VỆ SINH & BẢO QUẢN";
 
 export function shoeCustomerReferenceText(product: ShoeCustomerReferenceProduct = {}) {
   const audience = shoeSizeAudience(product);
+  const availableSizes = [...new Set((product.sizes ?? [])
+    .map((value) => String(value).normalize("NFKC").trim())
+    .filter(Boolean))];
+  const numericSizes = new Set(availableSizes.filter((value) => /^\d{2}$/u.test(value)).map(Number));
+  const colors = [...new Set((product.colors ?? [])
+    .map((value) => String(value).normalize("NFKC").trim())
+    .filter(Boolean))];
   const sizeTables = (["female", "male"] as const).filter((gender) => audience === "both" || audience === gender)
-    .map((gender) => [
-      `${gender === "female" ? "Nữ" : "Nam"} — size VN/EU → chiều dài chân (cm):`,
-      ...SHOE_SIZE_CHART[gender].map((row) => `${row.size} → ${row.minCm}–${row.maxCm}`),
-    ].join("\n"));
+    .map((gender) => {
+      const rows = SHOE_SIZE_CHART[gender].filter((row) => numericSizes.has(row.size));
+      if (!rows.length) return "";
+      return [
+        `${gender === "female" ? "Nữ" : "Nam"} — size VN/EU → chiều dài chân (cm):`,
+        ...rows.map((row) => `${row.size} → ${row.minCm}–${row.maxCm}`),
+      ].join("\n");
+    }).filter(Boolean);
   return [
+    ...(product.sku ? [`🏷️ Mã sản phẩm: ${product.sku}`] : []),
+    ...(colors.length ? [`🎨 Màu: ${colors.join(", ")}`] : []),
+    ...(availableSizes.length ? [`📏 Size hiện có: ${availableSizes.join(", ")}`] : []),
+    "",
     CUSTOMER_CARE_HEADING,
     "• Lau nhẹ sau mỗi lần dùng; vệ sinh định kỳ bằng bàn chải lông mềm hoặc khăn ẩm.",
     "• Dùng dung dịch vệ sinh phù hợp chất liệu; tránh bàn chải cứng, chất tẩy mạnh, dầu mỡ và chất kết dính.",
@@ -155,8 +172,7 @@ export function appendShoeCustomerReference(body: string, product: ShoeCustomerR
   const trimmed = body.trim();
   const reference = shoeCustomerReferenceText(product);
   if (trimmed.endsWith(reference)) return trimmed;
-  const skuLine = product.sku && !trimmed.includes(product.sku) ? `🏷️ Mã sản phẩm: ${product.sku}\n\n` : "";
-  return `${trimmed}\n\n${skuLine}${reference}`;
+  return `${trimmed}\n\n${reference}`;
 }
 
 export function hasWaterResistanceClaim(text: string) {

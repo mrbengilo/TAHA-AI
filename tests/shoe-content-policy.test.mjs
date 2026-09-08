@@ -26,7 +26,7 @@ test("guidance contains both source categories and applies size audience conserv
   assert.equal(policy.shoeSizeAudience({ name: "Giày unisex PH0014" }), "both");
   assert.equal(policy.shoeSizeAudience({ name: "Giày nữ", gender: "unisex" }), "both");
   assert.equal(policy.shoeSizeAudience({ name: "Giày sản xuất tại Việt Nam" }), "both");
-  const text = policy.shoeCustomerReferenceText({ name: "LITUO SPORT PH0014" });
+  const text = policy.shoeCustomerReferenceText({ name: "LITUO SPORT PH0014", sizes: ["36", "37", "38", "39", "40", "41", "42", "43", "44"] });
   for (const phrase of ["Nữ —", "Nam —", "khăn ẩm", "chất tẩy mạnh", "Không ngâm lâu", "nguồn nhiệt lớn", "nắng gắt", "khô ráo", "xịt bảo vệ"]) {
     assert.ok(text.includes(phrase), phrase);
   }
@@ -34,7 +34,7 @@ test("guidance contains both source categories and applies size audience conserv
 });
 
 test("the customer appendix is idempotent and safe to publish", () => {
-  const product = { sku: "PH0014", name: "Giày thể thao nam" };
+  const product = { sku: "PH0014", name: "Giày thể thao nam", sizes: ["40", "41", "42"] };
   const once = policy.appendShoeCustomerReference("👟 Cùng PH0014 bước vào ngày mới.", product);
   const twice = policy.appendShoeCustomerReference(once, product);
   assert.equal(once, twice);

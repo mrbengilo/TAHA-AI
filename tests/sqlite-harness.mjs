@@ -63,7 +63,10 @@ export function harness() {
   function seedProduct(id = "product-1", sku = "PH0001") {
     const source = { connectionId: "google-1", sheetId: "sheet-1", sheetRange: "Products!A:Z", driveRootFolderId: "root", indexedAt: 0, skuKey: sku, sku, driveFolderId: `folder-${sku}`, driveFolderName: `SKU ${sku}`, driveFolderMatch: "sku_folder" };
     sqlite.prepare(`INSERT INTO products (id,workspace_id,source_connection_id,base_sku,name,slug,description,status,metadata_json,created_at,updated_at)
-      VALUES (?,?,'google-1',?,?,?,?,'active',?,?,?)`).run(id, WORKSPACE, sku, `Giày ${sku}`, sku, `Mô tả gốc ${sku}`, JSON.stringify({ source: "google_sheets", googleSource: source }), now, now);
+      VALUES (?,?,'google-1',?,?,?,?,'active',?,?,?)`).run(id, WORKSPACE, sku, `Giày ${sku}`, sku, `Mô tả gốc ${sku}`, JSON.stringify({
+        source: "google_sheets", googleSource: source,
+        website: { sizes: ["36", "37", "38", "39", "40", "41", "42", "43", "44"] },
+      }), now, now);
     sqlite.prepare(`INSERT INTO product_variants (id,workspace_id,product_id,sku,title,price_minor,inventory_quantity,status,created_at,updated_at)
       VALUES (?,?,?,?,?,490000,10,'active',?,?)`).run(`variant-${id}`, WORKSPACE, id, sku, sku, now, now);
     const mediaId = `image-${id}`;
