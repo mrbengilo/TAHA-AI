@@ -1000,6 +1000,7 @@
 }
 
 .activity-channel-tab {
+  appearance: none;
   min-height: 52px;
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr) auto;
@@ -1010,8 +1011,17 @@
   border: 1px solid #dfe4ed;
   border-radius: 11px;
   background: #fff;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  touch-action: manipulation;
   text-decoration: none;
   transition: border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+}
+
+.activity-channel-tab:focus-visible {
+  outline: 3px solid rgba(79, 70, 229, .28);
+  outline-offset: 2px;
 }
 
 .activity-channel-tab:hover {
@@ -1055,6 +1065,20 @@
 .activity-log-heading {
   margin-top: 16px;
   border-top: 1px solid #edf0f5;
+}
+
+.activity-channel-panel {
+  animation: activity-channel-in .14s ease-out;
+}
+
+@keyframes activity-channel-in {
+  from { opacity: .55; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-channel-panel { animation: none; }
+  .activity-channel-tab { transition: none; }
 }
 
 .activity-day .ui-list {

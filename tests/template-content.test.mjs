@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import test from "node:test";
+import { harness, ROOT } from "./sqlite-harness.mjs";
+
+function loadTemplate() {
+  const h = harness();
+  h.overrides.delete(path.join(ROOT, "lib/ai/template.ts"));
+  return { h, template: h.load("lib/ai/template.ts") };
+}
+
+test("approved template writes every channel without OpenAI, image generation or price disclosure", async () => {
+  const { h, template } = loadTemplate();
+  let externalRequests = 0;
+  h.runtime.TEST_FETCH = async () => { externalRequests += 1; throw new Error("No external request is allowed"); };
+  const result = await template.generateProductContent({
+    product: {
+      sku: "PH0018",
+      name: "Lituo Sport PH0018",
+      description: "Sneaker thể thao nhẹ, dễ phối. Giá 490.000đ.",
+      brand: "Lituo Sport",
+      category: "Sneaker thể thao",
+      priceMinor: 490000,
+      compareAtPriceMinor: 590000,
+      sizes: ["36", "37", "38", "39", "40"],
+      colors: ["Trắng kem"],
+      specifications: ["Thiết kế năng động", "Phù hợp trang phục casual"],
+    },
+    targetProviders: ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"],
+  });
+
+  assert.equal(result.model, "taha-approved-template-v1");
+  assert.equal(JSON.stringify(result.usage), JSON.stringify({ source: "approved-template", externalRequests: 0 }));
+  assert.equal(externalRequests, 0);
+  assert.equal(result.content.sku, "PH0018");
+  assert.deepEqual(Object.keys(result.content.channels), ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"]);
+  for (const channel of Object.values(result.content.channels)) {
+    assert.match(channel.body, /PH0018/);
+    assert.doesNotMatch(`${channel.title}\n${channel.body}\n${channel.hashtags.join(" ")}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
+  }
+  assert.match(result.content.channels.facebook.body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
+  assert.match(result.content.channels.facebook.body, /THÔNG TIN LIÊN HỆ/);
+  assert.match(result.content.channels.facebook.body, /Size hiện có: 36, 37, 38, 39, 40/);
+});
+
+test("approved template is deterministic for the same exact SKU", async () => {
+  const { template } = loadTemplate();
+  const input = {
+    product: { sku: "PH0021", name: "Lituo Sport PH0021", sizes: ["39", "40"] },
+    targetProviders: ["facebook"],
+  };
+  const first = await template.generateProductContent(input);
+  const second = await template.generateProductContent(input);
+  assert.deepEqual(first, second);
+});

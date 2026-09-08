@@ -32,7 +32,7 @@ export function harness() {
       catch (error) { sqlite.exec("ROLLBACK"); throw error; }
     },
   };
-  const runtime = { DB: db, OPENAI_API_KEY: "fake-test-key", INTERNAL_API_SECRET: "test-internal-secret" };
+  const runtime = { DB: db, INTERNAL_API_SECRET: "test-internal-secret" };
   const cache = new Map();
   const overrides = new Map();
   const nativeRequire = createRequire(import.meta.url);
@@ -81,10 +81,11 @@ export function harness() {
     normalizeProductSourceImages: async () => ({ checked: 1 }),
   });
   const generated = [];
-  overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
+  overrides.set(path.join(ROOT, "lib/ai/template.ts"), {
+    APPROVED_TEMPLATE_MODEL: "taha-approved-template-v1",
     async generateProductContent(input) {
       generated.push(input);
-      return { model: "test-text", content: { productDescription: `Mô tả AI ${input.product.sku}`, hashtags: ["#TAHA"], channels: Object.fromEntries(input.targetProviders.map((provider) => [provider, { title: `Giày ${input.product.sku}`, body: `Bài viết ${input.product.sku}`, hashtags: ["#TAHA", `#${input.product.sku}`] }])) } };
+      return { model: "taha-approved-template-v1", content: { productDescription: `Mô tả theo mẫu ${input.product.sku}`, hashtags: ["#TAHA"], channels: Object.fromEntries(input.targetProviders.map((provider) => [provider, { title: `Giày ${input.product.sku}`, body: `Bài viết ${input.product.sku}`, hashtags: ["#TAHA", `#${input.product.sku}`] }])) } };
     },
   });
   return { sqlite, db, runtime, hooks, load, seedProduct, generated, overrides };

@@ -17,11 +17,10 @@ export async function POST(request: Request) {
       .bind(TAHA_WORKSPACE_ID, TRIAL_KEY).first<{ id: string }>();
     if (existing) {
       const run = await getAutomationRun(existing.id);
-      // A failed pre-publication AI step may resume on the same SKU/run. Never undo an admin cancellation or an uncertain send.
+      // A failed pre-publication step may resume on the same SKU/run. Never undo an admin cancellation or an uncertain send.
       if (run.status === "failed" && !run.jobs.length) await retryAutomationRun(existing.id);
       return ok({ run: await getAutomationRun(existing.id), replayed: true });
     }
-    if (!getRuntimeEnv().OPENAI_API_KEY?.trim()) return fail("OPENAI_CONFIG_MISSING", "Máy chủ chưa cấu hình dịch vụ AI.", 409);
     await syncGoogleCatalog();
     const candidates = await db.prepare(`SELECT p.id FROM products p WHERE p.workspace_id = ? AND p.status = 'active' AND p.deleted_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM automation_runs r WHERE r.product_id = p.id AND r.status IN ('queued', 'processing'))
@@ -38,6 +37,6 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof AutomationError) return fail(error.code, error.userMessage, error.status);
     const code = error instanceof Error && /^[A-Z][A-Z0-9_]+$/.test(error.message) ? error.message : "TRIAL_FAILED";
-    return fail(code, "Chưa thể chạy thử. Kiểm tra kết nối Google, Facebook và dịch vụ AI.", 409);
+    return fail(code, "Chưa thể chạy thử. Kiểm tra kết nối Google, Facebook và dữ liệu sản phẩm.", 409);
   }
 }

@@ -12,18 +12,18 @@ export const dynamic = "force-dynamic";
 const MAX_REQUEST_BYTES = 32 * 1024;
 
 export async function GET(request: Request) {
-  if (!isViewerRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem công việc AI.", 401);
+  if (!isViewerRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để xem công việc tự động.", 401);
   const limit = Number(new URL(request.url).searchParams.get("limit") ?? 20);
   try {
     return ok({ runs: await listAutomationRuns(limit) }, { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     if (error instanceof AutomationError) return fail(error.code, error.userMessage, error.status);
-    return fail("AUTOMATION_LIST_FAILED", "Không thể tải danh sách công việc AI.", 500);
+    return fail("AUTOMATION_LIST_FAILED", "Không thể tải danh sách công việc tự động.", 500);
   }
 }
 
 export async function POST(request: Request) {
-  if (!isOperatorRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để chạy AI.", 401);
+  if (!isOperatorRequest(request)) return fail("UNAUTHORIZED", "Bạn cần đăng nhập để chạy quy trình tự động.", 401);
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return fail("UNSUPPORTED_MEDIA_TYPE", "Yêu cầu phải dùng JSON.", 415);
   }
@@ -50,6 +50,6 @@ export async function POST(request: Request) {
       PRODUCT_MEDIA_MISMATCH: "Ảnh đã chọn không thuộc đúng sản phẩm.",
     };
     if (productErrors[code]) return fail(code, productErrors[code], 409);
-    return fail("AUTOMATION_QUEUE_FAILED", "Không thể tạo công việc AI lúc này.", 500);
+    return fail("AUTOMATION_QUEUE_FAILED", "Không thể tạo công việc tự động lúc này.", 500);
   }
 }
