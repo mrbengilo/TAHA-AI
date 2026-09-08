@@ -25,6 +25,7 @@ async function main() {
     const payload = JSON.parse(row.payload_snapshot_json);
     return { jobId: row.id, draftId: row.draft_id, version: row.version, sku: row.base_sku,
       offendingLines: [payload.title ?? '', payload.message ?? '', ...(payload.hashtags ?? [])].join('\n').split('\n').filter(line => policyModule.exports.hasPriceDisclosure(line)),
+      offendingInternalLines: [row.title ?? '', row.body ?? '', ...JSON.parse(row.hashtags_json)].join('\n').split('\n').filter(line => policyModule.exports.hasForbiddenInternalText(line)),
       currentDraftViolation: policyModule.exports.customerCopyViolation({title: row.title, body: row.body, hashtags: JSON.parse(row.hashtags_json)}) };
   }));
   const [connection] = query("SELECT external_account_id,display_name,status,publish_mode,config_json,auth_ciphertext,auth_iv FROM channel_connections WHERE workspace_id='00000000-0000-4000-8000-000000000001' AND provider='facebook' AND status='connected' ORDER BY updated_at DESC LIMIT 1");
