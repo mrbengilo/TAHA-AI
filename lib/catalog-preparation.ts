@@ -1,5 +1,4 @@
 import { AutomationError, queueAutomationRun } from "./automation";
-import { LIFESTYLE_PROMPT_VERSION } from "./image-compression";
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 import { objectJson, productFingerprint, productSources } from "./product-integrity";
@@ -30,8 +29,8 @@ export async function prepareCatalogPage(input: { cursor?: unknown; limit?: unkn
       });
       const bytes = new TextEncoder().encode(JSON.stringify([await productFingerprint(source.product), versions]));
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (n) => n.toString(16).padStart(2, "0")).join("");
-      const queued = await queueAutomationRun({ productId: row.id, imageCount: 4, prepareOnly: true,
-        targetProviders: ["facebook"], idempotencyKey: `catalog:${LIFESTYLE_PROMPT_VERSION}:${row.id}:${hash}` }, actorId);
+      const queued = await queueAutomationRun({ productId: row.id, prepareOnly: true,
+        targetProviders: ["facebook"], idempotencyKey: `catalog:source-only-v1:${row.id}:${hash}` }, actorId);
       results.push({ productId: row.id, sku: row.base_sku, runId: queued.run.id, status: queued.run.status, replayed: queued.replayed });
     } catch (error) {
       const code = error instanceof AutomationError ? error.code : error instanceof Error ? error.message : "CATALOG_PREPARATION_FAILED";

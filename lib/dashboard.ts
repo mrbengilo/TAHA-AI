@@ -48,7 +48,6 @@ type ActivityRow = {
 export type DashboardSnapshot = {
   capturedAt: number;
   publishedThisMonth: number;
-  generatedImages: number;
   readyMedia: number;
   activeProducts: number;
   activeScheduleCount: number;
@@ -66,7 +65,6 @@ export type DashboardSnapshot = {
 const emptySnapshot: DashboardSnapshot = {
   capturedAt: 0,
   publishedThisMonth: 0,
-  generatedImages: 0,
   readyMedia: 0,
   activeProducts: 0,
   activeScheduleCount: 0,
@@ -92,9 +90,8 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   const now = new Date();
   const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
   try {
-    const [publishedThisMonth, generatedImages, readyMedia, activeProducts, activeScheduleCount, failedJobs, connectionErrors, reviewCount, connections, upcoming, calendarJobs, activeSchedules, recentActivity, review] = await Promise.all([
+    const [publishedThisMonth, readyMedia, activeProducts, activeScheduleCount, failedJobs, connectionErrors, reviewCount, connections, upcoming, calendarJobs, activeSchedules, recentActivity, review] = await Promise.all([
       count(database, "SELECT COUNT(*) AS total FROM publish_jobs WHERE workspace_id = ? AND status = 'published' AND completed_at >= ?", TAHA_WORKSPACE_ID, monthStart),
-      count(database, "SELECT COUNT(*) AS total FROM media_assets WHERE workspace_id = ? AND origin = 'generated' AND status = 'ready'", TAHA_WORKSPACE_ID),
       count(database, "SELECT COUNT(*) AS total FROM media_assets WHERE workspace_id = ? AND status = 'ready'", TAHA_WORKSPACE_ID),
       count(database, "SELECT COUNT(*) AS total FROM products WHERE workspace_id = ? AND status = 'active' AND deleted_at IS NULL", TAHA_WORKSPACE_ID),
       count(database, "SELECT COUNT(*) AS total FROM schedules WHERE workspace_id = ? AND status = 'active'", TAHA_WORKSPACE_ID),
@@ -159,7 +156,6 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     return {
       capturedAt: now.getTime(),
       publishedThisMonth,
-      generatedImages,
       readyMedia,
       activeProducts,
       activeScheduleCount,

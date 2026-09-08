@@ -78,9 +78,7 @@ export function harness() {
   }
   overrides.set(path.join(ROOT, "lib/integrations/google-sync.ts"), { syncGoogleCatalog: async () => ({ products: 1 }) });
   overrides.set(path.join(ROOT, "lib/product-image-processing.ts"), {
-    LIFESTYLE_VARIANTS: ["cycling", "running", "climbing", "stream"],
     normalizeProductSourceImages: async () => ({ checked: 1 }),
-    findOrPersistGeneratedImage: async () => { throw new Error("Image generation must never execute"); },
   });
   const generated = [];
   overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
@@ -88,7 +86,6 @@ export function harness() {
       generated.push(input);
       return { model: "test-text", content: { productDescription: `Mô tả AI ${input.product.sku}`, hashtags: ["#TAHA"], channels: Object.fromEntries(input.targetProviders.map((provider) => [provider, { title: `Giày ${input.product.sku}`, body: `Bài viết ${input.product.sku}`, hashtags: ["#TAHA", `#${input.product.sku}`] }])) } };
     },
-    async editProductImage() { throw new Error("Image generation must never execute"); },
   });
   return { sqlite, db, runtime, hooks, load, seedProduct, generated, overrides };
 }

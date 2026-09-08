@@ -117,3 +117,29 @@ test("automation and cron source expose only normalized errors and contain no em
   assert.match(combined, /OPENAI_RATE_LIMITED/);
   assert.doesNotMatch(combined, /return\s+fail\([^;]*error\.message/s);
 });
+
+test("cron preserves due deadlines and isolates Google refresh failure", async () => {
+  const calls = [];
+  const route = await loadCommonJs("app/api/internal/cron/tick/route.ts", {
+    "../../../../../lib/api": apiHelpers(),
+    "../../../../../lib/automation": { runAutomationWorker: async () => { calls.push("worker"); return { completed: 0 }; } },
+    "../../../../../lib/daily-automation": {
+      ensureDailyGoogleCatalogRefresh: async () => { calls.push("google"); throw new Error("GOOGLE_TEMPORARY_FAILURE"); },
+      ensureDailyProductAutomation: async () => { calls.push("daily"); return { queued: false, reason: "already_planned" }; },
+    },
+    "../../../../../lib/dispatcher": { runPublishDispatcher: async () => { calls.push("dispatcher"); return { published: 1 }; } },
+    "../../../../../lib/integrations/env": { getRuntimeEnv: () => ({ INTERNAL_API_SECRET: "cron-secret" }) },
+    "../../../../../lib/scheduler": { runSchedulerTick: async () => { calls.push("scheduler"); return { enqueued: 1 }; } },
+    "../../../../../lib/website-backfill": { ensureWebsiteReadyBackfill: async () => { calls.push("website"); return { queued: 1 }; } },
+  });
+  const response = await route.POST(new Request("https://tahashoes.store/api/internal/cron/tick", {
+    method: "POST",
+    headers: { authorization: "Bearer cron-secret" },
+  }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["scheduler", "dispatcher", "google", "website", "scheduler", "dispatcher", "daily", "worker"]);
+  const body = await response.json();
+  assert.equal(body.data.google.reason, "google_refresh_failed");
+  assert.equal(body.data.website.queued, 1);
+  assert.equal(body.data.websiteDelivery.dispatcher.published, 1);
+});

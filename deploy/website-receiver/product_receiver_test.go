@@ -115,12 +115,15 @@ func TestValidateWebsiteProductMediaRejectsCountTypeAndSize(t *testing.T) {
 		}
 		return websiteProductMedia{Role: role, SortOrder: index, Filename: "shoe.jpg", MimeType: "image/jpeg", DataBase64: valid}
 	}
-	seven := make([]websiteProductMedia, 7)
+	seven := make([]websiteProductMedia, 27)
 	for index := range seven {
 		seven[index] = makeItem(index)
 	}
-	if _, err := validateWebsiteProductMedia(seven); err == nil {
-		t.Fatal("expected seven images to be rejected")
+	if result, err := validateWebsiteProductMedia(seven); err != nil || len(result) != 27 {
+		t.Fatal("expected every source image to be accepted")
+	}
+	if _, err := validateWebsiteProductMedia(nil); err == nil {
+		t.Fatal("expected empty gallery to be rejected")
 	}
 	wrongType := []websiteProductMedia{makeItem(0)}
 	wrongType[0].MimeType = "image/png"

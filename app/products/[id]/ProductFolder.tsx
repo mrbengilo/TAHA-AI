@@ -9,7 +9,6 @@ type Draft = Folder["drafts"][number];
 const labels: Record<string, string> = { queued: "Đang chờ", processing: "Đang chuẩn bị ảnh và bài", draft: "Bản nháp", approved: "Sẵn sàng đăng", rejected: "Không cho đăng", active: "Đã lên lịch", paused: "Đã tạm dừng", completed: "Đã chuẩn bị xong", publishing: "Đang gửi", published: "Đã đăng", cancelled: "Đã hủy", retry_wait: "Đang thử lại", blocked: "Cần kiểm tra", failed: "Có lỗi", awaiting_confirmation: "Chờ xác nhận thủ công" };
 function date(value: number) { return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short", timeZone: "Asia/Ho_Chi_Minh" }).format(value); }
 function kilobytes(value: number) { return `${(Math.floor(value / 100) / 10).toLocaleString("vi-VN")} KB`; }
-const sceneLabels: Record<string, string> = { cycling: "Đạp xe", running: "Chạy bộ", climbing: "Leo núi", stream: "Vượt suối" };
 const contentErrors: Record<string, string> = {
   CONTENT_PRICE_FORBIDDEN: "Chưa đăng: bài còn giá hoặc lời mời báo giá. Sửa và lưu bài, rồi bấm Đăng lại.",
   CONTENT_INTERNAL_TEXT_FORBIDDEN: "Chưa đăng: bài còn thông tin quy trình nội bộ. Sửa và lưu bài, rồi bấm Đăng lại.",
@@ -31,7 +30,6 @@ export default function ProductFolder({ productId }: { productId: string }) {
   const [tags, setTags] = useState("");
   const requestKey = useRef<string | null>(null);
   const editingCopy = editing ? { title: editing.title || "", body: editing.body, hashtags: tags.split(/[\s,]+/).filter(Boolean) } : null;
-  const plannedGeneratedImages = folder ? Math.min(4, Math.max(0, 6 - folder.images.length)) : 0;
   const editViolation = editingCopy ? customerCopyViolation(editingCopy) : null;
   const editWords = editingCopy ? customerCopyWordCount([editingCopy.title, editingCopy.body, ...editingCopy.hashtags].join(" ")) : 0;
   const refresh = useCallback(async () => {
@@ -51,8 +49,8 @@ export default function ProductFolder({ productId }: { productId: string }) {
     setBusy("confirm"); setError(""); setNotice("");
     requestKey.current ??= `confirm:${productId}:${crypto.randomUUID()}`;
     try {
-      await api("/api/automation-runs", { method: "POST", body: JSON.stringify({ productId, targetProviders: ["facebook"], imageCount: 4, idempotencyKey: requestKey.current }) });
-      setNotice("Đã xác nhận. Hệ thống dùng tối đa 6 ảnh đúng SKU, chỉ tạo thêm ảnh bối cảnh khi cần, viết bài không giá, chọn hashtag và lên lịch Facebook. Bạn có thể đóng trang.");
+      await api("/api/automation-runs", { method: "POST", body: JSON.stringify({ productId, targetProviders: ["facebook"], idempotencyKey: requestKey.current }) });
+      setNotice("Đã xác nhận. Hệ thống dùng toàn bộ ảnh gốc đúng SKU, viết bài không giá, chọn hashtag và lên lịch Facebook. Bạn có thể đóng trang.");
       await refresh();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Không thể xác nhận."); }
     finally { setBusy(""); }
@@ -84,19 +82,17 @@ export default function ProductFolder({ productId }: { productId: string }) {
   if (!folder) return <div className="ui-panel"><p role={error ? "alert" : "status"}>{error || "Đang tải thư mục sản phẩm…"}</p></div>;
   return <div className="sku-folder">
     <section className="ui-page-header"><div className="ui-page-header-copy"><span className="ui-eyebrow">THƯ MỤC SKU {folder.product.base_sku}</span><h1>{folder.product.name}</h1><p>Google Sheets · SKU {folder.product.base_sku} · Ảnh và bài viết của cùng sản phẩm</p></div>
-      {folder.canReview && <button type="button" className="ui-button is-primary" aria-busy={busy === "confirm"} disabled={!!busy || !!active || !!scheduled || !!sending || !!folder.validationError} onClick={() => void confirm()}>{busy === "confirm" ? "Đang xác nhận…" : active ? "Đang chuẩn bị ảnh và bài…" : scheduled || sending ? "Đã có lịch đăng tự động" : "Xác nhận · Chuẩn bị tối đa 6 ảnh và bài"}</button>}
+      {folder.canReview && <button type="button" className="ui-button is-primary" aria-busy={busy === "confirm"} disabled={!!busy || !!active || !!scheduled || !!sending || !!folder.validationError} onClick={() => void confirm()}>{busy === "confirm" ? "Đang xác nhận…" : active ? "Đang tối ưu ảnh và viết bài…" : scheduled || sending ? "Đã có lịch đăng tự động" : "Xác nhận · Dùng toàn bộ ảnh gốc và viết bài"}</button>}
     </section>
     {notice && <div className="automation-alert is-success" role="status">{notice}</div>}
     {error && <div className="automation-alert is-error" role="alert">{error}</div>}
     {folder.validationError && <div className="ui-panel" role="alert">Chưa đủ dữ liệu khớp SKU để đăng. Cần sản phẩm đang bán trong Sheet và ít nhất một ảnh gốc trong thư mục Drive đúng SKU. <Link href="/connections">Kiểm tra và đồng bộ Google</Link></div>}
     <div className="sku-columns">
-      <section className="ui-panel sku-source"><h2>Ảnh gốc · SKU {folder.product.base_sku}</h2><p>{folder.images.length} ảnh đúng SKU · {folder.images.filter((image) => image.optimized).length} ảnh đã dưới 300 KB</p><div className="sku-images">{folder.images.map((image) => <a href={image.previewUrl} target="_blank" rel="noreferrer" key={image.id}><img src={image.previewUrl} alt={`${folder.product.base_sku} · ${image.filename}`} loading="lazy" width={480} height={480}/><span>{image.filename}</span><small>{image.optimized && image.byteSize ? kilobytes(image.byteSize) : "Chờ tối ưu dung lượng"}</small></a>)}</div>
-        <h2>Ảnh bối cảnh · SKU {folder.product.base_sku}</h2><p>{plannedGeneratedImages ? `Tạo thêm ${plannedGeneratedImages} ảnh khi cần · Tổng ảnh đăng tối đa 6` : "Đã có ít nhất 6 ảnh gốc · Không cần tạo thêm ảnh"}</p>
-        {folder.generatedImages.length ? <div className="sku-images is-generated">{folder.generatedImages.map((image) => <a href={image.previewUrl} target="_blank" rel="noreferrer" key={image.id}><img src={image.previewUrl} alt={`${folder.product.base_sku} · ${sceneLabels[image.variant] || image.variant}`} loading="lazy" width={480} height={480}/><span>{sceneLabels[image.variant] || image.filename}</span><small>{kilobytes(image.byteSize)}</small></a>)}</div> : <p className="sku-editor-hint">{folder.imageValidationError ? "Bộ ảnh cần được đối chiếu lại với sản phẩm hiện tại." : plannedGeneratedImages ? `Hệ thống sẽ tạo thêm ${plannedGeneratedImages} ảnh, mỗi ảnh dưới 200 KB.` : "Hệ thống chỉ viết bài và dùng tối đa 6 ảnh gốc để đăng."}</p>}
+      <section className="ui-panel sku-source"><h2>Ảnh gốc · SKU {folder.product.base_sku}</h2><p>{folder.images.length} ảnh đúng SKU · hệ thống đăng toàn bộ ảnh và tối ưu mỗi ảnh dưới 300 KB</p><div className="sku-images">{folder.images.map((image) => <a href={image.previewUrl} target="_blank" rel="noreferrer" key={image.id}><img src={image.previewUrl} alt={`${folder.product.base_sku} · ${image.filename}`} loading="lazy" width={480} height={480}/><span>{image.filename}</span><small>{image.optimized && image.byteSize ? kilobytes(image.byteSize) : "Chờ tối ưu dung lượng"}</small></a>)}</div>
         <h2>Thông tin từ Google Sheets</h2><p className="sku-body">{folder.product.description || "Sheet chưa có mô tả bổ sung. AI chỉ sử dụng các thông tin đã có của sản phẩm."}</p>
       </section>
       <section className="sku-articles"><h2>Bài viết và mô tả · SKU {folder.product.base_sku}</h2>
-        {folder.runs.filter((run) => ["queued", "processing", "failed"].includes(run.status)).map((run) => <div className="ui-panel" key={run.id} role="status"><strong>{labels[run.status]}</strong>{run.requested_image_count > 0 && <p>{run.completed_image_count}/{run.requested_image_count} ảnh đã hoàn tất</p>}<p>{run.error_message || "Máy chủ tự xử lý; bạn không cần giữ trang này mở."}</p>{run.error_code && <small>{run.error_code}</small>}</div>)}
+        {folder.runs.filter((run) => ["queued", "processing", "failed"].includes(run.status)).map((run) => <div className="ui-panel" key={run.id} role="status"><strong>{labels[run.status]}</strong><p>{run.error_message || "Máy chủ tự xử lý; bạn không cần giữ trang này mở."}</p>{run.error_code && <small>{run.error_code}</small>}</div>)}
         {!folder.drafts.length && <div className="ui-panel">Chưa có bài viết. Xác nhận sản phẩm để hệ thống tự chuẩn bị.</div>}
         {folder.drafts.map((draft) => {
           const schedule = folder.schedules.find((item) => item.draft_id === draft.id);

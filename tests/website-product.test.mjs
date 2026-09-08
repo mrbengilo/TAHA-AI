@@ -95,9 +95,9 @@ test("adds the exact SKU to the title and rejects products without an explicit s
   }), /WEBSITE_PRODUCT_SIZES_REQUIRED/);
 });
 
-test("rejects an empty or oversized website gallery", async () => {
+test("keeps every source photo and rejects an empty gallery", async () => {
   const { buildWebsiteProductPayload } = await loadWebsiteProduct();
   const base = { jobId: "job", idempotencyKey: "key", product: sourceProduct(), draft: { id: "draft", version: 1, body: "Mô tả" } };
   assert.throws(() => buildWebsiteProductPayload({ ...base, media: [] }), /WEBSITE_PRODUCT_MEDIA_COUNT_INVALID/);
-  assert.throws(() => buildWebsiteProductPayload({ ...base, media: media(7) }), /WEBSITE_PRODUCT_MEDIA_COUNT_INVALID/);
+  assert.equal(buildWebsiteProductPayload({ ...base, media: media(27) }).product.media.length, 27);
 });

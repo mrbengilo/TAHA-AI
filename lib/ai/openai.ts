@@ -6,7 +6,6 @@ import {
   sanitizeProductTextForCopy,
   shoeCustomerReferenceText,
 } from "./shoe-content";
-import { buildShoeImageEditPrompt, SHOE_LIFESTYLE_IMAGE_PROMPTS } from "./shoe-image-prompts";
 import {
   FACEBOOK_CONTENT_INSTRUCTIONS,
   facebookStoreReferenceText,
@@ -15,11 +14,7 @@ import {
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TEXT_MODEL = "gpt-5.6-luna";
-const DEFAULT_IMAGE_MODEL = "gpt-image-2";
-const DEFAULT_IMAGE_QUALITY = "medium";
 const TEXT_REQUEST_TIMEOUT_MS = 60_000;
-const IMAGE_REQUEST_TIMEOUT_MS = 180_000;
-const MAX_SOURCE_IMAGE_BYTES = 50 * 1024 * 1024;
 
 const KNOWN_TARGET_PROVIDERS = new Set([
   "facebook",
@@ -30,8 +25,6 @@ const KNOWN_TARGET_PROVIDERS = new Set([
   "tiktok_shop",
   "shopee",
 ]);
-const IMAGE_QUALITY_VALUES = new Set(["low", "medium", "high", "auto"]);
-const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export type ProductContentProduct = {
   sku: string;
@@ -68,22 +61,6 @@ export type GeneratedProductContent = {
   channels: Record<string, ChannelContent>;
 };
 
-export type EditProductImageInput = {
-  source: Blob;
-  filename: string;
-  mimeType: string;
-  referenceSources?: Array<{ source: Blob; filename: string; mimeType: string }>;
-  product: { sku: string; name: string };
-  layoutIndex: number;
-};
-
-export type EditedProductImage = {
-  model: string;
-  image: Blob;
-  mimeType: string;
-  revisedPrompt?: string;
-};
-
 export class OpenAiClientError extends Error {
   constructor(
     public readonly code: string,
@@ -94,7 +71,6 @@ export class OpenAiClientError extends Error {
     this.name = "OpenAiClientError";
   }
 }
-
 type Fetcher = typeof fetch;
 
 type OpenAiResponseEnvelope = {
@@ -104,7 +80,6 @@ type OpenAiResponseEnvelope = {
     type?: unknown;
     content?: Array<{ type?: unknown; text?: unknown }>;
   }>;
-  data?: Array<{ b64_json?: unknown; revised_prompt?: unknown }>;
 };
 
 const channelSchema = {
@@ -164,16 +139,6 @@ function requireOpenAiApiKey() {
 
 function textModel() {
   return getRuntimeEnv().OPENAI_TEXT_MODEL?.trim() || DEFAULT_TEXT_MODEL;
-}
-
-function imageModel() {
-  return getRuntimeEnv().OPENAI_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL;
-}
-
-function imageQuality() {
-  const value = getRuntimeEnv().OPENAI_IMAGE_QUALITY?.trim().toLowerCase() || DEFAULT_IMAGE_QUALITY;
-  if (!IMAGE_QUALITY_VALUES.has(value)) throw new OpenAiClientError("OPENAI_IMAGE_QUALITY_INVALID");
-  return value;
 }
 
 function requiredString(value: unknown, maxLength: number, code = "OPENAI_INPUT_INVALID") {
@@ -455,94 +420,5 @@ export async function generateProductContent(
     model: returnedModel,
     content: content as unknown as Record<string, unknown>,
     ...(usage ? { usage } : {}),
-  };
-}
-
-function safeFilename(value: unknown) {
-  const raw = typeof value === "string" ? value.trim() : "source-product.png";
-  const cleaned = raw.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return cleaned.slice(0, 120) || "source-product.png";
-}
-
-function decodeBase64(value: string) {
-  try {
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    if (bytes.byteLength === 0) throw new Error("empty");
-    return bytes;
-  } catch {
-    throw new OpenAiClientError("OPENAI_IMAGE_RESPONSE_INVALID");
-  }
-}
-
-export async function editProductImage(
-  input: EditProductImageInput,
-  fetcher: Fetcher = fetch,
-): Promise<EditedProductImage> {
-  const mimeType = typeof input.mimeType === "string" ? input.mimeType.trim().toLowerCase() : "";
-  if (!(input.source instanceof Blob)
-    || input.source.size <= 0
-    || input.source.size > MAX_SOURCE_IMAGE_BYTES
-    || !SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)
-    || (input.source.type && input.source.type.toLowerCase() !== mimeType)) {
-    throw new OpenAiClientError("OPENAI_IMAGE_INPUT_INVALID");
-  }
-  const referenceSources = (input.referenceSources ?? []).slice(0, 1);
-  for (const reference of referenceSources) {
-    const referenceMimeType = typeof reference.mimeType === "string" ? reference.mimeType.trim().toLowerCase() : "";
-    if (!(reference.source instanceof Blob)
-      || reference.source.size <= 0
-      || reference.source.size > MAX_SOURCE_IMAGE_BYTES
-      || !SUPPORTED_IMAGE_MIME_TYPES.has(referenceMimeType)
-      || (reference.source.type && reference.source.type.toLowerCase() !== referenceMimeType)) {
-      throw new OpenAiClientError("OPENAI_IMAGE_INPUT_INVALID");
-    }
-  }
-  const sku = requiredString(input.product?.sku, 128, "OPENAI_IMAGE_INPUT_INVALID");
-  const productName = requiredString(input.product?.name, 300, "OPENAI_IMAGE_INPUT_INVALID");
-  const filename = requiredString(input.filename, 200, "OPENAI_IMAGE_INPUT_INVALID");
-  if (!Number.isInteger(input.layoutIndex) || input.layoutIndex < 1 || input.layoutIndex > SHOE_LIFESTYLE_IMAGE_PROMPTS.length) {
-    throw new OpenAiClientError("OPENAI_IMAGE_INPUT_INVALID");
-  }
-
-  const model = imageModel();
-  const form = new FormData();
-  form.append("model", model);
-  form.append("image[]", input.source, safeFilename(filename));
-  for (const reference of referenceSources) {
-    form.append("image[]", reference.source, safeFilename(reference.filename));
-  }
-  form.append("prompt", buildShoeImageEditPrompt({
-    sku,
-    productName,
-    layoutIndex: input.layoutIndex,
-  }));
-  form.append("size", "1024x1024");
-  form.append("quality", imageQuality());
-  form.append("output_format", "png");
-
-  const apiKey = requireOpenAiApiKey();
-  const response = await openAiFetch("/images/edits", {
-    method: "POST",
-    headers: { authorization: `Bearer ${apiKey}` },
-    body: form,
-  }, IMAGE_REQUEST_TIMEOUT_MS, fetcher);
-  const root = await responseEnvelope(response);
-  const b64Json = root.data?.[0]?.b64_json;
-  if (typeof b64Json !== "string" || !b64Json) {
-    throw new OpenAiClientError("OPENAI_IMAGE_RESPONSE_INVALID");
-  }
-  const bytes = decodeBase64(b64Json);
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const revisedPrompt = root.data?.[0]?.revised_prompt;
-  return {
-    model,
-    image: new Blob([copy.buffer], { type: "image/png" }),
-    mimeType: "image/png",
-    ...(typeof revisedPrompt === "string" && revisedPrompt.trim() && revisedPrompt.length <= 4_000
-      ? { revisedPrompt }
-      : {}),
   };
 }

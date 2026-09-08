@@ -20,28 +20,28 @@ test("channel UI renders real image previews", () => {
   assert.match(mediaRoute, /searchParams\.get\("inline"\)/);
 });
 
-test("daily automation requests up to four lifestyle images and limits every post to six", () => {
+test("daily automation uses Drive originals for Facebook while website delivery remains immediate", () => {
   const daily = read("lib/daily-automation.ts");
   const cron = read("app/api/internal/cron/tick/route.ts");
-  const publishing = read("lib/publishing.ts");
   assert.match(daily, /idempotencyKey: `daily:/);
-  assert.match(daily, /imageCount: 4/);
+  assert.doesNotMatch(daily, /imageCount:\s*[1-9]/);
+  assert.match(daily, /targetProviders: \["facebook"\]/);
+  assert.match(cron, /ensureDailyGoogleCatalogRefresh/);
   assert.match(cron, /runAutomationWorker\(\{ limit: 1 \}\)/);
-  assert.match(publishing, /WEBSITE_PRODUCT_MAX_IMAGES/);
   const automation = read("lib/automation.ts");
-  assert.match(automation, /plannedGeneratedImageCount/);
-  assert.match(automation, /MAX_POST_IMAGES/);
+  assert.doesNotMatch(automation, /editProductImage|plannedGeneratedImageCount|MAX_POST_IMAGES/);
+  assert.match(automation, /const selectedSourceMediaIds = originalMediaIds/);
   assert.match(automation, /publicationDayFromRequestKey/);
   assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
   assert.match(automation, /provider === "website" \? now : nextLocalSlot/);
 });
 
-test("website publishing uses a versioned SKU upsert and no more than six images", () => {
+test("website publishing uses a versioned SKU upsert with every source image", () => {
   const publishing = read("lib/publishing.ts");
   const contract = read("lib/website-product.ts");
   assert.match(publishing, /buildWebsiteProductPayload/);
   assert.match(contract, /taha\.website\.product\.v1/);
-  assert.match(contract, /WEBSITE_PRODUCT_MAX_IMAGES = 6/);
+  assert.doesNotMatch(contract, /WEBSITE_PRODUCT_MAX_IMAGES|slice\(0,\s*6\)/);
   assert.match(contract, /operation: "upsert_product"/);
 });
 

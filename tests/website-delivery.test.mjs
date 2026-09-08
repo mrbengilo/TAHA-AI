@@ -53,7 +53,7 @@ async function loadPublishing({ receiver, baseUrl = "https://tahashoes.vn" } = {
       if (specifier === "./integrations/facebook-permissions") return { verifyFacebookConnection: async () => ({ ready: true }) };
       if (specifier === "./integrations/store") return { TAHA_WORKSPACE_ID: "workspace-test" };
       if (specifier === "./media") {
-        return { mediaBlob: async () => ({
+        return { sourcePhotoBlob: async () => ({
           blob: new Blob(["image"], { type: "image/jpeg" }),
           filename: "PH0027.jpg",
           mimeType: "image/jpeg",
@@ -164,4 +164,13 @@ test("keeps non-200/201 receiver errors on their existing retry path", async () 
       && error.retryable === true
       && error.outcomeUnknown === false,
   );
+});
+
+
+test("website delivery sends all 27 source photos without truncating the album", async () => {
+  const { publishing, state } = await loadPublishing();
+  const input = websiteInput();
+  input.payload.mediaIds = Array.from({ length: 27 }, (_, i) => `media-${i}`);
+  await publishing.sendWebsitePayload(input);
+  assert.equal(state.contractInput.media.length, 27);
 });

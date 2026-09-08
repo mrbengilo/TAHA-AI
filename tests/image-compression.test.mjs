@@ -32,12 +32,6 @@ function addSourceImage(h, index, productId = "product-1", sku = "PH0001") {
   return id;
 }
 
-test("generated image planning fills available post slots without exceeding six", () => {
-  const h = harness();
-  const compression = h.load("lib/image-compression.ts");
-  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map((count) => compression.plannedGeneratedImageCount(count)), [4, 4, 3, 2, 1, 0, 0]);
-});
-
 test("bounded compressor checks actual bytes and advances through a finite fidelity ladder", async () => {
   const h = harness();
   const compression = h.load("lib/image-compression.ts");
@@ -57,6 +51,29 @@ test("bounded compressor rejects decode bombs and fails closed when no candidate
   const binding = imageBinding(Array(10).fill(200_000));
   await assert.rejects(compression.compressImageToJpeg(new Blob([new Uint8Array(10)]), 200_000, binding), /IMAGE_COMPRESSION_TARGET_UNREACHABLE/);
   assert.equal(binding.calls.length, 10);
+});
+
+test("sourcePhotoBlob compresses a large Drive original below 300 KB and rejects generated media", async () => {
+  const h = harness(); h.seedProduct();
+  h.sqlite.prepare("UPDATE media_assets SET byte_size=400000, mime_type='image/png' WHERE id='image-product-1'").run();
+  h.overrides.set(path.join(ROOT, "lib/integrations/connection-secrets.ts"), {
+    getConnectedIntegration: async () => ({ id: "google-1" }), getGoogleAccessToken: async () => "token",
+  });
+  h.runtime.IMAGES = imageBinding([299_999]);
+  h.runtime.TEST_FETCH = async (input) => {
+    const url = new URL(input);
+    if (url.searchParams.get("alt") === "media") {
+      return new Response(new Uint8Array(400_000), { headers: { "content-type": "image/png", "content-length": "400000" } });
+    }
+    return Response.json({ id: "file-product-1", name: "PH0001.png", mimeType: "image/png", size: "400000",
+      md5Checksum: "md5-source", parents: ["folder-PH0001"] });
+  };
+  const media = h.load("lib/media.ts");
+  const photo = await media.sourcePhotoBlob("image-product-1");
+  assert.equal(photo.mimeType, "image/jpeg");
+  assert.equal(photo.blob.size, 299_999);
+  h.sqlite.prepare("UPDATE media_assets SET origin='generated' WHERE id='image-product-1'").run();
+  await assert.rejects(media.sourcePhotoBlob("image-product-1"), /PRODUCT_MEDIA_MISMATCH/);
 });
 
 test("Drive idempotency lookup rejects duplicate matching files", async () => {
@@ -91,32 +108,6 @@ test("optimized substitution rejects a raw Drive source replaced since catalog s
   await assert.rejects(h.load("lib/media.ts").loadMedia("image-product-1"), /PRODUCT_MEDIA_MISMATCH/);
   assert.equal(urls.length, 1);
   assert.ok(!urls[0].includes("alt=media"));
-});
-
-test("generated gallery filters stale source versions before checking exact variants", async () => {
-  const h = harness(); h.seedProduct();
-  const integrity = h.load("lib/product-integrity.ts");
-  const fingerprint = await integrity.productFingerprint((await integrity.productSources("product-1")).product);
-  const variants = ["cycling", "running", "climbing", "stream"];
-  const insert = (id, variant, version) => {
-    const externalId = `file-${id}`;
-    const metadata = { googleDriveSource: { connectionId: "google-1", driveFileId: externalId, driveFolderId: "folder-PH0001", skuKey: "PH0001" }, generation: {
-      variant, sourceMediaId: "image-product-1", sourceExternalId: "file-product-1", sourceVersion: version,
-      sourceFingerprint: fingerprint, promptVersion: "taha-lifestyle-v3", compressionPolicy: "taha-jpeg-v1",
-    } };
-    h.sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,
-      external_id,mime_type,byte_size,status,metadata_json,created_at,updated_at) VALUES (?,?,'google-1','google_drive','image','generated',
-      'google_drive',?,'image/jpeg',150000,'ready',?,?,?)`).run(id, WORKSPACE, externalId, JSON.stringify(metadata), Date.now(), Date.now());
-    h.sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,created_at) VALUES (?,?, 'product-1',?,'generated',?)")
-      .run(`pm-${id}`, WORKSPACE, id, Date.now());
-  };
-  insert("stale-cycling", "cycling", "old-md5");
-  for (const variant of variants) insert(`current-${variant}`, variant, "md5-source");
-  const verified = await integrity.verifiedProductGeneratedImages("product-1");
-  assert.deepEqual(Array.from(verified, (row) => row.id), variants.map((variant) => `current-${variant}`));
-  await assert.rejects(integrity.assertGeneratedProductMedia("product-1",
-    ["stale-cycling", "current-running", "current-climbing", "current-stream"], fingerprint,
-    "taha-lifestyle-v3", variants), /PRODUCT_GENERATED_MEDIA_MISMATCH/);
 });
 
 test("source normalization creates one canonical derivative and reuses it on replay", async () => {
@@ -194,117 +185,42 @@ test("source normalization repairs stale byte metadata after a live Drive check"
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE origin='derived'").get().n, 0);
 });
 
-test("prepare-only creates an unscheduled four-image draft and confirmation reuses its media", async () => {
+test("automation publishes every original source image with no six-image cap", async () => {
   const h = harness(); h.seedProduct();
-  const extraMetadata = { name: "PH0001-02.jpg", md5Checksum: "md5-extra", googleDriveSource: {
-    connectionId: "google-1", driveFileId: "file-product-1-extra", driveFolderId: "folder-PH0001", skuKey: "PH0001", matchKind: "sku_folder",
-  } };
-  h.sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,
-    external_id,mime_type,byte_size,status,metadata_json,created_at,updated_at) VALUES ('image-product-1-extra',?,'google-1','google_drive',
-    'image','source','google_drive','file-product-1-extra','image/jpeg',120000,'ready',?,?,?)`)
-    .run(WORKSPACE, JSON.stringify(extraMetadata), Date.now(), Date.now());
-  h.sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,sort_order,created_at) VALUES ('pm-product-1-extra',?,'product-1','image-product-1-extra','gallery',1,?)")
-    .run(WORKSPACE, Date.now());
-  h.overrides.set(path.join(ROOT, "lib/integrations/facebook-permissions.ts"), { verifyFacebookConnection: async () => ({ ready: true }) });
-  h.sqlite.prepare("UPDATE channel_connections SET status='expired' WHERE provider='facebook'").run();
-  const edits = [];
-  h.overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
-    async generateProductContent(input) {
-      return { model: "text-model", content: { productDescription: `Mô tả ${input.product.sku}`, hashtags: ["#TAHA"], channels: { facebook: { title: "Giày", body: "Bài viết PH0001", hashtags: ["#TAHA"] } } } };
-    },
-    async editProductImage(input) {
-      edits.push(input.layoutIndex);
-      return { model: "image-model", image: new Blob([new Uint8Array(250_000)], { type: "image/png" }), mimeType: "image/png" };
-    },
-  });
-  h.runtime.IMAGES = imageBinding(Array(20).fill(150_000));
-  h.overrides.set(path.join(ROOT, "lib/media.ts"), {
-    mediaBlob: async () => ({ blob: new Blob([new Uint8Array(250_000)], { type: "image/jpeg" }), mimeType: "image/jpeg", filename: "PH0001.jpg" }),
-  });
-  const variants = ["cycling", "running", "climbing", "stream"];
-  const normalized = [];
-  h.overrides.set(path.join(ROOT, "lib/product-image-processing.ts"), {
-    LIFESTYLE_VARIANTS: variants,
-    normalizeProductSourceImages: async (_productId, ids) => { normalized.push(...ids); return { checked: ids.length }; },
-    async findOrPersistGeneratedImage(input) {
-      const id = `generated-${input.variant}`;
-      if (!input.blob && !h.sqlite.prepare("SELECT id FROM media_assets WHERE id=?").get(id)) return null;
-      if (!h.sqlite.prepare("SELECT id FROM media_assets WHERE id=?").get(id)) {
-        const metadata = { googleDriveSource: { connectionId: "google-1", driveFileId: `file-${id}`, driveFolderId: "folder-PH0001", skuKey: "PH0001" }, generation: {
-          variant: input.variant, sourceMediaId: input.source.id, sourceExternalId: input.source.external_id,
-          sourceVersion: "md5-source", sourceFingerprint: input.sourceFingerprint, promptVersion: input.promptVersion,
-          compressionPolicy: "taha-jpeg-v1",
-        } };
-        h.sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,
-          external_id,mime_type,byte_size,status,metadata_json,created_at,updated_at) VALUES (?,?,'google-1','google_drive','image','generated',
-          'google_drive',?,'image/jpeg',150000,'ready',?,?,?)`).run(id, WORKSPACE, `file-${id}`, JSON.stringify(metadata), Date.now(), Date.now());
-        h.sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,created_at) VALUES (?,?,?,?,'generated',?)")
-          .run(`pm-${id}`, WORKSPACE, input.productId, id, Date.now());
-      }
-      return { mediaId: id, byteSize: 150_000 };
-    },
-  });
-  const automation = h.load("lib/automation.ts");
-  const first = await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"], idempotencyKey: "prepare-product-1-v1", prepareOnly: true });
-  assert.equal(first.run.requestedImageCount, 4);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type='image'").get().n, 4);
-  for (let tick = 0; tick < 8; tick += 1) await automation.runAutomationWorker();
-  assert.deepEqual(edits, [1, 2, 3, 4]);
-  assert.deepEqual(normalized, ["image-product-1", "image-product-1-extra"]);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type='optimize' AND status='completed'").get().n, 2);
-  assert.deepEqual(h.sqlite.prepare("SELECT status FROM content_drafts").all().map((row) => row.status), ["draft"]);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM schedules").get().n, 0);
-  assert.deepEqual(JSON.parse(h.sqlite.prepare("SELECT output_media_ids_json value FROM automation_runs").get().value), variants.map((variant) => `generated-${variant}`));
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_draft_media").get().n, 6);
-
-  h.sqlite.prepare("UPDATE channel_connections SET status='connected' WHERE provider='facebook'").run();
-  await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"], idempotencyKey: "confirm-product-1-v2" });
-  for (let tick = 0; tick < 8; tick += 1) await automation.runAutomationWorker();
-  assert.deepEqual(edits, [1, 2, 3, 4]);
-  assert.deepEqual(normalized, ["image-product-1", "image-product-1-extra", "image-product-1", "image-product-1-extra"]);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE origin='generated'").get().n, 4);
-  assert.deepEqual(h.sqlite.prepare("SELECT status FROM content_drafts ORDER BY created_at,id").all().map((row) => row.status), ["draft", "approved"]);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM schedules WHERE status='active'").get().n, 1);
-});
-
-test("six source images skip image generation and still create a six-image draft", async () => {
-  const h = harness(); h.seedProduct();
-  for (let index = 0; index < 5; index += 1) addSourceImage(h, index);
+  for (let index = 0; index < 8; index += 1) addSourceImage(h, index);
   h.overrides.set(path.join(ROOT, "lib/ai/openai.ts"), {
     async generateProductContent() {
       return { model: "text-model", content: { productDescription: "Mô tả PH0001", hashtags: ["#TAHA"],
         channels: { facebook: { title: "Giày", body: "Bài viết PH0001", hashtags: ["#TAHA"] } } } };
     },
-    async editProductImage() { throw new Error("IMAGE_GENERATION_MUST_BE_SKIPPED"); },
   });
   const normalized = [];
   h.overrides.set(path.join(ROOT, "lib/product-image-processing.ts"), {
-    LIFESTYLE_VARIANTS: ["cycling", "running", "climbing", "stream"],
     normalizeProductSourceImages: async (_productId, ids) => { normalized.push(...ids); return { checked: ids.length }; },
-    async findOrPersistGeneratedImage() { throw new Error("IMAGE_GENERATION_MUST_BE_SKIPPED"); },
   });
   const automation = h.load("lib/automation.ts");
   const queued = await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"],
-    idempotencyKey: "six-source-prepare", prepareOnly: true, imageCount: 4 });
+    idempotencyKey: "all-source-prepare", prepareOnly: true });
   assert.equal(queued.run.requestedImageCount, 0);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type='image'").get().n, 0);
-  for (let tick = 0; tick < 9; tick += 1) await automation.runAutomationWorker({ limit: 1 });
-  assert.equal(normalized.length, 6);
+  for (let tick = 0; tick < 12; tick += 1) await automation.runAutomationWorker({ limit: 1 });
+  assert.equal(normalized.length, 9);
   assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs").get().status, "completed");
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_drafts WHERE status='draft'").get().n, 1);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_draft_media").get().n, 6);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_draft_media").get().n, 9);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets WHERE origin='generated'").get().n, 0);
 });
 
-test("retry replans an older failed run after the SKU reaches six source images", async () => {
+test("retry permanently removes legacy queued image-generation work", async () => {
   const h = harness(); h.seedProduct();
   const automation = h.load("lib/automation.ts");
   const queued = await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"],
-    idempotencyKey: "old-four-image-run", prepareOnly: true, imageCount: 4 });
-  assert.equal(queued.run.requestedImageCount, 4);
-  h.sqlite.prepare("UPDATE automation_runs SET status='failed', error_code='OPENAI_RATE_LIMITED'").run();
-  h.sqlite.prepare("UPDATE automation_steps SET status='cancelled'").run();
-  for (let index = 0; index < 5; index += 1) addSourceImage(h, index);
+    idempotencyKey: "old-image-run", prepareOnly: true });
+  assert.equal(queued.run.requestedImageCount, 0);
+  h.sqlite.prepare("UPDATE automation_runs SET status='failed', requested_image_count=4, prompt_version='taha-lifestyle-v3', error_code='OPENAI_RATE_LIMITED'").run();
+  h.sqlite.prepare(`INSERT INTO automation_steps
+    (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at)
+    VALUES ('legacy-image-step',?,?, 'image',0,'queued',0,0,3,'{}',0,0)`).run(WORKSPACE, queued.run.id);
   const retried = await automation.retryAutomationRun(queued.run.id);
   assert.equal(retried.requestedImageCount, 0);
   assert.equal(h.sqlite.prepare("SELECT requested_image_count n FROM automation_runs").get().n, 0);
@@ -312,7 +228,7 @@ test("retry replans an older failed run after the SKU reaches six source images"
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE step_type IN ('content','finalize') AND status='queued'").get().n, 2);
 });
 
-test("a source added after the durable optimization snapshot blocks generation and finalization", async () => {
+test("a source added after the durable optimization snapshot blocks finalization", async () => {
   const h = harness(); h.seedProduct();
   const automation = h.load("lib/automation.ts");
   await automation.queueAutomationRun({ productId: "product-1", targetProviders: ["facebook"], idempotencyKey: "prepare-source-race", prepareOnly: true });
@@ -333,7 +249,7 @@ test("a source added after the durable optimization snapshot blocks generation a
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_drafts").get().n, 0);
 });
 
-test("an older ready SKU finalizes before a newer SKU's queued image work", async () => {
+test("the worker cancels legacy image work while an older source-only SKU finalizes", async () => {
   const h = harness();
   h.seedProduct("product-pilot", "PH0014");
   const automation = h.load("lib/automation.ts");
@@ -348,12 +264,16 @@ test("an older ready SKU finalizes before a newer SKU's queued image work", asyn
   h.sqlite.prepare("UPDATE automation_runs SET created_at=1 WHERE id=?").run(pilot.run.id);
   h.sqlite.prepare("UPDATE automation_runs SET created_at=2, status='processing' WHERE id=?").run(later.run.id);
   h.sqlite.prepare("UPDATE automation_steps SET status='completed' WHERE run_id=? AND step_type='content'").run(later.run.id);
+  h.sqlite.prepare("UPDATE automation_runs SET requested_image_count=4, prompt_version='taha-lifestyle-v3' WHERE id=?").run(later.run.id);
+  h.sqlite.prepare(`INSERT INTO automation_steps
+    (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at)
+    VALUES ('later-legacy-image',?,?, 'image',0,'queued',0,0,3,'{}',0,0)`).run(WORKSPACE, later.run.id);
 
   const result = await automation.runAutomationWorker({ limit: 1 });
   assert.equal(result.completed, 1, JSON.stringify(result));
   assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id=?").get(pilot.run.id).status, "completed");
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE run_id=? AND step_type='image' AND status='queued'")
-    .get(later.run.id).n, 4);
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE id='later-legacy-image'").get().status, "cancelled");
+  assert.equal(h.sqlite.prepare("SELECT requested_image_count n FROM automation_runs WHERE id=?").get(later.run.id).n, 0);
 });
 
 test("a run filter never leases an earlier unrelated publish-capable run", async () => {

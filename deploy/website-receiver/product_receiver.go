@@ -31,7 +31,6 @@ const (
 	websiteProductSchema       = "taha.website.product.v1"
 	websiteProductOperation    = "upsert_product"
 	websiteProductMaxBody      = 3 << 20
-	websiteProductMaxImages    = 6
 	websiteProductMaxImageSize = 300_000
 	websiteProductMaxDimension = 12_000
 	websiteProductMaxPixels    = 40_000_000
@@ -308,8 +307,8 @@ func validateStringList(values []string, maxItems, maxRunes int, requireOne bool
 }
 
 func validateWebsiteProductMedia(items []websiteProductMedia) ([]validatedWebsiteProductMedia, error) {
-	if len(items) == 0 || len(items) > websiteProductMaxImages {
-		return nil, productRequestError(http.StatusBadRequest, "product must contain one to six images")
+	if len(items) == 0 {
+		return nil, productRequestError(http.StatusBadRequest, "product must contain at least one image")
 	}
 	result := make([]validatedWebsiteProductMedia, 0, len(items))
 	for index, item := range items {

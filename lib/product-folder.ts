@@ -1,6 +1,6 @@
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { objectJson, productSources, verifiedProductGeneratedImages, verifiedProductOptimizedImages } from "./product-integrity";
+import { objectJson, productSources, verifiedProductOptimizedImages } from "./product-integrity";
 
 export async function getProductFolder(id: string) {
   const db = getRuntimeEnv().DB;
@@ -11,8 +11,6 @@ export async function getProductFolder(id: string) {
   if (!product) throw new Error("PRODUCT_NOT_FOUND");
   let validationError: string | null = null;
   let images: Array<{ id: string; filename: string; previewUrl: string; byteSize: number | null; optimized: boolean }> = [];
-  let generatedImages: Array<{ id: string; filename: string; previewUrl: string; byteSize: number; variant: string }> = [];
-  let imageValidationError: string | null = null;
   try {
     const sources = await productSources(id);
     const optimized = await verifiedProductOptimizedImages(id);
@@ -24,13 +22,6 @@ export async function getProductFolder(id: string) {
         previewUrl: `/api/media/${encodeURIComponent(image.id)}/download?inline=1`, byteSize,
         optimized: Boolean(byteSize && byteSize < 300_000) };
     });
-    try {
-      generatedImages = (await verifiedProductGeneratedImages(id)).map((image) => ({
-        id: image.id, filename: String(objectJson(image.metadata_json).name || image.external_id),
-        previewUrl: `/api/media/${encodeURIComponent(image.id)}/download?inline=1`, byteSize: Number(image.byte_size),
-        variant: String((objectJson(image.metadata_json).generation as Record<string, unknown>)?.variant || ""),
-      }));
-    } catch (error) { imageValidationError = error instanceof Error ? error.message : "PRODUCT_GENERATED_MEDIA_MISMATCH"; }
   } catch (error) { validationError = error instanceof Error ? error.message : "PRODUCT_VALIDATION_FAILED"; }
   const [draftRows, scheduleRows, jobRows, runRows] = await Promise.all([
     db.prepare(`SELECT id, target_provider, title, body, hashtags_json, status, version, platform_data_json FROM content_drafts
@@ -46,5 +37,5 @@ export async function getProductFolder(id: string) {
       .all<{ id: string; status: string; error_code: string | null; error_message: string | null; requested_image_count: number; completed_image_count: number }>(),
   ]);
   const drafts = draftRows.results.map((draft) => ({ ...draft, hashtags: JSON.parse(draft.hashtags_json) as string[], productDescription: String(objectJson(draft.platform_data_json).productDescription || "") }));
-  return { product, images, generatedImages, validationError, imageValidationError, drafts, schedules: scheduleRows.results, jobs: jobRows.results, runs: runRows.results };
+  return { product, images, validationError, drafts, schedules: scheduleRows.results, jobs: jobRows.results, runs: runRows.results };
 }
