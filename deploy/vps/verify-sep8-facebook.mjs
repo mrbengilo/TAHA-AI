@@ -32,7 +32,13 @@ async function main() {
   console.log("FACEBOOK_VERIFIED_RECEIPT_BASE64=" + Buffer.from(JSON.stringify(publicReceipt), "utf8").toString("base64url"));
   const ui = await fetch("http://127.0.0.1:8787/calendar", { headers: { authorization: `Bearer ${settings.INTERNAL_API_SECRET}` }, signal: AbortSignal.timeout(15000) });
   const html = await ui.text();
-  if (!ui.ok || !html.includes("Mở đúng bài để sao chép và tự đăng")) throw new Error("CALENDAR_ACTION_VERIFY_FAILED");
+  const pendingSql = "SELECT j.id,j.status,c.provider,c.publish_mode FROM publish_jobs j JOIN channel_connections c ON c.id=j.connection_id AND c.workspace_id=j.workspace_id WHERE j.workspace_id='00000000-0000-4000-8000-000000000001' AND c.provider='zalo_personal' ORDER BY j.updated_at DESC LIMIT 10";
+  const pendingRaw = execFileSync("pnpm", ["exec", "wrangler", "d1", "execute", "DB", "--local", "--persist-to=/data", "--config=/app/wrangler.vps.jsonc", "--json", "--command", pendingSql], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 });
+  const zaloJobs = JSON.parse(pendingRaw)[0]?.results ?? [];
+  const awaiting = zaloJobs.filter(job => job.status === "awaiting_confirmation");
+  console.log("DEPLOYED_CALENDAR_STATE=" + JSON.stringify({ httpStatus:ui.status,heading:html.includes("Tác vụ cần theo dõi"),manualAction:html.includes("Mở đúng bài để sao chép và tự đăng"),zaloJobs }));
+  if (!ui.ok || !html.includes("Tác vụ cần theo dõi")
+    || (awaiting.length > 0 && !awaiting.some(job => html.includes("job=" + encodeURIComponent(job.id))))) throw new Error("CALENDAR_ACTION_VERIFY_FAILED");
   console.log("DEPLOYED_CALENDAR_ACTION_VERIFIED=yes");
 }
 
