@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 25: inspect first ready and scheduled tags.
+# Probe generation 26: inspect ready-first schedule count.
 import base64
 import json
 from pathlib import Path
