@@ -69,8 +69,19 @@ if [ -n "$EXPECTED_ACTIVE_SHA" ]; then
   test "$(docker image inspect "${IMAGE_REPO}:${EXPECTED_ACTIVE_SHA}" -f '{{.Id}}')" = "$EXPECTED_ACTIVE_IMAGE" || { echo 'EXPECTED_ACTIVE_TAG_CHANGED'; exit 30; }
   test "$(docker image inspect "$EXPECTED_ACTIVE_IMAGE" -f '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$EXPECTED_ACTIVE_SHA" || { echo 'EXPECTED_ACTIVE_REVISION_CHANGED'; exit 30; }
 fi
+MIN_RELEASE_FREE_KB=5242880
 FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
-[ "$FREE_KB" -ge 5242880 ] || { echo 'INSUFFICIENT_RELEASE_DISK'; exit 23; }
+if [ "$FREE_KB" -lt "$MIN_RELEASE_FREE_KB" ]; then
+  echo "RELEASE_DISK_LOW_KB=$FREE_KB"
+  # Build cache is disposable and is not referenced by running containers,
+  # images, volumes, source bundles, backups, or the application database.
+  # Keep the most recent 24 hours so unrelated active development is not
+  # disturbed while old cache can no longer block a validated release.
+  docker builder prune -af --filter 'until=24h'
+  FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
+  echo "RELEASE_DISK_AFTER_CACHE_PRUNE_KB=$FREE_KB"
+fi
+[ "$FREE_KB" -ge "$MIN_RELEASE_FREE_KB" ] || { echo 'INSUFFICIENT_RELEASE_DISK'; exit 23; }
 secret=$(python3 - "$ENV_FILE" <<'PY'
 from pathlib import Path
 import sys
