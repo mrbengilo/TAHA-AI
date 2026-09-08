@@ -20,6 +20,7 @@
 .facebook-plan-fields { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .facebook-plan-fields label, .facebook-time-grid label, .facebook-wide-field { display: grid; gap: 6px; }
 .facebook-plan-fields input, .facebook-time-grid input, .facebook-wide-field select { background: #fff; border: 1px solid #c5cede; border-radius: 8px; color: #151b2d; font: 700 12px Arial, sans-serif; min-height: 40px; padding: 0 10px; transition: border-color .16s ease, box-shadow .16s ease; width: 100%; }
+.facebook-picker-input { cursor: pointer; }
 .facebook-plan-fields input:focus, .facebook-time-grid input:focus, .facebook-wide-field select:focus { border-color: #4655e4; box-shadow: 0 0 0 3px rgba(70, 85, 228, .14); outline: 0; }
 .facebook-time-grid { display: grid; gap: 9px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 11px; }
 .facebook-primary-button { background: linear-gradient(135deg, #3446dc, #6550ed); border: 1px solid #2737be; border-radius: 8px; box-shadow: 0 7px 16px rgba(55, 68, 207, .22); color: #fff; cursor: pointer; font: 800 12px Arial, sans-serif; margin-top: 13px; min-height: 42px; padding: 0 16px; transition: filter .16s ease, transform .16s ease, box-shadow .16s ease; width: 100%; }
