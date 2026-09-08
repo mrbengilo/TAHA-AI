@@ -18,6 +18,9 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Miniflare metadata is fixture data; tests need no external cf.json request.
+      CLOUDFLARE_CF_FETCH_ENABLED: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,3 +38,5 @@ jobs:
         run: pnpm exec tsc --noEmit
       - name: Build and test
         run: pnpm test
+      - name: Verify bounded VPS recovery guards
+        run: python3 -m unittest discover -s tests -p 'vps_*_test.py' -v

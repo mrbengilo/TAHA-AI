@@ -75,6 +75,7 @@ export type SchedulerTickOptions = {
   database?: SchedulerDatabase;
   now?: number;
   limit?: number;
+  scheduleIds?: string[];
 };
 
 function schedulerDatabase(override?: SchedulerDatabase) {
@@ -316,6 +317,13 @@ async function enqueueOccurrence(
 }
 
 export async function runSchedulerTick(options: SchedulerTickOptions = {}): Promise<SchedulerTickResult> {
+  const scheduleIds = options.scheduleIds;
+  if (scheduleIds !== undefined && (!Array.isArray(scheduleIds) || scheduleIds.length < 1 || scheduleIds.length > 50
+    || new Set(scheduleIds).size !== scheduleIds.length
+    || scheduleIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(id)))) {
+    throw new Error("SCHEDULER_FILTER_INVALID");
+  }
+  const scheduleFilter = scheduleIds ? ` AND s.id IN (${scheduleIds.map(() => "?").join(",")})` : "";
   const database = schedulerDatabase(options.database);
   const now = Math.floor(options.now ?? Date.now());
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(options.limit ?? DEFAULT_LIMIT)));
@@ -329,9 +337,10 @@ export async function runSchedulerTick(options: SchedulerTickOptions = {}): Prom
      JOIN content_drafts d ON d.id = s.draft_id AND d.workspace_id = s.workspace_id
      JOIN channel_connections c ON c.id = s.connection_id AND c.workspace_id = s.workspace_id
      WHERE s.status = 'active' AND d.status = 'approved' AND (s.next_run_at IS NULL OR s.next_run_at <= ?)
+       ${scheduleFilter}
      ORDER BY CASE WHEN s.next_run_at IS NULL THEN 1 ELSE 0 END, s.next_run_at ASC, s.created_at ASC
      LIMIT ?`,
-  ).bind(now, limit).all<ScheduleRow>();
+  ).bind(now, ...(scheduleIds ?? []), limit).all<ScheduleRow>();
 
   const result: SchedulerTickResult = {
     checked: 0,

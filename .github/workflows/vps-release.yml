@@ -30,7 +30,7 @@ jobs:
     needs: quality
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 85
+    timeout-minutes: 120
     env:
       VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
       VPS_USER: ${{ secrets.TAHA_VPS_USER }}
@@ -55,6 +55,14 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
+      - name: Reclaim obsolete release images for the authorized website recovery
+        if: ${{ contains(github.event.head_commit.message, '[website-trial-PH0015]') }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - --apply < deploy/vps/release-retention.py
       - name: Transfer verified release without requiring VPS GitHub access
         env:
           TARGET_SHA: ${{ github.sha }}
@@ -73,6 +81,17 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             bash -s -- "$TARGET_SHA" "/var/tmp/taha-source-$TARGET_SHA.bundle" < deploy/vps/release.sh
+      - name: Install receiver and publish exactly the authorized PH0015 trial
+        if: ${{ contains(github.event.head_commit.message, '[website-trial-PH0015]') }}
+        timeout-minutes: 95
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "python3 -u /var/www/taha-ai/deploy/vps/website-recovery.py --expected-release-sha $TARGET_SHA --apply"
       - name: Run the authorized single Facebook trial and wait for receipt
         if: ${{ inputs.run_facebook_trial || contains(github.event.head_commit.message, '[facebook-trial]') }}
         timeout-minutes: 18
