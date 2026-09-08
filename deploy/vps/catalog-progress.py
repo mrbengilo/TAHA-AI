@@ -1,11 +1,13 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 28: inspect completed ready SKU schedules.
+# Probe generation 29: inspect catalog and website receiver.
 import base64
 import json
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
 MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
@@ -24,6 +26,17 @@ def safe_marker(path, ids):
                             for stage in sorted(set(value['states'].values()))}
     if isinstance(value.get('attempts'), dict): result['attempts'] = sum(value['attempts'].values())
     return result
+
+
+def website_probe():
+    request = urllib.request.Request('https://tahashoes.vn/api/taha/publish', method='GET')
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return {'status': response.status, 'allow': response.headers.get('Allow'), 'reachable': True}
+    except urllib.error.HTTPError as error:
+        return {'status': error.code, 'allow': error.headers.get('Allow'), 'reachable': True}
+    except Exception:
+        return {'status': None, 'allow': None, 'reachable': False}
 
 
 def main():
@@ -110,6 +123,7 @@ def main():
                 'steps': steps,
                 'competitors': safe_competitors,
                 'cronTimer': timer,
+                'websiteProbe': website_probe(),
                 'recoveryLockHeld': subprocess.run(
                     ['flock', '-n', '/var/lock/taha-ai-release.lock', 'true'], timeout=10).returncode != 0,
                 'replan': safe_marker(REPLAN, ids),
