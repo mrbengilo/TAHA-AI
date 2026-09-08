@@ -28,6 +28,22 @@ def report(label, value):
 
 
 def read_job():
+    # Resolve the live D1 binding before inspecting files: old local DBs may coexist.
+    sql = """SELECT j.*,d.title,d.body,d.hashtags_json,d.version,d.status AS draft_status,
+        p.base_sku,c.provider,c.status AS connection_status FROM publish_jobs j
+        JOIN content_drafts d ON d.id=j.draft_id AND d.workspace_id=j.workspace_id
+        JOIN products p ON p.id=j.product_id AND p.workspace_id=j.workspace_id
+        JOIN channel_connections c ON c.id=j.connection_id AND c.workspace_id=j.workspace_id
+        WHERE j.id='0569f8a5-faaf-484c-a1ac-7a4375faf1b4'
+        AND j.workspace_id='00000000-0000-4000-8000-000000000001'"""
+    output = subprocess.run(['docker','exec','taha-ai','pnpm','exec','wrangler','d1','execute','DB','--local',
+        '--persist-to=/data','--config=/app/wrangler.vps.jsonc','--json','--command',sql],
+        check=True,capture_output=True,text=True,timeout=30)
+    rows = json.loads(output.stdout)[0]['results']
+    if len(rows) != 1:
+        raise RuntimeError('RECOVERY_LIVE_JOB_MISSING')
+    live = rows[0]
+    matches = []
     for path in Path('/var/lib/taha-ai').rglob('*.sqlite'):
         with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as db:
             db.row_factory = sqlite3.Row
@@ -42,14 +58,18 @@ def read_job():
             if not row:
                 continue
             result = dict(row)
+            if any(result[key] != live[key] for key in ('version','body','status','updated_at','external_post_id','connection_id')):
+                continue
             result['_db_path'] = str(path)
             result['other_published_today'] = db.execute("""SELECT count(*) FROM publish_jobs
                 WHERE workspace_id=? AND product_id=? AND connection_id=? AND id!=?
                   AND (status='published' OR external_post_id IS NOT NULL)
                   AND completed_at>=? AND completed_at<?""", [WORKSPACE, row['product_id'], row['connection_id'],
                   JOB_ID, DAY_START, DAY_END]).fetchone()[0]
-            return result
-    raise RuntimeError('RECOVERY_JOB_MISSING')
+            matches.append(result)
+    if len(matches) != 1:
+        raise RuntimeError('RECOVERY_LIVE_DATABASE_AMBIGUOUS')
+    return matches[0]
 
 
 def validate_unsent(job):
