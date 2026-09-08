@@ -51,6 +51,7 @@ class CatalogPublishSafetyTests(unittest.TestCase):
         self.assertIn("run_group(secret, database, priority", source)
         self.assertIn("run_group(secret, database, remaining", source)
         self.assertIn("validate_promoted_state(database, products, marker)", source)
+        self.assertIn("products = hydrate_products(database, products)", source)
         self.assertIn("verify_group(database, priority)", source)
         self.assertLess(source.index("run_group(secret, database, priority"),
                         source.index("run_group(secret, database, remaining"))

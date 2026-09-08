@@ -95,8 +95,7 @@ def catalog_products():
     cleaned = []
     for row in products:
         if not isinstance(row, dict) or row.get('sku') not in EXPECTED_COUNTS \
-                or not re.fullmatch(r'[0-9a-f-]{36}', str(row.get('runId', ''))) \
-                or not re.fullmatch(r'[0-9a-f-]{36}', str(row.get('productId', ''))):
+                or not re.fullmatch(r'[0-9a-f-]{36}', str(row.get('runId', ''))):
             raise RuntimeError('CATALOG_PUBLISH_MARKER_INVALID')
         sizes = row.get('sizes')
         day = row.get('publishDay')
@@ -104,10 +103,9 @@ def catalog_products():
                 or not isinstance(day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day) \
                 or row.get('generatedImages') != EXPECTED_COUNTS[row['sku']]:
             raise RuntimeError('CATALOG_PUBLISH_MARKER_INVALID')
-        cleaned.append({'runId': row['runId'], 'productId': row['productId'], 'sku': row['sku'],
+        cleaned.append({'runId': row['runId'], 'sku': row['sku'],
                         'sizes': sizes, 'publishDay': day})
     if len({row['runId'] for row in cleaned}) != len(cleaned) \
-            or len({row['productId'] for row in cleaned}) != len(cleaned) \
             or {row['sku'] for row in cleaned} != set(EXPECTED_COUNTS):
         raise RuntimeError('CATALOG_PUBLISH_MARKER_INVALID')
     return cleaned
@@ -140,6 +138,19 @@ def read_runs(database, run_ids):
             f"r.requested_image_count,r.completed_image_count,r.output_media_ids_json,r.content_json,r.target_providers_json "
             f"FROM automation_runs r JOIN products p ON p.id=r.product_id AND p.workspace_id=r.workspace_id "
             f"WHERE r.workspace_id=? AND r.id IN ({placeholders}) ORDER BY p.base_sku", [WORKSPACE, *run_ids])]
+
+
+def hydrate_products(database, products):
+    rows = {row['id']: row for row in read_runs(database, [item['runId'] for item in products])}
+    hydrated = []
+    for item in products:
+        run = rows.get(item['runId'])
+        if not run or run['base_sku'] != item['sku'] or not re.fullmatch(r'[0-9a-f-]{36}', run['product_id']):
+            raise RuntimeError('CATALOG_PUBLISH_RUN_SET_CHANGED')
+        hydrated.append({**item, 'productId': run['product_id']})
+    if len({item['productId'] for item in hydrated}) != len(hydrated):
+        raise RuntimeError('CATALOG_PUBLISH_RUN_SET_CHANGED')
+    return hydrated
 
 
 def source_counts(database, run_ids):
@@ -407,6 +418,7 @@ def main():
         products = catalog_products()
         ids = [row['runId'] for row in products]
         database = find_database(ids)
+        products = hydrate_products(database, products)
         secret = read_secret()
         connection_id = facebook_connection(database, secret)
         marker = load_or_create_plan(products, connection_id)
