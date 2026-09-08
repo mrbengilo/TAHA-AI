@@ -55,3 +55,19 @@ test("product tables expose real primary-image thumbnails", () => {
   assert.match(ui, /ch-product-thumb/);
   assert.match(ui, /product\.previewUrl/);
 });
+
+test("channel selectors use each platform's brand color", () => {
+  const ui = read("app/automation/AutomationCenter.tsx");
+  const css = read("app/automation/automation.css");
+  assert.match(ui, /data-provider=\{provider\.id\}/);
+  assert.match(css, /data-provider="facebook"/);
+  assert.match(css, /#1877f2/);
+  assert.match(css, /data-provider="zalo_personal"/);
+  assert.match(css, /#0068ff/);
+  assert.match(css, /data-provider="website"/);
+  assert.match(css, /data-provider="tiktok_shop"/);
+  assert.match(css, /#25f4ee/);
+  assert.match(css, /#fe2c55/);
+  assert.match(css, /data-provider="shopee"/);
+  assert.match(css, /#ee4d2d/);
+});
