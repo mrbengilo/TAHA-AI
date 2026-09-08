@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 34: verify exact SKU/size quarantine state.
+# Probe generation 35: verify 16 stale SKU and size jobs quarantined.
 import base64
 import json
 import re
