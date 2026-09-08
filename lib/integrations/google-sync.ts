@@ -31,6 +31,19 @@ export type CatalogProduct = {
   inventory: number;
   status: "draft" | "active" | "paused";
   rowNumber: number;
+  website: {
+    secondHand?: boolean;
+    costPriceMinor?: number;
+    discountPercent?: number;
+    soldCount?: number;
+    rating?: number;
+    reviewCount?: number;
+    subcategory?: string;
+    colors?: string[];
+    gifts?: string[];
+    sizes?: string[];
+    specifications?: string[];
+  };
 };
 
 export type GoogleDriveImportInput = {
@@ -76,7 +89,7 @@ function nonEmptyString(value: unknown) {
 }
 
 function normalizeHeader(value: unknown) {
-  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value ?? "").replace(/[đĐ]/g, "d").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function slugify(value: string) {
@@ -87,6 +100,47 @@ function parseMoney(value: unknown) {
   const digits = String(value ?? "").replace(/[^0-9-]/g, "");
   const numeric = Number(digits);
   return Number.isFinite(numeric) ? Math.max(0, Math.round(numeric)) : 0;
+}
+
+function parseOptionalNumber(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === "") return undefined;
+  const normalized = String(value).trim().replace(",", ".").replace(/[^0-9.-]/g, "");
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : undefined;
+}
+
+function parseOptionalInteger(value: unknown) {
+  const numeric = parseOptionalNumber(value);
+  return numeric === undefined ? undefined : Math.round(numeric);
+}
+
+function parseBoolean(value: unknown) {
+  const normalized = normalizeHeader(value).replace(/[đĐ]/g, "d");
+  return ["1", "true", "yes", "co", "bat", "secondhand", "da qua su dung"].includes(normalized);
+}
+
+function parseList(value: unknown) {
+  const items = String(value ?? "").split(/[,;\n|]+/u).map((item) => item.trim()).filter(Boolean);
+  return [...new Set(items)].slice(0, 80);
+}
+
+function parseSizes(value: unknown) {
+  const result: string[] = [];
+  for (const token of String(value ?? "").split(/[,;\n|]+/u).map((item) => item.trim()).filter(Boolean)) {
+    const range = token.match(/^(\d{1,3})\s*[-–]\s*(\d{1,3})$/u);
+    if (range) {
+      const start = Number(range[1]);
+      const end = Number(range[2]);
+      if (end >= start && end - start <= 20) {
+        for (let size = start; size <= end; size += 1) result.push(String(size));
+        continue;
+      }
+    }
+    const separatedNumbers = token.match(/^\d{1,3}(?:\s+\d{1,3})+$/u)
+      ? token.split(/\s+/u) : [token];
+    result.push(...separatedNumbers);
+  }
+  return [...new Set(result)].slice(0, 30);
 }
 
 function valueFor(row: unknown[], headers: Map<string, number>, names: string[]) {
@@ -127,6 +181,29 @@ export function parseGoogleCatalogRows(rows: unknown[][]) {
     const usesVietnamesePricing = listPrice > 0 || salePrice > 0;
     const hasVietnameseDiscount = listPrice > 0 && salePrice > 0 && salePrice < listPrice;
     const hasEnglishDiscount = englishPrice > 0 && englishCompareAtPrice > englishPrice;
+    const rating = parseOptionalNumber(valueFor(row, headers, ["danh gia", "rating", "so sao"]));
+    const reviewCount = parseOptionalInteger(valueFor(row, headers, ["so luot danh gia", "luot danh gia", "review count"]));
+    const soldCount = parseOptionalInteger(valueFor(row, headers, ["so luong da ban", "da ban", "sold count"]));
+    const website = {
+      ...(parseBoolean(valueFor(row, headers, ["secondhand", "san pham secondhand", "da qua su dung"])) ? { secondHand: true } : {}),
+      ...(String(valueFor(row, headers, ["gia von", "gia nhap", "cost price"])).trim()
+        ? { costPriceMinor: parseMoney(valueFor(row, headers, ["gia von", "gia nhap", "cost price"])) } : {}),
+      ...(parseOptionalInteger(valueFor(row, headers, ["giam gia", "giam gia %", "discount percent"])) !== undefined
+        ? { discountPercent: parseOptionalInteger(valueFor(row, headers, ["giam gia", "giam gia %", "discount percent"])) } : {}),
+      ...(soldCount === undefined ? {} : { soldCount }),
+      ...(rating === undefined || rating > 5 ? {} : { rating: Math.round(rating * 10) / 10 }),
+      ...(reviewCount === undefined ? {} : { reviewCount }),
+      ...(String(valueFor(row, headers, ["dong san pham", "subcategory"])).trim()
+        ? { subcategory: String(valueFor(row, headers, ["dong san pham", "subcategory"])).trim() } : {}),
+      ...(parseList(valueFor(row, headers, ["mau sac", "mau", "colors"])).length
+        ? { colors: parseList(valueFor(row, headers, ["mau sac", "mau", "colors"])) } : {}),
+      ...(parseList(valueFor(row, headers, ["qua tang kem", "qua tang", "gifts"])).length
+        ? { gifts: parseList(valueFor(row, headers, ["qua tang kem", "qua tang", "gifts"])) } : {}),
+      ...(parseSizes(valueFor(row, headers, ["kich thuoc", "size", "sizes"])).length
+        ? { sizes: parseSizes(valueFor(row, headers, ["kich thuoc", "size", "sizes"])) } : {}),
+      ...(parseList(valueFor(row, headers, ["thong so ky thuat", "thong so", "specifications"])).length
+        ? { specifications: parseList(valueFor(row, headers, ["thong so ky thuat", "thong so", "specifications"])) } : {}),
+    };
     return [{
       sku,
       skuKey,
@@ -139,6 +216,7 @@ export function parseGoogleCatalogRows(rows: unknown[][]) {
       inventory: parseMoney(valueFor(row, headers, ["ton kho", "so luong", "inventory", "stock"])),
       status,
       rowNumber: index + 2,
+      website,
     }];
   });
 }
@@ -220,6 +298,7 @@ async function upsertProduct(sourceExternalId: string, product: CatalogProduct, 
       indexedAt: now,
       syncId: source.syncId,
     },
+    website: product.website,
   });
   if (existing) {
     await db.prepare(

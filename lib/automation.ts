@@ -494,6 +494,21 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
     throw new Error("PRODUCT_MEDIA_CAP_CHANGED");
   }
   const product = sources.product;
+  const productMetadata = json<Record<string, unknown>>(product.metadata_json, {});
+  const websiteMetadata = record(productMetadata.website);
+  const sizes = Array.isArray(websiteMetadata.sizes)
+    ? [...new Set(websiteMetadata.sizes.map((value) => cleanText(value, 40)).filter(Boolean))].slice(0, 30)
+    : [];
+  if (!sizes.length) throw new Error("PRODUCT_SIZES_REQUIRED");
+  const colors = Array.isArray(websiteMetadata.colors)
+    ? [...new Set(websiteMetadata.colors.map((value) => cleanText(value, 160)).filter(Boolean))].slice(0, 30)
+    : [];
+  const gifts = Array.isArray(websiteMetadata.gifts)
+    ? [...new Set(websiteMetadata.gifts.map((value) => cleanText(value, 160)).filter(Boolean))].slice(0, 20)
+    : [];
+  const specifications = Array.isArray(websiteMetadata.specifications)
+    ? [...new Set(websiteMetadata.specifications.map((value) => cleanText(value, 160)).filter(Boolean))].slice(0, 80)
+    : [];
   const fingerprint = await productFingerprint(product);
   const generated = await generateProductContent({
     product: {
@@ -506,6 +521,10 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
       priceMinor: product.price_minor,
       compareAtPriceMinor: product.compare_at_price_minor,
       inventoryQuantity: product.inventory_quantity,
+      sizes,
+      colors,
+      gifts,
+      specifications,
     },
     targetProviders: json<string[]>(run.target_providers_json, []),
   });
@@ -687,7 +706,7 @@ function channelContent(content: Record<string, unknown>, provider: TargetProvid
 
 function contentType(provider: TargetProvider) {
   if (provider === "tiktok_shop" || provider === "shopee") return "product_listing";
-  if (provider === "website") return "website_article";
+  if (provider === "website") return "product_listing";
   return "social_post";
 }
 
@@ -845,7 +864,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       if (connection) {
         const scheduleId = await stableId("schedule", `${run.id}:${provider}`);
         scheduleIds.push(scheduleId);
-        const runAt = nextLocalSlot(now, scheduleHour, current.request_key);
+        const runAt = provider === "website" ? now : nextLocalSlot(now, scheduleHour, current.request_key);
         statements.push(db.prepare(
           `UPDATE schedules SET status = 'paused', next_run_at = NULL, updated_at = ?
            WHERE workspace_id = ? AND connection_id = ? AND status = 'active'

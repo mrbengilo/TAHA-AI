@@ -141,3 +141,33 @@ test("honors explicit paused and draft product statuses", async () => {
   ]));
   assert.deepEqual(products.map((item) => item.status), ["paused", "paused", "paused", "draft", "draft", "draft"]);
 });
+
+test("maps explicit website product fields without inventing customer counters", async () => {
+  const { parseGoogleCatalogRows } = await loadGoogleSync();
+  const [complete, absent] = plain(parseGoogleCatalogRows([
+    ["SKU", "Tên sản phẩm", "Giá vốn", "Số lượng đã bán", "Đánh giá", "Số lượt đánh giá", "Dòng sản phẩm", "Màu sắc", "Quà tặng kèm", "Kích thước", "Thông số kỹ thuật"],
+    ["PH0014", "Giày chạy bộ", "250.000", "123", "5", "98", "Running", "Đen, Trắng", "Đôi vớ; Chai khử mùi", "36, 37, 38", "Chất liệu: mesh; Đế: cao su"],
+    ["PH0015", "Giày đi bộ", "", "", "", "", "", "", "", "", ""],
+  ]));
+  assert.deepEqual(complete.website, {
+    costPriceMinor: 250_000,
+    soldCount: 123,
+    rating: 5,
+    reviewCount: 98,
+    subcategory: "Running",
+    colors: ["Đen", "Trắng"],
+    gifts: ["Đôi vớ", "Chai khử mùi"],
+    sizes: ["36", "37", "38"],
+    specifications: ["Chất liệu: mesh", "Đế: cao su"],
+  });
+  assert.deepEqual(absent.website, {});
+});
+
+test("expands an explicit shoe-size range into the product's own selectable sizes", async () => {
+  const { parseGoogleCatalogRows } = await loadGoogleSync();
+  const [product] = plain(parseGoogleCatalogRows([
+    ["SKU", "Tên sản phẩm", "Size"],
+    ["PH0073", "Giày Lituo Sport", "40 - 45"],
+  ]));
+  assert.deepEqual(product.website.sizes, ["40", "41", "42", "43", "44", "45"]);
+});

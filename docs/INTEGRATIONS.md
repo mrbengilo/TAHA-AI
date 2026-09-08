@@ -102,7 +102,14 @@ TAHA AI có mã nguồn đổi code lấy token và lưu dữ liệu seller/shop
 
 ## Website bán hàng
 
-Website nhận JSON tại `WEBSITE_PUBLISH_ENDPOINT`. TAHA AI gửi:
+Website nhận JSON tại `WEBSITE_PUBLISH_ENDPOINT`. TAHA AI gửi hợp đồng phiên bản
+`taha.website.product.v1` với thao tác `upsert_product`, khóa chính nghiệp vụ là SKU,
+giá/tồn kho/thuộc tính lấy từ Google Sheet và tối đa 6 ảnh đúng thư mục SKU. Mô tả
+website được tạo riêng theo bố cục sản phẩm hiện có trên tahashoes.vn. Các bộ đếm
+đánh giá/đã bán chỉ được gửi khi quản trị viên nhập rõ trong Sheet; nếu thiếu, website
+giữ giá trị hiện có hoặc khởi tạo 0/ẩn.
+
+TAHA AI gửi:
 
 ```text
 Content-Type: application/json
@@ -111,3 +118,9 @@ X-TAHA-Idempotency-Key: <unique-key>
 ```
 
 Website phải kiểm tra chữ ký bằng `WEBSITE_WEBHOOK_SECRET`, chống xử lý trùng và trả JSON có thể gồm `id` và `url`.
+
+Sau khi receiver đã được triển khai và kiểm thử, đặt `WEBSITE_READY_BACKFILL_ENABLED=1`.
+Khi đó mọi SKU có bài Facebook trạng thái `approved` nhưng chưa có bản website sẽ
+được tạo bản website độc lập và đưa vào hàng đợi ngay trong tick kế tiếp; không chờ
+lịch một bài mỗi ngày. Upsert cùng SKU phải cập nhật sản phẩm hiện có thay vì tạo bản
+trùng.
