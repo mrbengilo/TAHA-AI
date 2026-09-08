@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 22: verify recovery lock released after pause.
+# Probe generation 23: inspect ready-first catalog publication.
 import base64
 import json
 from pathlib import Path
