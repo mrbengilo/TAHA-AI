@@ -28,14 +28,13 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Correct the known price clause and retry the same unsent job
+      - name: Refresh PH0027 from current sizes and retry the same unsent job
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - < deploy/vps/publishing-source-diagnose.py
+            python3 -u - 6649b4217580c5bec8aeb961ba06358226f77fe7 < deploy/vps/recover-facebook-content.py
       - name: Verify the actual Facebook post and deployed UI
-        if: false
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
