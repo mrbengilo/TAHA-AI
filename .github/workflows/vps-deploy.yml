@@ -1,4 +1,5 @@
 name: TAHA VPS production deploy
+# Release: deploy six-image SKU cap
 
 on:
   push:
