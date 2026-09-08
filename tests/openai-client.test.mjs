@@ -6,7 +6,7 @@ import ts from "typescript";
 
 async function loadOpenAiClient(runtime = {}) {
   const modules = {};
-  for (const name of ["shoe-content", "shoe-image-prompts", "facebook-content", "openai"]) {
+  for (const name of ["shoe-content", "facebook-content", "openai"]) {
     const source = await readFile(new URL(`../lib/ai/${name}.ts`, import.meta.url), "utf8");
     const compiled = ts.transpileModule(source, {
       compilerOptions: {
@@ -134,45 +134,6 @@ test("generateProductContent rejects AI output attributed to a different SKU", a
   }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_RESPONSE_INVALID");
 });
 
-test("editProductImage uses GPT Image edits without input_fidelity", async () => {
-  const client = await loadOpenAiClient({
-    OPENAI_API_KEY: "sk-test-not-real",
-    OPENAI_IMAGE_MODEL: "gpt-image-2",
-    OPENAI_IMAGE_QUALITY: "medium",
-  });
-  let capturedUrl = null;
-  let capturedInit = null;
-  const fetcher = async (url, init) => {
-    capturedUrl = url;
-    capturedInit = init;
-    return Response.json({ data: [{ b64_json: btoa("PNG") }] });
-  };
-
-  const result = await client.editProductImage({
-    source: new Blob(["source"], { type: "image/png" }),
-    mimeType: "image/png",
-    product: { sku: "TAHA-001", name: "Sneaker trắng" },
-    layoutIndex: 4,
-    filename: "TAHA 001.png",
-  }, fetcher);
-
-  assert.equal(capturedUrl, "https://api.openai.com/v1/images/edits");
-  assert.equal(capturedInit.method, "POST");
-  assert.equal(capturedInit.headers.authorization, "Bearer sk-test-not-real");
-  const form = capturedInit.body;
-  assert.equal(form.get("model"), "gpt-image-2");
-  assert.equal(form.get("quality"), "medium");
-  assert.equal(form.get("size"), "1024x1024");
-  assert.equal(form.has("input_fidelity"), false);
-  assert.equal(form.getAll("image[]").length, 1);
-  assert.match(form.get("prompt"), /Giữ sản phẩm giống hệt ảnh nguồn/);
-  assert.match(form.get("prompt"), /SKU TAHA-001/);
-  assert.match(form.get("prompt"), /số 4\/4/);
-  assert.match(form.get("prompt"), /crystal-clear mountain streams/);
-  assert.deepEqual(Array.from(new Uint8Array(await result.image.arrayBuffer())), [80, 78, 71]);
-  assert.equal(result.mimeType, "image/png");
-});
-
 test("HTTP and timeout failures expose only normalized safe codes", async () => {
   const secret = "sk-secret-that-must-not-leak";
   const upstreamBody = "internal upstream body with private details";
@@ -216,16 +177,6 @@ test("client rejects invalid input before sending a request", async () => {
       targetProviders: ["facebook"],
     }, fetcher),
     (error) => error.code === "OPENAI_INPUT_INVALID",
-  );
-  await assert.rejects(
-    client.editProductImage({
-      source: new Blob(["source"], { type: "image/gif" }),
-      filename: "source.gif",
-      mimeType: "image/gif",
-      product: { sku: "TAHA-001", name: "Sneaker" },
-      layoutIndex: 1,
-    }, fetcher),
-    (error) => error.code === "OPENAI_IMAGE_INPUT_INVALID",
   );
   assert.equal(calls, 0);
 });
@@ -487,30 +438,4 @@ test("Facebook-only structure and footer do not change other channel requirement
   }, async () => Response.json(responsesEnvelope(generated)));
   assert.match(result.content.channels.website.body, /VỆ SINH & BẢO QUẢN/);
   assert.doesNotMatch(result.content.channels.website.body, /THÔNG TIN LIÊN HỆ/);
-});
-
-test("image generation accepts the four requested scenes and rejects retired layouts before API calls", async () => {
-  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
-  const expectedScenes = ["professional cyclist", "professional runner", "climber ascending", "mountain streams"];
-  const source = new Blob(["source"], { type: "image/png" });
-  let calls = 0;
-  for (let layoutIndex = 1; layoutIndex <= 4; layoutIndex += 1) {
-    await client.editProductImage({
-      source, filename: "TAHA-001.png", mimeType: "image/png", product: { sku: "TAHA-001", name: "Sneaker" }, layoutIndex,
-    }, async (_url, init) => {
-      calls += 1;
-      const prompt = init.body.get("prompt");
-      assert.ok(prompt.includes(expectedScenes[layoutIndex - 1]));
-      assert.match(prompt, /không đổi hình dáng/);
-      assert.match(prompt, /Không biến giày thành một loại khác/);
-      assert.doesNotMatch(prompt, /không có người/);
-      return Response.json({ data: [{ b64_json: btoa("PNG") }] });
-    });
-  }
-  for (const layoutIndex of [0, 5, 6]) {
-    await assert.rejects(client.editProductImage({
-      source, filename: "TAHA-001.png", mimeType: "image/png", product: { sku: "TAHA-001", name: "Sneaker" }, layoutIndex,
-    }, async () => { calls += 1; return Response.json({}); }), (error) => error.code === "OPENAI_IMAGE_INPUT_INVALID");
-  }
-  assert.equal(calls, 4);
 });

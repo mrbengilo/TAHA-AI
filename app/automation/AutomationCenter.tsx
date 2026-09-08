@@ -144,9 +144,8 @@ export default function AutomationCenter() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             productId: selectedProductId,
-            imageCount: 4,
             targetProviders: targets,
-            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:lifestyle-v1`,
+            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:source-only-v1`,
           }),
         });
         const run = payload.data?.run as AutomationRun | undefined;
@@ -249,7 +248,7 @@ export default function AutomationCenter() {
         <div>
           <span className="automation-eyebrow">TRUNG TÂM NỘI DUNG TỰ ĐỘNG</span>
           <h1 id="automation-title">Tạo bộ nội dung sản phẩm bằng AI</h1>
-          <p>Xác nhận một lần để dùng tối đa 6 ảnh theo SKU, chỉ tạo thêm ảnh khi cần, viết bài không giá và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
+          <p>Xác nhận một lần để dùng toàn bộ ảnh gốc đúng SKU, viết bài không giá và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
         </div>
         <button className="automation-refresh" type="button" onClick={() => void refresh()} disabled={loading || isPending}>↻ Làm mới</button>
       </div>
@@ -295,7 +294,7 @@ export default function AutomationCenter() {
           </div>
 
           <div className="automation-output-preview">
-            <div><b>Tối đa 6 ảnh</b><span>ưu tiên ảnh gốc · ảnh tạo thêm dưới 200 KB</span></div>
+            <div><b>Toàn bộ ảnh gốc</b><span>đúng thư mục SKU · dưới 300 KB/ảnh</span></div>
             <div><b>{targets.length}</b><span>bộ nội dung</span></div>
             <div><b>1</b><span>lịch tự động / kênh</span></div>
           </div>
@@ -312,7 +311,7 @@ export default function AutomationCenter() {
                 ? "SKU này đang được xử lý"
                 : "Xác nhận · Tự viết bài và lên lịch"}
           </button>
-          <p className="automation-safety">Ảnh gốc được tối ưu dưới 300 KB/ảnh. Ảnh mới, bài viết và bảng size được lưu đúng thư mục SKU. Zalo cá nhân cần xác nhận đăng.</p>
+          <p className="automation-safety">Toàn bộ ảnh gốc được tối ưu dưới 300 KB/ảnh. Bài viết và bảng size được lưu đúng SKU. Zalo cá nhân cần xác nhận đăng.</p>
         </section>
 
         <aside className="automation-card automation-flow">
@@ -320,7 +319,7 @@ export default function AutomationCenter() {
           <ol>
             <li><i>1</i><div><strong>Đọc Google Sheets</strong><span>Tên, SKU và đặc điểm sản phẩm</span></div></li>
             <li><i>2</i><div><strong>Ghép ảnh Google Drive</strong><span>Thư mục sản phẩm khớp chính xác SKU</span></div></li>
-            <li><i>3</i><div><strong>Chỉ tạo thêm ảnh khi thư mục có dưới 6 ảnh</strong><span>Tối đa 4 cảnh: đạp xe · chạy bộ · leo núi · vượt suối</span></div></li>
+            <li><i>3</i><div><strong>Tối ưu toàn bộ ảnh gốc</strong><span>Giữ đúng ảnh trong thư mục SKU · dưới 300 KB/ảnh</span></div></li>
             <li><i>4</i><div><strong>Viết bài tối đa 2.000 từ</strong><span>Không giá · Đặc điểm · Vệ sinh · Bảo quản · Size</span></div></li>
             <li><i>5</i><div><strong>Lên lịch và xuất bản</strong><span>Facebook, Zalo, Website; sàn dùng nút đăng</span></div></li>
           </ol>
@@ -353,14 +352,14 @@ export default function AutomationCenter() {
         {runs.length ? <div className="automation-run-list">
           {runs.map((run) => {
             const product = products.find((item) => item.id === run.productId);
-            const progress = run.status === "completed" ? 100 : run.status === "processing" ? Math.min(95, 15 + (run.completedImageCount / Math.max(1, run.requestedImageCount)) * 75) : 0;
+            const progress = run.status === "completed" ? 100 : run.status === "processing" ? 55 : 0;
             const active = run.status === "queued" || run.status === "processing";
             return (
               <article key={run.id}>
                 <div className={`automation-run-status is-${run.status}`}><i>{run.status === "completed" ? "✓" : active ? "✦" : "!"}</i></div>
                 <div className="automation-run-info">
                   <div><strong>{product?.sku ?? "SKU"} · {product?.name ?? "Sản phẩm"}</strong><span>{formatDate(run.createdAt)}</span></div>
-                  <p>{statusLabels[run.status] ?? run.status} · {run.targetProviders.length} kênh{run.requestedImageCount > 0 ? ` · ${run.completedImageCount}/${run.requestedImageCount} ảnh` : ""}</p>
+                  <p>{statusLabels[run.status] ?? run.status} · {run.targetProviders.length} kênh</p>
                   <div className="automation-progress" role="progressbar" aria-label="Tiến độ chuẩn bị" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress}%` }} /></div>
                   {run.errorCode ? <small>{run.errorMessage || run.errorCode}</small> : null}
                 </div>

@@ -1,7 +1,7 @@
 import { getRuntimeEnv } from "./integrations/env";
 import { getConnectedIntegration, getGoogleAccessToken } from "./integrations/connection-secrets";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { IMAGE_COMPRESSION_POLICY, ORIGINAL_IMAGE_MAX_BYTES } from "./image-compression";
+import { compressImageToJpeg, IMAGE_COMPRESSION_POLICY, ORIGINAL_IMAGE_MAX_BYTES } from "./image-compression";
 
 type MediaRow = {
   id: string;
@@ -167,4 +167,14 @@ export async function originalMediaBlob(mediaId: string, maxBytes = 10 * 1024 * 
   const buffer = await new Response(media.body, { headers: { "content-type": media.mimeType } }).arrayBuffer();
   if (buffer.byteLength > maxBytes) throw new Error("MEDIA_TOO_LARGE");
   return { ...media, blob: new Blob([buffer], { type: media.mimeType }) };
+}
+
+/** Publish the actual Drive photo, resized/encoded only when required for delivery. */
+export async function sourcePhotoBlob(mediaId: string) {
+  const row = await mediaRow(mediaId);
+  if (row.origin !== "source" || row.storage_provider !== "google_drive") throw new Error("PRODUCT_MEDIA_MISMATCH");
+  const loaded = await mediaBlob(mediaId, 25 * 1024 * 1024);
+  const photo = loaded.mimeType === "image/jpeg" && loaded.blob.size > 0 && loaded.blob.size < ORIGINAL_IMAGE_MAX_BYTES
+    ? loaded : await compressImageToJpeg(loaded.blob, ORIGINAL_IMAGE_MAX_BYTES);
+  return { blob: photo.blob, mimeType: "image/jpeg", filename: `${mediaId}.jpg` };
 }

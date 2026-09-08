@@ -1,5 +1,5 @@
 import { syncGoogleCatalog } from "./integrations/google-sync";
-import { productSourceConnection } from "./product-integrity";
+import { productFingerprint, productSourceConnection, productSources } from "./product-integrity";
 import { assertPublishProductMedia } from "./publish-media-integrity";
 import { getRuntimeEnv } from "./integrations/env";
 import {
@@ -169,7 +169,7 @@ function facebookPayload(payload: Record<string, unknown>) {
       .map((value: string) => `#${value.trim().replace(/^#+/, "")}`)
     : [];
   const mediaIds = Array.isArray(payload.mediaIds)
-    ? payload.mediaIds.filter((value: unknown): value is string => typeof value === "string").slice(0, 10)
+    ? payload.mediaIds.filter((value: unknown): value is string => typeof value === "string")
     : [];
   const caption = [message.trim(), hashtags.join(" ")].filter(Boolean).join("\n\n");
   if (!caption && mediaIds.length === 0) throw new PublishDeliveryError("INVALID_JOB_PAYLOAD");
@@ -525,6 +525,7 @@ async function publishLeasedJob(
   workerId: string,
   database: DispatcherDatabase,
   assertLease: () => Promise<void>,
+  synchronizedConnections: Set<string>,
 ) {
   const payload = parsePayload(job.payload_snapshot_json);
   if (job.job_kind === "social_post") {
@@ -536,10 +537,31 @@ async function publishLeasedJob(
     if (copyViolation) throw new PublishDeliveryError(copyViolation);
   }
   if (job.draft_id && job.product_id && ["facebook", "website"].includes(job.provider)) {
-    const mediaIds = Array.isArray(payload.mediaIds) ? payload.mediaIds.filter((id): id is string => typeof id === "string") : [];
-    const data = payload.platformData as Record<string, unknown> | undefined;
+    let mediaIds = Array.isArray(payload.mediaIds) ? payload.mediaIds.filter((id): id is string => typeof id === "string") : [];
+    let data = payload.platformData as Record<string, unknown> | undefined;
     try {
-      await syncGoogleCatalog(await productSourceConnection(job.product_id, database));
+      const sourceConnectionId = await productSourceConnection(job.product_id, database);
+      if (!synchronizedConnections.has(sourceConnectionId)) {
+        await syncGoogleCatalog(sourceConnectionId);
+        synchronizedConnections.add(sourceConnectionId);
+      }
+      if (job.provider === "facebook") {
+        // Existing daily schedules also adopt the owner's all-originals policy.
+        // Refresh only before an external feed request, while this job owns its lease.
+        const sources = await productSources(job.product_id, database);
+        if (data?.sourceFingerprint && data.sourceFingerprint !== await productFingerprint(sources.product)) {
+          throw new Error("PRODUCT_CONTENT_STALE");
+        }
+        mediaIds = sources.images.map((image) => image.id);
+        data = { ...data, sourceImageCount: mediaIds.length, availableSourceImageCount: mediaIds.length,
+          generatedImageCount: 0, totalImageCount: mediaIds.length };
+        payload.mediaIds = mediaIds;
+        payload.platformData = data;
+        const saved = await database.prepare(`UPDATE publish_jobs SET payload_snapshot_json=?
+          WHERE id=? AND workspace_id=? AND status='publishing' AND lease_owner=? AND payload_snapshot_json=? RETURNING id`)
+          .bind(JSON.stringify(payload), job.id, job.workspace_id, workerId, job.payload_snapshot_json).first<{ id: string }>();
+        if (!saved) throw new Error("PUBLISH_LEASE_LOST");
+      }
       await assertPublishProductMedia(job.product_id, mediaIds, data ?? {}, database);
     }
     catch (error) { throw new PublishDeliveryError(error instanceof Error ? error.message : "PRODUCT_MEDIA_MISMATCH"); }
@@ -588,6 +610,7 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
   }
   const jobFilter = jobIds ? ` AND j.id IN (${jobIds.map(() => "?").join(",")})` : "";
   const dispatchStartedAt = Date.now();
+  const synchronizedConnections = new Set<string>();
   const database = dispatcherDatabase(options.database);
   const publishers = options.publishers ?? defaultPublishers;
   const now = Math.floor(options.now ?? Date.now());
@@ -649,7 +672,7 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
           .bind(checkedAt + Math.max(leaseMs, 120_000), checkedAt, job.id, job.workspace_id, workerId, checkedAt).first<{ id: string }>();
         if (!renewed) throw new PublishDeliveryError("PUBLISH_LEASE_LOST");
       };
-      accepted = await publishLeasedJob(job, publishers, workerId, database, assertLease);
+      accepted = await publishLeasedJob(job, publishers, workerId, database, assertLease, synchronizedConnections);
       if (job.provider === "facebook") {
         const receiptSaved = await persistAcceptedReceipt(database, job, workerId, accepted, Date.now());
         if (!receiptSaved) throw new PublishDeliveryError("FACEBOOK_LOCAL_RECEIPT_PERSIST_FAILED", { outcomeUnknown: true });

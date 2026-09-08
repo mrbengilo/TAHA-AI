@@ -1,20 +1,18 @@
-import { compressImageToJpeg, GENERATED_IMAGE_MAX_BYTES, IMAGE_COMPRESSION_POLICY, LIFESTYLE_VARIANTS, ORIGINAL_IMAGE_MAX_BYTES } from "./image-compression";
+import { compressImageToJpeg, IMAGE_COMPRESSION_POLICY, ORIGINAL_IMAGE_MAX_BYTES } from "./image-compression";
 import { originalMediaBlob, verifyOriginalMedia } from "./media";
 import { productFingerprint, productSources, type SourceImage } from "./product-integrity";
 import { getConnectedIntegration, getGoogleAccessToken } from "./integrations/connection-secrets";
-import { downloadGoogleDriveImage, findGoogleDriveFileByAppProperty, normalizeSkuKey, requireGoogleDriveWriteScope, uploadGoogleDriveImage, type DriveFile } from "./integrations/google-drive";
+import { downloadGoogleDriveImage, findGoogleDriveFileByAppProperty, requireGoogleDriveWriteScope, uploadGoogleDriveImage, type DriveFile } from "./integrations/google-drive";
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 
-export { LIFESTYLE_VARIANTS } from "./image-compression";
-
-type MediaOrigin = "generated" | "derived";
+type MediaOrigin = "derived";
 type PersistInput = {
   productId: string;
   mediaId: string;
   linkId: string;
   origin: MediaOrigin;
-  role: "generated" | "source";
+  role: "source";
   filename: string;
   maxBytes: number;
   blob?: Blob;
@@ -85,9 +83,7 @@ async function persistRow(input: PersistInput, context: Awaited<ReturnType<typeo
   const now = Date.now();
   const sha256 = await digestHex(await blob.arrayBuffer());
   const prior = record(JSON.parse(String((existing.results ?? []).find((row) => row.id === input.mediaId)?.metadata_json || "{}")));
-  const details = input.origin === "generated"
-    ? { generation: { ...record(prior.generation), ...record(input.details.generation) } }
-    : { optimization: { ...record(prior.optimization), ...record(input.details.optimization) } };
+  const details = { optimization: { ...record(prior.optimization), ...record(input.details.optimization) } };
   const metadataObject = {
     ...prior,
     name: file.name,
@@ -150,51 +146,6 @@ async function findOrPersist(input: PersistInput, suppliedContext?: Awaited<Retu
     appProperties: input.appProperties,
   });
   return persistRow(input, context, file, input.blob);
-}
-
-export async function generatedMediaIdentity(productId: string, source: SourceImage, fingerprint: string, variant: string, promptVersion: string) {
-  const identity = [productId, fingerprint, source.id, source.external_id, sourceVersion(source), variant, promptVersion, IMAGE_COMPRESSION_POLICY].join(":");
-  return { mediaId: await stableId("media", identity), linkId: await stableId("pm", identity) };
-}
-
-export async function findOrPersistGeneratedImage(input: {
-  productId: string;
-  source: SourceImage;
-  sourceFingerprint: string;
-  variant: string;
-  promptVersion: string;
-  model?: string;
-  blob?: Blob;
-  width?: number;
-  height?: number;
-}) {
-  const variantIndex = LIFESTYLE_VARIANTS.indexOf(input.variant as typeof LIFESTYLE_VARIANTS[number]);
-  if (variantIndex < 0) throw new Error("IMAGE_VARIANT_INVALID");
-  const identity = await generatedMediaIdentity(input.productId, input.source, input.sourceFingerprint, input.variant, input.promptVersion);
-  const sku = normalizeSkuKey((await productSources(input.productId)).product.base_sku);
-  return findOrPersist({
-    ...identity,
-    productId: input.productId,
-    origin: "generated",
-    role: "generated",
-    filename: `${sku}-AI-${input.variant}.jpg`,
-    maxBytes: GENERATED_IMAGE_MAX_BYTES,
-    blob: input.blob,
-    sortOrder: variantIndex,
-    appProperties: { tahaMediaId: identity.mediaId, tahaProductId: input.productId, tahaSku: sku, tahaKind: "generated", tahaVariant: input.variant },
-    details: { generation: {
-      variant: input.variant,
-      sourceMediaId: input.source.id,
-      sourceExternalId: input.source.external_id,
-      sourceVersion: sourceVersion(input.source),
-      sourceFingerprint: input.sourceFingerprint,
-      promptVersion: input.promptVersion,
-      compressionPolicy: IMAGE_COMPRESSION_POLICY,
-      ...(input.model ? { model: input.model } : {}),
-      ...(input.width ? { width: input.width } : {}),
-      ...(input.height ? { height: input.height } : {}),
-    } },
-  });
 }
 
 export async function normalizeProductSourceImages(productId: string, selectedMediaIds?: readonly string[]) {

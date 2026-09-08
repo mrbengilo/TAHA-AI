@@ -6,9 +6,7 @@ import { TAHA_WORKSPACE_ID } from "./integrations/store";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
-const TARGETS = ["facebook", "zalo_personal", "website"] as const;
-
-type Target = (typeof TARGETS)[number];
+const GOOGLE_REFRESH_RETRY_MS = 60 * 60 * 1000;
 
 type Statement = {
   bind(...values: unknown[]): Statement;
@@ -32,6 +30,69 @@ function publicationDay(now: number) {
   return `${y}-${m}-${d}`;
 }
 
+function localDay(now: number) {
+  const local = new Date(now + VN_OFFSET_MS);
+  const y = local.getUTCFullYear();
+  const m = String(local.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(local.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function publicationWindow(day: string) {
+  const start = Date.parse(`${day}T00:00:00Z`) - VN_OFFSET_MS;
+  return { start, end: start + DAY_MS };
+}
+
+/**
+ * Refreshes the canonical Sheet and Drive catalog once per Vietnam calendar
+ * day. Failed attempts are durably throttled so a minute cron cannot hammer
+ * Google, while still allowing another attempt later the same day.
+ */
+export async function ensureDailyGoogleCatalogRefresh(now = Date.now()) {
+  const database = db();
+  const day = localDay(now);
+  const google = await database.prepare(
+    `SELECT id FROM channel_connections
+     WHERE workspace_id = ? AND provider = 'google' AND status = 'connected'
+     ORDER BY updated_at DESC LIMIT 1`,
+  ).bind(TAHA_WORKSPACE_ID).first<{ id: string }>();
+  if (!google) return { refreshed: false as const, day, reason: "google_not_connected" as const };
+
+  const claimed = await database.prepare(
+    `UPDATE channel_connections
+     SET config_json = json_set(config_json,
+       '$._dailyCatalogRefreshAttemptDay', ?,
+       '$._dailyCatalogRefreshAttemptAt', ?)
+     WHERE id = ? AND workspace_id = ? AND provider = 'google' AND status = 'connected'
+       AND COALESCE(json_extract(config_json, '$._dailyCatalogRefreshSucceededDay'), '') != ?
+       AND (COALESCE(json_extract(config_json, '$._dailyCatalogRefreshAttemptDay'), '') != ?
+         OR COALESCE(json_extract(config_json, '$._dailyCatalogRefreshAttemptAt'), 0) <= ?)
+     RETURNING id`,
+  ).bind(day, now, google.id, TAHA_WORKSPACE_ID, day, day, now - GOOGLE_REFRESH_RETRY_MS).first<{ id: string }>();
+  if (!claimed) {
+    const state = await database.prepare(
+      `SELECT json_extract(config_json, '$._dailyCatalogRefreshSucceededDay') AS succeeded_day
+       FROM channel_connections WHERE id = ? AND workspace_id = ?`,
+    ).bind(google.id, TAHA_WORKSPACE_ID).first<{ succeeded_day: string | null }>();
+    return {
+      refreshed: false as const,
+      day,
+      reason: state?.succeeded_day === day ? "already_refreshed" as const : "retry_deferred" as const,
+    };
+  }
+
+  const sync = await syncGoogleCatalog(google.id);
+  await database.prepare(
+    `UPDATE channel_connections
+     SET config_json = json_set(config_json,
+       '$._dailyCatalogRefreshSucceededDay', ?,
+       '$._dailyCatalogRefreshSucceededAt', ?)
+     WHERE id = ? AND workspace_id = ? AND provider = 'google' AND status = 'connected'
+     RETURNING id`,
+  ).bind(day, now, google.id, TAHA_WORKSPACE_ID).first<{ id: string }>();
+  return { refreshed: true as const, day, sync };
+}
+
 export async function ensureDailyProductAutomation(now = Date.now()) {
   const database = db();
   const day = publicationDay(now);
@@ -42,26 +103,24 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
   ).bind(TAHA_WORKSPACE_ID, requestPrefix).first<{ id: string; status: string }>();
   if (existing) return { queued: false, day, reason: "already_planned", runId: existing.id };
 
-  const google = await database.prepare(
-    `SELECT id, last_synced_at FROM channel_connections
-     WHERE workspace_id = ? AND provider = 'google' AND status = 'connected'
-     ORDER BY updated_at DESC LIMIT 1`,
-  ).bind(TAHA_WORKSPACE_ID).first<{ id: string; last_synced_at: number | null }>();
-  if (!google) return { queued: false, day, reason: "google_not_connected" };
-  if (!google.last_synced_at || now - google.last_synced_at > 6 * 60 * 60 * 1000) {
-    await syncGoogleCatalog(google.id);
-  }
-
   const connections = await database.prepare(
     `SELECT id, provider FROM channel_connections
      WHERE workspace_id = ? AND status = 'connected'
-       AND provider IN ('facebook', 'zalo_personal', 'website') AND json_extract(config_json, '$.dailyAutomationEnabled') = 1`,
+       AND provider = 'facebook' AND json_extract(config_json, '$.dailyAutomationEnabled') = 1`,
   ).bind(TAHA_WORKSPACE_ID).all<{ id: string; provider: string }>();
-  const connected = new Set((connections.results ?? []).map((row) => row.provider));
-  const targets = TARGETS.filter((provider) => connected.has(provider)) as Target[];
-  if (!targets.length) return { queued: false, day, reason: "no_publish_channels" };
-  if (targets.some((provider) => connections.results?.filter((row) => row.provider === provider).length !== 1)) return { queued: false, day, reason: "ambiguous_publish_channels" };
-  const connectionIds = Object.fromEntries((connections.results ?? []).map((row) => [row.provider, row.id]));
+  const publishConnections = connections.results ?? [];
+  if (!publishConnections.length) return { queued: false, day, reason: "no_publish_channels" };
+  if (publishConnections.length !== 1) return { queued: false, day, reason: "ambiguous_publish_channels" };
+  const facebookConnectionId = publishConnections[0].id;
+  const window = publicationWindow(day);
+  const scheduled = await database.prepare(
+    `SELECT s.id FROM schedules s
+     JOIN content_drafts d ON d.id = s.draft_id AND d.workspace_id = s.workspace_id
+     WHERE s.workspace_id = ? AND s.connection_id = ? AND s.status = 'active'
+       AND d.target_provider = 'facebook' AND s.run_at >= ? AND s.run_at < ?
+     ORDER BY s.run_at LIMIT 1`,
+  ).bind(TAHA_WORKSPACE_ID, facebookConnectionId, window.start, window.end).first<{ id: string }>();
+  if (scheduled) return { queued: false, day, reason: "already_scheduled", scheduleId: scheduled.id };
 
   const candidates = await database.prepare(
     `SELECT p.id, p.base_sku
@@ -91,9 +150,9 @@ export async function ensureDailyProductAutomation(now = Date.now()) {
 
   const queued = await queueAutomationRun({
     productId: product.id,
-    imageCount: 4,
-    targetProviders: targets,
-    connectionIds,
+    imageCount: 0,
+    targetProviders: ["facebook"],
+    connectionIds: { facebook: facebookConnectionId },
     idempotencyKey: `daily:${day}:${product.id}`,
   }, "daily-automation");
   return { queued: true, day, productId: product.id, sku: product.base_sku, run: queued.run };

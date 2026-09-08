@@ -16,7 +16,6 @@ import {
 } from "./google-drive";
 import { TAHA_WORKSPACE_ID } from "./store";
 
-const MAX_PRODUCT_SOURCE_IMAGES = 20;
 const MAX_GOOGLE_IMAGE_EXPORT_BYTES = 25 * 1024 * 1024;
 
 export type CatalogProduct = {
@@ -349,9 +348,8 @@ function sourceMediaMetadata(existing: unknown, file: IndexedDriveFile, source: 
 async function attachAssets(productId: string, files: IndexedDriveFile[], source: ProductSourceContext) {
   const db = database();
   const now = source.indexedAt;
-  const selectedFiles = files.slice(0, MAX_PRODUCT_SOURCE_IMAGES);
   const selectedMediaIds: string[] = [];
-  for (const [index, file] of selectedFiles.entries()) {
+  for (const [index, file] of files.entries()) {
     const existing = await db.prepare(
       `SELECT id, metadata_json FROM media_assets
        WHERE workspace_id = ? AND storage_provider = 'google_drive' AND external_id = ? LIMIT 1`,
@@ -393,7 +391,7 @@ async function attachAssets(productId: string, files: IndexedDriveFile[], source
   if (staleLinks.length) {
     await db.batch(staleLinks.map((link) => db.prepare("DELETE FROM product_media WHERE id = ? AND workspace_id = ?").bind(link.id, TAHA_WORKSPACE_ID)));
   }
-  return { attached: selectedMediaIds.length, removed: staleLinks.length, skipped: Math.max(0, files.length - selectedFiles.length) };
+  return { attached: selectedMediaIds.length, removed: staleLinks.length, skipped: 0 };
 }
 
 function canonicalSourceExternalId(sheetId: string, skuKey: string) {

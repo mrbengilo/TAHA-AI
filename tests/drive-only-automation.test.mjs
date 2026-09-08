@@ -72,6 +72,29 @@ test("different SKU media and stale product descriptions fail closed", async () 
   assert.equal(outcome.errors[0].code, "PRODUCT_CONTENT_STALE");
 });
 
+test("an existing Facebook schedule picks up every current original and publishes its 27-photo album once", async () => {
+  const h = await prepare();
+  for (let i = 1; i < 27; i++) {
+    const id = `extra-original-${i}`;
+    h.sqlite.prepare(`INSERT INTO media_assets (id,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,
+      external_id,mime_type,status,metadata_json,created_at,updated_at)
+      SELECT ?,workspace_id,source_connection_id,channel_id,media_type,origin,storage_provider,?,mime_type,status,
+        json_set(metadata_json,'$.googleDriveSource.driveFileId',?),created_at,updated_at
+      FROM media_assets WHERE id='image-product-1'`).run(id, id, id);
+    h.sqlite.prepare("INSERT INTO product_media (id,workspace_id,product_id,media_id,role,sort_order,created_at) VALUES (?,?,'product-1',?,'source',?,1)")
+      .run(`pm-${id}`, WORKSPACE, id, i);
+  }
+  await enqueue(h);
+  const sent = [];
+  assert.equal((await dispatch(h, sent)).published, 1);
+  assert.equal(sent[0].mediaIds.length, 27);
+  const snapshot = JSON.parse(h.sqlite.prepare("SELECT payload_snapshot_json FROM publish_jobs").get().payload_snapshot_json);
+  assert.equal(snapshot.mediaIds.length, 27);
+  assert.equal(snapshot.platformData.generatedImageCount, 0);
+  assert.equal((await dispatch(h, sent)).published, 0);
+  assert.equal(sent.length, 1);
+});
+
 test("requires a real exact SKU folder and connected Facebook destination before spending AI", async () => {
   const h = harness(); h.seedProduct(); const automation = h.load("lib/automation.ts");
   const input = { productId: "product-1", idempotencyKey: "confirm-preflight", targetProviders: ["facebook"] };
@@ -195,7 +218,7 @@ test("folder returns only this SKU's photos and articles with receipt", async ()
   assert.equal(h.sqlite.prepare("SELECT workspace_id FROM products LIMIT 1").get().workspace_id, WORKSPACE);
 });
 
-test("refreshes Sheets and reconciles removed products and images beyond the import cap", async () => {
+test("refreshes Sheets and reconciles every original image without an import cap", async () => {
   const h = harness(); h.seedProduct(); h.seedProduct("product-2", "PH0002");
   h.sqlite.prepare("UPDATE products SET metadata_json = json_set(metadata_json, '$.googleSource.sheetId', 'old-sheet', '$.googleSource.sheetRange', 'Old!A:Z') WHERE id = 'product-2'").run();
   h.overrides.delete(path.join(ROOT, "lib/integrations/google-sync.ts"));
@@ -214,11 +237,11 @@ test("refreshes Sheets and reconciles removed products and images beyond the imp
   await sync.syncGoogleCatalog("google-1");
   assert.equal(h.sqlite.prepare("SELECT description FROM products WHERE id = 'product-1'").get().description, "Mô tả mới");
   assert.equal(h.sqlite.prepare("SELECT status FROM products WHERE id = 'product-2'").get().status, "paused");
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_media WHERE product_id = 'product-1'").get().n, 21);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_media WHERE product_id = 'product-1'").get().n, 25);
   h.sqlite.prepare("UPDATE media_assets SET external_id = 'removed-file' WHERE id = 'image-product-1'").run();
   await sync.syncGoogleCatalog("google-1");
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_media WHERE media_id = 'image-product-1'").get().n, 0);
-  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_media WHERE product_id = 'product-1'").get().n, 20);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_media WHERE product_id = 'product-1'").get().n, 25);
 });
 
 test("a Drive image moved to another SKU folder is rejected before downloading or posting", async () => {
@@ -282,7 +305,7 @@ test("Facebook never submits feed after losing lease or receiving no photo ID", 
     h.overrides.set(path.join(ROOT, "lib/integrations/connection-secrets.ts"), {
       getConnectedIntegration: async () => ({ externalAccountId: "page-1", credentials: { accessToken: "test-token" } }),
     });
-    h.overrides.set(path.join(ROOT, "lib/media.ts"), { mediaBlob: async () => ({ blob: new Blob(["test"], { type: "image/jpeg" }), filename: "PH0001.jpg" }) });
+    h.overrides.set(path.join(ROOT, "lib/media.ts"), { sourcePhotoBlob: async () => ({ blob: new Blob(["test"], { type: "image/jpeg" }), filename: "PH0001.jpg" }) });
     const requests = [];
     h.runtime.TEST_FETCH = async (url, init) => {
       requests.push(String(url)); assert.ok(init.signal);

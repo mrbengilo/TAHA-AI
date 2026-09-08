@@ -1,7 +1,6 @@
 import type { SourceProduct } from "./product-integrity";
 
 export const WEBSITE_PRODUCT_SCHEMA_VERSION = "taha.website.product.v1";
-export const WEBSITE_PRODUCT_MAX_IMAGES = 6;
 
 type WebsiteMetricInput = {
   rating?: unknown;
@@ -101,7 +100,7 @@ function specifications(value: unknown) {
  * preserve on update or initialize truthfully on create.
  */
 export function buildWebsiteProductPayload(input: WebsiteProductPayloadInput) {
-  if (!input.media.length || input.media.length > WEBSITE_PRODUCT_MAX_IMAGES) {
+  if (!input.media.length) {
     throw new Error("WEBSITE_PRODUCT_MEDIA_COUNT_INVALID");
   }
   const productMetadata = metadata(input.product);

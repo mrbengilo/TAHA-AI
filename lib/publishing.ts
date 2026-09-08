@@ -3,11 +3,11 @@ import { getConnectedIntegration } from "./integrations/connection-secrets";
 import { getRuntimeEnv, requireEnv } from "./integrations/env";
 import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
-import { mediaBlob } from "./media";
+import { sourcePhotoBlob } from "./media";
 import { markJobBlocked, markJobFailed, markJobPublished, startPublishJob } from "./publish-jobs";
 import { customerCopyViolation } from "./ai/shoe-content";
 import { productSources } from "./product-integrity";
-import { buildWebsiteProductPayload, WEBSITE_PRODUCT_MAX_IMAGES } from "./website-product";
+import { buildWebsiteProductPayload } from "./website-product";
 
 type FacebookInput = { connectionId: string; message: string; mediaIds: string[]; idempotencyKey: string };
 type WebsiteInput = { connectionId: string; payload: Record<string, unknown>; idempotencyKey: string };
@@ -112,9 +112,9 @@ export async function sendFacebookPost(input: FacebookRemoteInput) {
 
   const version = requireEnv("META_GRAPH_API_VERSION");
   const mediaFbids: string[] = [];
-  for (const mediaId of input.mediaIds.slice(0, 10)) {
+  for (const mediaId of input.mediaIds) {
     await input.assertLease?.();
-    const media = await mediaBlob(mediaId);
+    const media = await sourcePhotoBlob(mediaId);
     const form = new FormData();
     form.set("source", media.blob, media.filename);
     form.set("published", "false");
@@ -197,12 +197,12 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   const websiteOrigin = configuredWebsiteOrigin(baseUrl);
 
   const mediaIds = Array.isArray(input.payload.mediaIds)
-    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, WEBSITE_PRODUCT_MAX_IMAGES)
+    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string")
     : [];
   const media: Array<{ filename: string; mimeType: string; dataBase64: string }> = [];
   for (const mediaId of mediaIds) {
     try {
-      const loaded = await mediaBlob(mediaId, 6 * 1024 * 1024);
+      const loaded = await sourcePhotoBlob(mediaId);
       const bytes = new Uint8Array(await loaded.blob.arrayBuffer());
       let binary = "";
       for (let offset = 0; offset < bytes.length; offset += 0x8000) {
