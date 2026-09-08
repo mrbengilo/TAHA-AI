@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 33: inspect website product form request builder.
+# Probe generation 34: verify exact SKU/size quarantine state.
 import base64
 import json
 import re
