@@ -39,7 +39,8 @@ test("daily rotation queues only Facebook with original Drive images", async () 
   const planned = await daily.ensureDailyProductAutomation(Date.UTC(2026, 8, 7, 22, 0)); // 05:00 in Vietnam.
   assert.equal(planned.queued, true, JSON.stringify(planned));
   const run = h.sqlite.prepare("SELECT request_key,requested_image_count,target_providers_json,content_json FROM automation_runs").get();
-  assert.equal(run.request_key, "daily:2026-09-08:product-1");
+  assert.equal(run.request_key, "daily:2026-09-08:0800:product-1");
+  assert.equal(JSON.parse(run.content_json).scheduledFor, undefined);
   assert.equal(run.requested_image_count, 0);
   assert.deepEqual(JSON.parse(run.target_providers_json), ["facebook"]);
   assert.deepEqual(JSON.parse(run.content_json).targetConnections, { facebook: "facebook-1" });

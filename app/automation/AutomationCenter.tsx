@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "../SiteLink";
+import FacebookSchedulingPanel from "./FacebookSchedulingPanel";
 
 type Product = { id: string; name: string; sku: string; status: string; updatedAt: string };
 type AutomationRun = {
@@ -255,6 +256,8 @@ export default function AutomationCenter() {
 
       {notice ? <div className="automation-alert is-success" role="status">✓ {notice}</div> : null}
       {error ? <div className="automation-alert is-error" role="alert">! {error}</div> : null}
+
+      <FacebookSchedulingPanel />
 
       <div className="automation-grid">
         <section className="automation-card automation-builder">

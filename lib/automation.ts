@@ -75,6 +75,7 @@ export type QueueAutomationInput = {
   targetProviders?: unknown;
   connectionIds?: unknown;
   prepareOnly?: unknown;
+  scheduledFor?: unknown;
 };
 
 export type AutomationWorkerResult = {
@@ -136,6 +137,15 @@ function requiredText(value: unknown, field: string, max: number) {
   return normalized;
 }
 
+function optionalFutureTimestamp(value: unknown, now: number) {
+  if (value === undefined || value === null || value === "") return null;
+  const timestamp = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isSafeInteger(timestamp) || timestamp <= now) {
+    throw new AutomationError("INVALID_SCHEDULED_FOR", "Ngày và giờ đăng Facebook phải ở tương lai.");
+  }
+  return timestamp;
+}
+
 function changes(result: { meta?: { changes?: number } } | undefined) {
   return Number(result?.meta?.changes ?? 0);
 }
@@ -175,7 +185,7 @@ function publicRun(row: RunRow) {
 
 function isSameAutomationRequest(
   existing: RunRow,
-  input: { productId: string; mediaId: string; imageCount: number; targetProviders: TargetProvider[]; targetConnections: Record<string, string>; prepareOnly: boolean },
+  input: { productId: string; mediaId: string; imageCount: number; targetProviders: TargetProvider[]; targetConnections: Record<string, string>; prepareOnly: boolean; scheduledFor: number | null },
 ) {
   const existingContent = json<Record<string, unknown>>(existing.content_json, {});
   const existingConnections = record(existingContent.targetConnections);
@@ -185,6 +195,7 @@ function isSameAutomationRequest(
     && existing.source_media_id === input.mediaId
     && existing.requested_image_count === input.imageCount
     && (existingContent.prepareOnly === true) === input.prepareOnly
+    && (typeof existingContent.scheduledFor === "number" ? existingContent.scheduledFor : null) === input.scheduledFor
     && JSON.stringify(json<string[]>(existing.target_providers_json, []).sort())
       === JSON.stringify([...input.targetProviders].sort());
 }
@@ -214,6 +225,11 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
   if (input.prepareOnly !== undefined && typeof input.prepareOnly !== "boolean") throw new AutomationError("INVALID_AUTOMATION_INPUT", "prepareOnly không hợp lệ.");
   const prepareOnly = input.prepareOnly === true;
   const targetProviders = normalizeTargets(input.targetProviders);
+  const now = Date.now();
+  const scheduledFor = optionalFutureTimestamp(input.scheduledFor, now);
+  if (scheduledFor !== null && (prepareOnly || targetProviders.length !== 1 || targetProviders[0] !== "facebook")) {
+    throw new AutomationError("INVALID_SCHEDULED_FOR", "Giờ đăng tự chọn chỉ áp dụng cho một bài Facebook tự động.");
+  }
   const targetConnections: Record<string, string> = {};
   const requestedConnections = record(input.connectionIds);
   for (const provider of prepareOnly ? [] : targetProviders.filter((p) => ["facebook", "website", "zalo_personal"].includes(p))) {
@@ -234,7 +250,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
     `SELECT * FROM automation_runs WHERE workspace_id = ? AND request_key = ? LIMIT 1`,
   ).bind(TAHA_WORKSPACE_ID, requestKey).first<RunRow>();
   if (existing) {
-    if (!isSameAutomationRequest(existing, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly })) {
+    if (!isSameAutomationRequest(existing, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly, scheduledFor })) {
       throw new AutomationError("IDEMPOTENCY_KEY_REUSED", "Khóa chống trùng đã được dùng cho yêu cầu khác.", 409);
     }
     return { run: publicRun(existing), replayed: true };
@@ -247,7 +263,6 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
     if (!permissions.ready) throw new AutomationError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", permissions.message || "Facebook chưa có đủ quyền đăng bài. Hãy kiểm tra kết nối Page.", 409);
   }
 
-  const now = Date.now();
   const runId = crypto.randomUUID();
   const statements: AutomationStatement[] = [
     db.prepare(
@@ -256,7 +271,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
         completed_image_count, target_providers_json, output_media_ids_json, prompt_version,
         created_by, created_at, updated_at, content_json)
        VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, ?, '[]', ?, ?, ?, ?, ?)`,
-    ).bind(runId, TAHA_WORKSPACE_ID, productId, mediaId, requestKey, imageCount, JSON.stringify(targetProviders), promptVersion, actorId?.slice(0, 160) ?? "operator", now, now, JSON.stringify({ targetConnections, prepareOnly })),
+    ).bind(runId, TAHA_WORKSPACE_ID, productId, mediaId, requestKey, imageCount, JSON.stringify(targetProviders), promptVersion, actorId?.slice(0, 160) ?? "operator", now, now, JSON.stringify({ targetConnections, prepareOnly, ...(scheduledFor === null ? {} : { scheduledFor }) })),
     db.prepare(
       `INSERT INTO automation_steps
        (id, workspace_id, run_id, step_type, ordinal, status, available_at, attempt_count, max_attempts,
@@ -281,7 +296,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
       `SELECT * FROM automation_runs WHERE workspace_id = ? AND request_key = ? LIMIT 1`,
     ).bind(TAHA_WORKSPACE_ID, requestKey).first<RunRow>();
     if (racedExisting) {
-      if (!isSameAutomationRequest(racedExisting, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly })) {
+      if (!isSameAutomationRequest(racedExisting, { productId, mediaId, imageCount, targetProviders, targetConnections, prepareOnly, scheduledFor })) {
         throw new AutomationError("IDEMPOTENCY_KEY_REUSED", "Khóa chống trùng đã được dùng cho yêu cầu khác.", 409);
       }
       return { run: publicRun(racedExisting), replayed: true };
@@ -377,6 +392,7 @@ export async function retryAutomationRun(id: string) {
   const resetContent = JSON.stringify({
     targetConnections: record(priorContent.targetConnections),
     prepareOnly: priorContent.prepareOnly === true,
+    ...(typeof priorContent.scheduledFor === "number" ? { scheduledFor: priorContent.scheduledFor } : {}),
   });
   const statements: AutomationStatement[] = [
     db.prepare("DELETE FROM automation_steps WHERE run_id = ? AND workspace_id = ?").bind(id, TAHA_WORKSPACE_ID),
@@ -749,7 +765,10 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       if (connection) {
         const scheduleId = await stableId("schedule", `${run.id}:${provider}`);
         scheduleIds.push(scheduleId);
-        const runAt = provider === "website" ? now : nextLocalSlot(now, scheduleHour, current.request_key);
+        const scheduledFor = typeof content.scheduledFor === "number" ? content.scheduledFor : null;
+        const runAt = provider === "website" ? now : provider === "facebook" && scheduledFor !== null
+          ? scheduledFor
+          : nextLocalSlot(now, scheduleHour, current.request_key);
         statements.push(db.prepare(
           `UPDATE schedules SET status = 'paused', next_run_at = NULL, updated_at = ?
            WHERE workspace_id = ? AND connection_id = ? AND status = 'active'

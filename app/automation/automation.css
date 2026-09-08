@@ -9,6 +9,36 @@
 .automation-alert { border-radius: 10px; font-size: 13px; font-weight: 700; margin: 0 0 16px; padding: 12px 15px; }
 .automation-alert.is-success { background: #eaf8ef; border: 1px solid #c5ebd2; color: #167a3c; }
 .automation-alert.is-error { background: #fff2ef; border: 1px solid #f2cbc2; color: #b6402c; }
+.automation-facebook-admin { background: #fff; border: 1px solid #cfd6e6; border-radius: 13px; box-shadow: 0 8px 28px rgba(26, 38, 73, .07); margin-bottom: 16px; padding: 20px 22px; }
+.facebook-admin-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.facebook-admin-box { background: #fafbff; border: 1px solid #cfd7e8; border-radius: 11px; box-shadow: 0 3px 12px rgba(38, 49, 86, .05); min-width: 0; padding: 16px; transition: border-color .18s ease, box-shadow .18s ease; }
+.facebook-admin-box:hover { border-color: #aeb9da; box-shadow: 0 6px 18px rgba(38, 49, 86, .08); }
+.facebook-admin-box-heading { border-bottom: 1px solid #e6e9f1; margin-bottom: 14px; padding-bottom: 12px; }
+.facebook-admin-box-heading div { display: grid; gap: 3px; }
+.facebook-admin-box-heading strong { font-size: 13px; }
+.facebook-admin-box-heading span, .facebook-plan-fields label > span, .facebook-time-grid label > span, .facebook-wide-field > span { color: #737c91; font-size: 10px; font-weight: 700; }
+.facebook-plan-fields { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.facebook-plan-fields label, .facebook-time-grid label, .facebook-wide-field { display: grid; gap: 6px; }
+.facebook-plan-fields input, .facebook-time-grid input, .facebook-wide-field select { background: #fff; border: 1px solid #c5cede; border-radius: 8px; color: #151b2d; font: 700 12px Arial, sans-serif; min-height: 40px; padding: 0 10px; transition: border-color .16s ease, box-shadow .16s ease; width: 100%; }
+.facebook-plan-fields input:focus, .facebook-time-grid input:focus, .facebook-wide-field select:focus { border-color: #4655e4; box-shadow: 0 0 0 3px rgba(70, 85, 228, .14); outline: 0; }
+.facebook-time-grid { display: grid; gap: 9px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 11px; }
+.facebook-primary-button { background: linear-gradient(135deg, #3446dc, #6550ed); border: 1px solid #2737be; border-radius: 8px; box-shadow: 0 7px 16px rgba(55, 68, 207, .22); color: #fff; cursor: pointer; font: 800 12px Arial, sans-serif; margin-top: 13px; min-height: 42px; padding: 0 16px; transition: filter .16s ease, transform .16s ease, box-shadow .16s ease; width: 100%; }
+.facebook-primary-button.is-repost { background: linear-gradient(135deg, #101a36, #263d75); border-color: #091126; box-shadow: 0 7px 16px rgba(16, 26, 54, .22); }
+.facebook-primary-button:hover:not(:disabled) { filter: brightness(1.09); box-shadow: 0 9px 20px rgba(55, 68, 207, .28); transform: translateY(-1px); }
+.facebook-primary-button:active:not(:disabled) { box-shadow: 0 3px 8px rgba(55, 68, 207, .2); transform: translateY(1px) scale(.995); }
+.facebook-primary-button[aria-busy="true"] { animation: facebook-button-pulse .9s ease-in-out infinite alternate; background-size: 180% 100%; cursor: progress; }
+.facebook-primary-button:disabled { cursor: not-allowed; opacity: .58; }
+.facebook-saved-plans { border-top: 1px solid #e5e8f0; display: grid; gap: 6px; margin-top: 14px; padding-top: 12px; }
+.facebook-saved-plans > strong { color: #5f687c; font-size: 10px; }
+.facebook-saved-plans button { align-items: center; background: #f7f8ff; border: 1px solid #cfd6ea; border-radius: 7px; color: #343c50; cursor: pointer; display: grid; gap: 8px; grid-template-columns: auto auto 1fr; min-height: 36px; padding: 7px 9px; text-align: left; transition: background .16s ease, border-color .16s ease, transform .16s ease; }
+.facebook-saved-plans button:hover { background: #eef0ff; border-color: #7783e8; transform: translateY(-1px); }
+.facebook-saved-plans button:active { transform: translateY(1px); }
+.facebook-saved-plans button span, .facebook-saved-plans button b, .facebook-saved-plans button small { font-size: 10px; }
+.facebook-saved-plans button b { color: #4652d9; }
+.facebook-saved-plans button small { color: #7c8496; text-align: right; }
+.facebook-wide-field { margin-bottom: 10px; }
+.facebook-repost-note { color: #767f92; font-size: 10px; line-height: 1.45; margin: 12px 0 0; }
+@keyframes facebook-button-pulse { from { filter: brightness(.92); } to { filter: brightness(1.15); } }
 .automation-grid { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(285px, .85fr); gap: 16px; align-items: start; }
 .automation-card { background: #fff; border: 1px solid #e2e6ef; border-radius: 13px; box-shadow: 0 8px 28px rgba(26, 38, 73, .045); }
 .automation-builder { padding: 22px; }
@@ -83,8 +113,8 @@
 .automation-empty strong { color: #333b50; font-size: 13px; }
 .automation-empty a { color: #4d56dd; font-weight: 700; text-decoration: none; }
 .automation-empty.is-wide { align-items: center; text-align: center; }
-.automation-refresh:focus-visible, .automation-run-button:focus-visible, .automation-targets label:has(input:focus-visible), .automation-run-actions :focus-visible { outline: 3px solid rgba(74, 83, 223, .28); outline-offset: 2px; }
+.automation-refresh:focus-visible, .automation-run-button:focus-visible, .automation-targets label:has(input:focus-visible), .automation-run-actions :focus-visible, .facebook-primary-button:focus-visible, .facebook-saved-plans button:focus-visible { outline: 3px solid rgba(74, 83, 223, .32); outline-offset: 2px; }
 @media (max-width: 1120px) { .automation-grid { grid-template-columns: 1fr; } .automation-targets { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 760px) { .automation-content { padding: 22px 16px 42px; } .automation-heading { flex-direction: column; } .automation-targets { grid-template-columns: repeat(2, 1fr); } .automation-config-grid { grid-template-columns: 1fr; } .automation-config-grid label.is-wide { grid-column: auto; } .automation-config-actions { align-items: stretch; flex-direction: column; } .automation-run-list article { align-items: start; grid-template-columns: 38px 1fr; } .automation-run-actions { grid-column: 2; justify-content: flex-start; } }
-@media (max-width: 480px) { .automation-targets, .automation-output-preview { grid-template-columns: 1fr; } .automation-output-preview > div + div { border-left: 0; border-top: 1px solid #e0e4ec; margin-top: 8px; padding-top: 8px; } }
-@media (prefers-reduced-motion: reduce) { .automation-run-button, .automation-progress i, .automation-targets label { transition: none; } }
+@media (max-width: 760px) { .automation-content { padding: 22px 16px 42px; } .automation-heading { flex-direction: column; } .facebook-admin-grid { grid-template-columns: 1fr; } .facebook-time-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .automation-targets { grid-template-columns: repeat(2, 1fr); } .automation-config-grid { grid-template-columns: 1fr; } .automation-config-grid label.is-wide { grid-column: auto; } .automation-config-actions { align-items: stretch; flex-direction: column; } .automation-run-list article { align-items: start; grid-template-columns: 38px 1fr; } .automation-run-actions { grid-column: 2; justify-content: flex-start; } }
+@media (max-width: 480px) { .automation-targets, .automation-output-preview, .facebook-plan-fields, .facebook-time-grid { grid-template-columns: 1fr; } .facebook-saved-plans button { grid-template-columns: auto auto; } .facebook-saved-plans button small { grid-column: 1 / -1; text-align: left; } .automation-output-preview > div + div { border-left: 0; border-top: 1px solid #e0e4ec; margin-top: 8px; padding-top: 8px; } }
+@media (prefers-reduced-motion: reduce) { .automation-run-button, .automation-progress i, .automation-targets label, .facebook-admin-box, .facebook-primary-button, .facebook-saved-plans button { animation: none; transition: none; } }
