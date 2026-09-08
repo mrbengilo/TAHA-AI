@@ -12,8 +12,10 @@ import time
 from urllib.error import HTTPError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-HERE = Path(__file__).resolve().parent
-SPEC = importlib.util.spec_from_file_location('commerce_media', HERE / 'website-media-repair.py')
+LOCAL = Path(__file__).resolve().parent
+ROOT = Path('/var/www/taha-ai/deploy/vps')
+HELPER = LOCAL / 'website-media-repair.py' if (LOCAL / 'website-media-repair.py').is_file() else ROOT / 'website-media-repair.py'
+SPEC = importlib.util.spec_from_file_location('commerce_media', HELPER)
 media = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(media)
 EXPECTED_CONFIG = 'e8a4e697b9afcc8cc8b3c9007f57e6abe6ff91793f275bf1aae93faa4b4bdc44'
