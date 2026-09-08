@@ -33,6 +33,9 @@ def sha(data):
 
 def command(args, timeout=30):
     result = subprocess.run(args, capture_output=True, timeout=timeout)
+    if result.returncode and len(args) > 4 and args[3] == 'nginx':
+        diagnostic = re.sub(r'\"[^\"\n]*\"|\x27[^\x27\n]*\x27', '[value]', result.stderr.decode(errors='replace'))
+        print('MEDIA_NGINX_VALIDATION=' + json.dumps({'message': ' '.join(diagnostic.split())[:1000]}), flush=True)
     require(result.returncode == 0, 'MEDIA_REPAIR_COMMAND_FAILED')
     return result.stdout
 
@@ -187,9 +190,10 @@ def main(apply):
         fd, candidate_name = tempfile.mkstemp(prefix='taha-media-', suffix='.conf')
         with os.fdopen(fd, 'wb') as stream:
             stream.write(updated)
-        staged_path = '/tmp/' + Path(candidate_name).name
+        staged_path = '/etc/nginx/' + Path(candidate_name).name
         changed = False
         try:
+            print('MEDIA_REPAIR_STAGE=stage_config_in_nginx_directory', flush=True)
             command(['docker', 'cp', candidate_name, nginx['Id'] + ':' + staged_path])
             command(['docker', 'exec', nginx['Id'], 'nginx', '-t', '-c', staged_path])
             require(CONFIG.read_bytes() == original and inspect('tahashoes-nginx')['Id'] == nginx['Id'],
