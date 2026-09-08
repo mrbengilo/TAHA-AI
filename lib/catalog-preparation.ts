@@ -30,7 +30,7 @@ export async function prepareCatalogPage(input: { cursor?: unknown; limit?: unkn
       const bytes = new TextEncoder().encode(JSON.stringify([await productFingerprint(source.product), versions]));
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (n) => n.toString(16).padStart(2, "0")).join("");
       const queued = await queueAutomationRun({ productId: row.id, prepareOnly: true,
-        targetProviders: ["facebook"], idempotencyKey: `catalog:approved-template-v1:${row.id}:${hash}` }, actorId);
+        targetProviders: ["facebook"], idempotencyKey: `catalog:approved-template-v2:${row.id}:${hash}` }, actorId);
       results.push({ productId: row.id, sku: row.base_sku, runId: queued.run.id, status: queued.run.status, replayed: queued.replayed });
     } catch (error) {
       const code = error instanceof AutomationError ? error.code : error instanceof Error ? error.message : "CATALOG_PREPARATION_FAILED";

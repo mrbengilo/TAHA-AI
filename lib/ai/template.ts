@@ -9,7 +9,7 @@ import {
 } from "./facebook-content";
 import type { ChannelContent, ProductContentInput, ProductContentProduct } from "./openai";
 
-export const APPROVED_TEMPLATE_MODEL = "taha-approved-template-v1";
+export const APPROVED_TEMPLATE_MODEL = "taha-approved-template-v2";
 
 const PROVIDERS = new Set([
   "facebook",
@@ -84,23 +84,48 @@ function normalizedProduct(product: ProductContentProduct) {
   };
 }
 
+function editorialProductName(product: ReturnType<typeof normalizedProduct>) {
+  const policySegment = /^(?:bảo\s*hành|quà\s*tặng|tặng\s*kèm|miễn\s*phí\s*(?:giao\s*hàng|vận\s*chuyển|ship)|đổi\s*(?:size|cỡ)|kiểm\s*tra\s*hàng)/iu;
+  const core = product.name
+    .split(/\s+[-–—]\s+/u)
+    .map((segment) => segment.replace(/\bSKU\b/giu, "").trim())
+    .filter((segment) => segment && !policySegment.test(segment))
+    .join(" – ")
+    .replace(/\s+(?:bảo\s*hành|quà\s*tặng|tặng\s*kèm)\b[\s\S]*$/iu, "")
+    .trim();
+  const identity = core || product.brand || product.category || "Giày";
+  return identity.toLocaleUpperCase("vi-VN").includes(product.sku.toLocaleUpperCase("vi-VN"))
+    ? identity
+    : `${identity} – ${product.sku}`;
+}
+
 function baseSections(product: ReturnType<typeof normalizedProduct>) {
   const sourceFacts = facts(product);
   const identity = product.category || "sneaker thể thao";
+  const productName = editorialProductName(product);
   const firstFact = sourceFacts[0]
     ? `Thông tin sản phẩm ghi nhận: ${sentence(sourceFacts[0])}`
     : `Các chi tiết được trình bày theo đúng thông tin của mẫu ${product.sku}.`;
   const secondFact = sourceFacts[1] ? ` ${sentence(sourceFacts[1])}` : "";
   const colorNote = product.colors.length ? ` với lựa chọn màu ${product.colors.join(", ")}` : "";
   const hook = skuVariant(product.sku, [
-    `👟 ${product.name} mang đến một lựa chọn dễ phối cho phong cách hằng ngày${colorNote}.`,
-    `✨ Khám phá ${product.name} — mẫu ${identity} có thông tin riêng được giữ đúng theo mã ${product.sku}.`,
-    `🔥 ${product.name} tạo điểm nhấn năng động mà vẫn thuận tiện khi phối trang phục thường ngày${colorNote}.`,
+    `👟 ${productName} mang đến một lựa chọn dễ phối cho phong cách hằng ngày${colorNote}.`,
+    `✨ Khám phá ${productName} — mẫu ${identity} có thông tin riêng được giữ đúng theo mã ${product.sku}.`,
+    `🔥 ${productName} tạo điểm nhấn năng động mà vẫn thuận tiện khi phối trang phục thường ngày${colorNote}.`,
   ]);
   return [
     hook,
-    `🎨 Thiết kế: ${product.name} được định hình theo kiểu dáng ${identity}, tập trung vào vẻ ngoài rõ nét và dễ nhận diện. ${firstFact}`,
+    `🎨 Thiết kế: ${productName} được định hình theo kiểu dáng ${identity}, tập trung vào vẻ ngoài rõ nét và dễ nhận diện. ${firstFact}`,
     `✨ Ưu điểm: Những chi tiết nêu trên giúp mẫu ${product.sku} giữ được phong cách chỉn chu và linh hoạt khi kết hợp trang phục.${secondFact}`,
+    `🚶 Ứng dụng: Có thể phối mẫu ${product.sku} cùng quần jeans, quần thể thao hoặc trang phục casual cho đi học, đi làm và dạo phố hằng ngày.`,
+  ].join("\n\n");
+}
+
+function fallbackFacebookSections(product: ReturnType<typeof normalizedProduct>) {
+  return [
+    `👟 Mẫu giày ${product.sku} là lựa chọn dễ phối cho phong cách hằng ngày.`,
+    `🎨 Thiết kế: Mẫu ${product.sku} được giới thiệu theo đúng mã sản phẩm, với cách trình bày rõ ràng để khách hàng dễ nhận diện khi lựa chọn.`,
+    `✨ Ưu điểm: Nội dung của mẫu ${product.sku} tập trung vào thông tin đã xác nhận, tránh thêm đặc tính hoặc cam kết chưa có trong dữ liệu nguồn.`,
     `🚶 Ứng dụng: Có thể phối mẫu ${product.sku} cùng quần jeans, quần thể thao hoặc trang phục casual cho đi học, đi làm và dạo phố hằng ngày.`,
   ].join("\n\n");
 }
@@ -136,7 +161,6 @@ function channelBody(
   description: string,
 ) {
   if (provider === "facebook") {
-    if (!hasCompleteFacebookStructure(sections)) throw new Error("TEMPLATE_FACEBOOK_STRUCTURE_INVALID");
     return `${appendShoeCustomerReference(sections, product)}\n\n${facebookStoreReferenceText(product)}`;
   }
   if (provider === "website") return appendShoeCustomerReference(description, product);
@@ -162,6 +186,17 @@ export async function generateProductContent(
     throw new Error("TEMPLATE_TARGET_PROVIDERS_INVALID");
   }
   const sections = baseSections(product);
+  const needsFacebook = targetProviders.includes("facebook");
+  const facebookSections = needsFacebook && !hasCompleteFacebookStructure(sections)
+    ? fallbackFacebookSections(product)
+    : sections;
+  if (needsFacebook && !hasCompleteFacebookStructure(facebookSections)) {
+    throw new Error("TEMPLATE_FACEBOOK_STRUCTURE_INVALID");
+  }
+  const sourceCorrections = [
+    ...(needsFacebook && editorialProductName(product) !== product.name ? ["facebook_editorial_name_normalized"] : []),
+    ...(needsFacebook && facebookSections !== sections ? ["facebook_structure_fallback"] : []),
+  ];
   const description = websiteDescription(product, sections);
   const hashtags = [...new Set([
     "#TAHAShoes",
@@ -175,7 +210,7 @@ export async function generateProductContent(
   for (const provider of targetProviders) {
     const channel = {
       title: channelTitle(product, provider),
-      body: channelBody(provider, product, sections, description),
+      body: channelBody(provider, product, provider === "facebook" ? facebookSections : sections, description),
       hashtags,
     };
     assertCustomerCopyAllowed(channel);
@@ -185,7 +220,7 @@ export async function generateProductContent(
   assertCustomerCopyAllowed({ body: productDescription, hashtags });
   return {
     model: APPROVED_TEMPLATE_MODEL,
-    content: { sku: product.sku, productDescription, hashtags, channels },
-    usage: { source: "approved-template", externalRequests: 0 },
+    content: { sku: product.sku, productDescription, hashtags, channels, sourceCorrections },
+    usage: { source: "approved-template", externalRequests: 0, sourceCorrections },
   };
 }

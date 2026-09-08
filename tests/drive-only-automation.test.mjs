@@ -318,6 +318,73 @@ test("template rollout deletes a failed duplicate only when every target already
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_drafts WHERE product_id='product-1' AND target_provider='facebook'").get().n, 1);
 });
 
+test("Facebook template v2 resumes the newest structure failure and removes its older duplicate", async () => {
+  const h = harness(); h.seedProduct();
+  const now = Date.now();
+  for (const [index, id] of ["structure-old", "structure-new"].entries()) {
+    h.sqlite.prepare(`INSERT INTO automation_runs
+      (id,workspace_id,product_id,source_media_id,request_key,status,requested_image_count,completed_image_count,
+       target_providers_json,content_json,output_media_ids_json,prompt_version,error_code,error_message,created_at,updated_at,completed_at)
+      VALUES (?,?,'product-1','image-product-1',?,'failed',0,0,'["facebook"]',?,'[]','taha-approved-template-v1',
+       'TEMPLATE_FACEBOOK_STRUCTURE_INVALID','invalid structure',?,?,?)`)
+      .run(id, WORKSPACE, `structure-failure-${index}`, JSON.stringify({ targetConnections: {}, prepareOnly: true }), now + index, now + index, now + index);
+    h.sqlite.prepare(`INSERT INTO automation_steps
+      (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,error_code,created_at,updated_at,completed_at)
+      VALUES (?,?,?,'content',0,'failed',?,3,3,'{}','TEMPLATE_FACEBOOK_STRUCTURE_INVALID',?,?,?)`)
+      .run(`content-${id}`, WORKSPACE, id, now, now, now, now);
+    h.sqlite.prepare(`INSERT INTO automation_steps
+      (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at,completed_at)
+      VALUES (?,?,?,'finalize',0,'cancelled',?,0,3,'{}',?,?,?)`)
+      .run(`finalize-${id}`, WORKSPACE, id, now, now, now, now);
+  }
+  h.sqlite.prepare("UPDATE automation_runs SET status='processing',error_code=NULL,error_message=NULL WHERE id='structure-new'").run();
+  h.sqlite.prepare("UPDATE automation_steps SET status='retry_wait' WHERE id='content-structure-new'").run();
+
+  h.sqlite.exec(readFileSync(path.join(ROOT, "drizzle/0006_facebook_template_retry.sql"), "utf8"));
+  const resumed = h.sqlite.prepare("SELECT status,prompt_version,error_code FROM automation_runs WHERE id='structure-new'").get();
+  assert.equal(resumed.status, "queued");
+  assert.equal(resumed.prompt_version, "taha-approved-template-v2");
+  assert.equal(resumed.error_code, null);
+  assert.equal(JSON.parse(h.sqlite.prepare("SELECT content_json FROM automation_runs WHERE id='structure-new'").get().content_json).templateRecovery, "facebook-structure-v2");
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='structure-old'").get().status, "failed");
+
+  const automation = h.load("lib/automation.ts");
+  for (let tick = 0; tick < 3; tick += 1) {
+    const result = await automation.runAutomationWorker();
+    assert.equal(result.completed, 1, JSON.stringify(result));
+  }
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='structure-new'").get().status, "completed");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs WHERE id='structure-old'").get().n, 0);
+});
+
+test("Facebook template recovery respects a newer operator cancellation", () => {
+  const h = harness(); h.seedProduct();
+  const now = Date.now();
+  h.sqlite.prepare(`INSERT INTO automation_runs
+    (id,workspace_id,product_id,source_media_id,request_key,status,requested_image_count,completed_image_count,
+     target_providers_json,content_json,output_media_ids_json,prompt_version,error_code,error_message,created_at,updated_at,completed_at)
+    VALUES ('failed-before-cancel',?,'product-1','image-product-1','before-cancel','failed',0,0,'["facebook"]','{}','[]',
+     'taha-approved-template-v1','TEMPLATE_FACEBOOK_STRUCTURE_INVALID','invalid structure',?,?,?)`)
+    .run(WORKSPACE, now, now, now);
+  h.sqlite.prepare(`INSERT INTO automation_steps
+    (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,error_code,created_at,updated_at,completed_at)
+    VALUES ('failed-before-cancel-content',?,'failed-before-cancel','content',0,'failed',?,3,3,'{}','TEMPLATE_FACEBOOK_STRUCTURE_INVALID',?,?,?)`)
+    .run(WORKSPACE, now, now, now, now);
+  h.sqlite.prepare(`INSERT INTO automation_steps
+    (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at,completed_at)
+    VALUES ('failed-before-cancel-finalize',?,'failed-before-cancel','finalize',0,'cancelled',?,0,3,'{}',?,?,?)`)
+    .run(WORKSPACE, now, now, now, now);
+  h.sqlite.prepare(`INSERT INTO automation_runs
+    (id,workspace_id,product_id,source_media_id,request_key,status,requested_image_count,completed_image_count,
+     target_providers_json,content_json,output_media_ids_json,prompt_version,created_at,updated_at,completed_at)
+    VALUES ('newer-cancelled',?,'product-1','image-product-1','newer-cancelled','cancelled',0,0,'["facebook"]','{}','[]',
+     'taha-approved-template-v1',?,?,?)`).run(WORKSPACE, now + 1, now + 1, now + 1);
+
+  h.sqlite.exec(readFileSync(path.join(ROOT, "drizzle/0006_facebook_template_retry.sql"), "utf8"));
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='failed-before-cancel'").get().status, "failed");
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_steps WHERE id='failed-before-cancel-content'").get().status, "failed");
+});
+
 test("transient Google source failure retries then publishes exactly once", async () => {
   const h = await prepare(); await enqueue(h);
   let requests = 0;
