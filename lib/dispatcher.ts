@@ -113,6 +113,7 @@ export type DispatcherOptions = {
   limit?: number;
   leaseMs?: number;
   workerId?: string;
+  jobIds?: string[];
 };
 
 export type DispatcherResult = {
@@ -232,20 +233,21 @@ function isTikTokOperatorBlock(code: string) {
     || code === "TIKTOK_PRODUCT_UPDATE_REQUIRES_REMOTE_SNAPSHOT";
 }
 
-async function recoverExpiredLeases(database: DispatcherDatabase, now: number) {
+async function recoverExpiredLeases(database: DispatcherDatabase, now: number, jobIds?: string[]) {
+  const jobFilter = jobIds ? ` AND id IN (${jobIds.map(() => "?").join(",")})` : "";
   const website = await database.prepare(
     `UPDATE publish_jobs SET status = 'retry_wait', available_at = ?, lease_owner = NULL,
      lease_expires_at = NULL, error_code = 'LEASE_EXPIRED_RETRY',
      error_message = 'Worker dừng giữa lần gửi; website sẽ chống trùng bằng idempotency key.', updated_at = ?
      WHERE status = 'publishing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
-       AND connection_id IN (SELECT id FROM channel_connections WHERE provider = 'website')`,
-  ).bind(now, now, now).run();
+       AND connection_id IN (SELECT id FROM channel_connections WHERE provider = 'website')${jobFilter}`,
+  ).bind(now, now, now, ...(jobIds ?? [])).run();
   const uncertain = await database.prepare(
     `UPDATE publish_jobs SET status = 'blocked', lease_expires_at = NULL,
      error_code = 'DELIVERY_OUTCOME_UNKNOWN',
      error_message = 'Worker dừng sau khi bắt đầu gửi; cần đối soát kênh trước khi thử lại.', updated_at = ?
-     WHERE status = 'publishing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
-  ).bind(now, now).run();
+     WHERE status = 'publishing' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?${jobFilter}`,
+  ).bind(now, now, ...(jobIds ?? [])).run();
   return {
     retrying: resultChanges(website),
     blocked: resultChanges(uncertain),
@@ -578,6 +580,13 @@ async function publishLeasedJob(
 }
 
 export async function runPublishDispatcher(options: DispatcherOptions = {}): Promise<DispatcherResult> {
+  const jobIds = options.jobIds;
+  if (jobIds !== undefined && (!Array.isArray(jobIds) || jobIds.length < 1 || jobIds.length > 50
+    || new Set(jobIds).size !== jobIds.length
+    || jobIds.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{1,120}$/.test(id)))) {
+    throw new Error("DISPATCHER_FILTER_INVALID");
+  }
+  const jobFilter = jobIds ? ` AND j.id IN (${jobIds.map(() => "?").join(",")})` : "";
   const dispatchStartedAt = Date.now();
   const database = dispatcherDatabase(options.database);
   const publishers = options.publishers ?? defaultPublishers;
@@ -585,8 +594,10 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(options.limit ?? DEFAULT_LIMIT)));
   const leaseMs = Math.max(60_000, Math.floor(options.leaseMs ?? DEFAULT_LEASE_MS));
   const workerId = options.workerId ?? crypto.randomUUID();
-  const recovered = await recoverExpiredLeases(database, now);
-  const reconciled = await reconcileTikTokMappings(database, publishers, now, limit);
+  const recovered = await recoverExpiredLeases(database, now, jobIds);
+  // A bounded dispatch must not reconcile or change unrelated TikTok receipts.
+  const reconciled = jobIds ? { reconciled: 0, errors: [] }
+    : await reconcileTikTokMappings(database, publishers, now, limit);
   const due = await database.prepare(
     `SELECT j.id, j.workspace_id, j.connection_id, j.product_id, j.draft_id,
             j.job_kind, j.dedupe_key,
@@ -597,9 +608,10 @@ export async function runPublishDispatcher(options: DispatcherOptions = {}): Pro
      JOIN channel_connections c ON c.id = j.connection_id AND c.workspace_id = j.workspace_id
      WHERE j.status IN ('queued', 'retry_wait') AND j.available_at <= ?
        AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= ?)
+       ${jobFilter}
      ORDER BY j.available_at ASC, j.scheduled_for ASC, j.created_at ASC
      LIMIT ?`,
-  ).bind(now, now, limit).all<CandidateJob>();
+  ).bind(now, now, ...(jobIds ?? []), limit).all<CandidateJob>();
 
   const summary: DispatcherResult = {
     checked: 0,

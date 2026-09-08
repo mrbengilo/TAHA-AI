@@ -1,0 +1,12 @@
+--- a/handlers/article.go
++++ b/handlers/article.go
+@@ -91,6 +91,9 @@
+ 		http.Error(w, "invalid idempotency key", http.StatusBadRequest)
+ 		return
+ 	}
++	if tryPublishWebsiteProduct(w, r, body, idempotencyKey) {
++		return
++	}
+ 
+ 	var payload websiteArticlePayload
+ 	if err := json.Unmarshal(body, &payload); err != nil {
