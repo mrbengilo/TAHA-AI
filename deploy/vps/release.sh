@@ -80,6 +80,14 @@ if [ "$FREE_KB" -lt "$MIN_RELEASE_FREE_KB" ]; then
   docker builder prune -af --filter 'until=24h'
   FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
   echo "RELEASE_DISK_AFTER_CACHE_PRUNE_KB=$FREE_KB"
+  if [ "$FREE_KB" -lt "$MIN_RELEASE_FREE_KB" ]; then
+    # A burst of recent CI/VPS builds can fill the disk before cache reaches
+    # 24 hours. Only unused builder cache is removed in this fallback; Docker
+    # images and all runtime resources remain untouched.
+    docker builder prune -af
+    FREE_KB=$(df --output=avail -k / | tail -1 | tr -d ' ')
+    echo "RELEASE_DISK_AFTER_FULL_CACHE_PRUNE_KB=$FREE_KB"
+  fi
 fi
 [ "$FREE_KB" -ge "$MIN_RELEASE_FREE_KB" ] || { echo 'INSUFFICIENT_RELEASE_DISK'; exit 23; }
 secret=$(python3 - "$ENV_FILE" <<'PY'
