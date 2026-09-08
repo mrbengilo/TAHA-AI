@@ -3,6 +3,12 @@ name: TAHA validated VPS release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      # Diagnostic-only commits do not change the shipped application image.
+      - .github/workflows/vps-release.yml
+      - .github/workflows/vps-website-diagnose.yml
+      - deploy/vps/website-runtime-diagnose.py
+      - deploy/vps/website-state-diagnose.mjs
   workflow_dispatch:
     inputs:
       run_facebook_trial:
