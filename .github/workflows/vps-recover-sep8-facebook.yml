@@ -33,8 +33,9 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - 6649b4217580c5bec8aeb961ba06358226f77fe7 < deploy/vps/recover-facebook-content.py
+            python3 -u - < deploy/vps/publishing-source-diagnose.py
       - name: Verify the actual Facebook post and deployed UI
+        if: false
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
