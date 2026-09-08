@@ -17,6 +17,8 @@ on:
       - deploy/vps/website-capacity-retry.mjs
       - deploy/vps/catalog-readiness-diagnose.mjs
       - tests/vps_website_capacity_test.py
+      - .github/workflows/vps-resume-catalog.yml
+      - deploy/vps/resume-catalog-release.py
   workflow_dispatch:
     inputs:
       run_facebook_trial:
@@ -129,7 +131,7 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            "python3 -u /var/www/taha-ai/deploy/vps/complete-catalog-publish.py --expected-release-sha $TARGET_SHA"
+            "python3 -B -u /var/www/taha-ai/deploy/vps/complete-catalog-publish.py --expected-release-sha $TARGET_SHA"
       - name: Verify existing trial Facebook permissions without publishing
         run: |
           set -euo pipefail
