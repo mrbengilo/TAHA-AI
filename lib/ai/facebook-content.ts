@@ -1,3 +1,5 @@
+import { sanitizeProductTextForCopy } from "./shoe-content";
+
 // Structure approved by the store owner, from the actual 28 August reference.
 // Product facts from that post must never become defaults for another SKU.
 export const FACEBOOK_REFERENCE_POST_URL = "https://www.facebook.com/122121496599193948/posts/122120254731193948";
@@ -15,7 +17,15 @@ function sectionText(value: string) {
   return value.replace(/[\p{P}\p{S}\s]/gu, "").toLocaleLowerCase("vi-VN");
 }
 
+function hasGeneratedAppendix(body: string) {
+  // These blocks belong to the verified appendices, never to model-authored
+  // product sections. Reject partial/inline copies too, before counting words.
+  return /mua\s*sắm\s*cùng\s*taha|thông\s*tin\s*liên\s*hệ|vệ\s*sinh\s*&\s*bảo\s*quản|chọn\s*size\s*theo\s*chiều\s*dài\s*chân|quà\s*tặng|tặng\s*kèm|bảo\s*hành|đổi\s*(?:size|cỡ)|(?:miễn\s*phí|free)\s*(?:giao\s*hàng|vận\s*chuyển|ship)|kiểm\s*tra\s*hàng\s*trước|thanh\s*toán\s*sau|bọc\s*chống\s*sốc|hộp\s*bảo\s*vệ|hotline|(?:zalo|facebook|website|tiktok|shopee)\s*:|tahashoes\.(?:vn|store)|0765[\s.]*109[\s.]*784/iu.test(body)
+    || /^[\t \p{P}\p{S}]*(?:mã\s*sản\s*phẩm|sku|màu|size\s*hiện\s*có)\s*:/imu.test(body);
+}
+
 export function hasCompleteFacebookStructure(body: string) {
+  if (hasGeneratedAppendix(body)) return false;
   const sections = [...body.matchAll(/^[\t \p{P}\p{S}]*(Thiết kế|Ưu điểm|Ứng dụng)[\t *]*:[\t *]*/gimu)];
   if (sections.length !== FACEBOOK_SECTION_LABELS.length) return false;
   if (!sections.every((section, index) => section[1].toLocaleLowerCase("vi-VN") === FACEBOOK_SECTION_LABELS[index].toLocaleLowerCase("vi-VN"))) return false;
@@ -39,17 +49,32 @@ type FacebookStoreProduct = {
   specifications?: readonly string[] | null;
 };
 
+function hasNegatedClaim(value: string) {
+  const normalized = value.normalize("NFKC").normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase();
+  // A negative marker anywhere in a claim's clause is enough to omit it. This
+  // handles both "không được bảo hành" and "Quà tặng: không có ...", and avoids
+  // turning an ambiguous/qualified promise into an unconditional public claim.
+  return /\b(?:khong|chua|het|ngung)\b/u.test(normalized);
+}
+
+function giftForCustomerCopy(value: string) {
+  if (hasNegatedClaim(value)) return "";
+  // Preserve the named gift when its trailing value is supplied by the Sheet;
+  // the shared sanitizer still removes other price and internal-only phrases.
+  return sanitizeProductTextForCopy(value.replace(/\s*[(–—-]?\s*trị\s+giá[\s\S]*$/iu, ""));
+}
+
 export function facebookStoreReferenceText(product: FacebookStoreProduct) {
   const source = [product.name ?? "", product.description ?? "", ...(product.specifications ?? [])].join("\n");
-  const clauses = source.split(/[\n.;!?]/u);
-  const warrantySource = clauses.filter((clause) => !/(?:không|chưa|hết)\s+(?:có\s+)?bảo\s*hành/iu.test(clause)).join("\n");
-  const giftSource = clauses.filter((clause) => !/(?:không|chưa|hết)\s+(?:có\s+)?(?:quà\s*tặng|tặng\s*kèm)/iu.test(clause)).join("\n");
-  const warranty = warrantySource.match(/bảo\s*hành\s*:?\s*(\d{1,2})\s*tháng/iu)?.[1];
-  const explicitGiftText = giftSource.match(/(?:quà\s*tặng|tặng\s*kèm)\s*[:-]?\s*([^\n.;]+)/iu)?.[1] ?? "";
+  const clauses = source.split(/(?:[\n.;!?]|\s+[-–—]\s+)+/u);
+  const affirmativeSource = clauses.filter((clause) => !hasNegatedClaim(clause)).join("\n");
+  const warranty = affirmativeSource.match(/bảo\s*hành\s*:?\s*(\d{1,2})\s*tháng/iu)?.[1];
+  const explicitGiftText = affirmativeSource.match(/(?:quà\s*tặng|tặng\s*kèm)\s*[:-]?\s*([^\n.;]+)/iu)?.[1] ?? "";
   const gifts = [...new Set((product.gifts?.length ? product.gifts : [
     ...(/khử\s*mùi/iu.test(explicitGiftText) ? ["khử mùi"] : []),
     ...(/(?:vớ|tất)\s*thể\s*thao/iu.test(explicitGiftText) ? ["vớ thể thao"] : []),
-  ]).map((gift) => gift.trim()).filter(Boolean))];
+  ]).map(giftForCustomerCopy).map((gift) => gift.trim()).filter(Boolean))];
   return [
     "🛍️ MUA SẮM CÙNG TAHA SHOES",
     ...(gifts.length ? [`🎁 Quà tặng kèm: ${gifts.join(" + ")}.`] : []),

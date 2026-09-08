@@ -422,7 +422,6 @@ export async function generateProductContent(
     throw new OpenAiClientError("OPENAI_RESPONSE_INVALID");
   }
   const content = validateGeneratedProductContent(parsed, targetProviders, product.sku);
-  const generatedFacebookBody = content.channels.facebook?.body;
   assertCustomerCopyAllowed({ body: content.productDescription, hashtags: content.hashtags });
   const productSupportsWaterResistance = hasWaterResistanceClaim([product.name, product.description ?? "", product.category ?? ""].join("\n"));
   const generatedText = [content.productDescription, ...content.hashtags,
@@ -438,15 +437,16 @@ export async function generateProductContent(
   }
   for (const [provider, channel] of Object.entries(content.channels)) {
     assertCustomerCopyAllowed(channel);
-    channel.body = appendShoeCustomerReference(channel.body, product);
-    if (provider === "facebook") channel.body += `\n\n${facebookStoreReferenceText(product)}`;
-    assertCustomerCopyAllowed(channel);
+    let completedBody = appendShoeCustomerReference(channel.body, product);
+    if (provider === "facebook") completedBody += `\n\n${facebookStoreReferenceText(product)}`;
+    assertCustomerCopyAllowed({ ...channel, body: completedBody });
+    if (provider === "facebook" && !hasCompleteFacebookStructure(channel.body)) {
+      throw new OpenAiClientError("OPENAI_FACEBOOK_STRUCTURE_INCOMPLETE");
+    }
+    channel.body = completedBody;
   }
   content.productDescription = appendShoeCustomerReference(content.productDescription, product);
   assertCustomerCopyAllowed({ body: content.productDescription, hashtags: content.hashtags });
-  if (generatedFacebookBody !== undefined && !hasCompleteFacebookStructure(generatedFacebookBody)) {
-    throw new OpenAiClientError("OPENAI_FACEBOOK_STRUCTURE_INCOMPLETE");
-  }
   const returnedModel = typeof root.model === "string" && root.model.trim() && root.model.length <= 200
     ? root.model
     : requestedModel;

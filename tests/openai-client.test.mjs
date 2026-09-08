@@ -395,11 +395,45 @@ test("Facebook structure gate rejects sparse copy, empty labels, repeated conten
   }
 });
 
+test("Facebook rejects model-authored appendix copies before appending verified blocks", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const valid = validGeneratedContent().channels.facebook.body;
+  for (const appendix of [
+    "store", "care", "THÔNG TIN LIÊN HỆ\nNhắn TAHA SHOES để được tư vấn sản phẩm và chọn size phù hợp.",
+    "🚚 Miễn phí giao hàng toàn quốc.\n🔄 Đổi size miễn phí trong 7 ngày.",
+    "🛡️ Bảo hành 12 tháng.\n🎁 Quà tặng kèm: vớ thể thao.",
+    "☎️ Hotline: 0765.109.784",
+  ]) {
+    for (const hasApplication of [true, false]) {
+      await assert.rejects(client.generateProductContent({
+        product: { sku: "TAHA-001", name: "Sneaker TAHA" }, targetProviders: ["facebook"],
+      }, async (_url, init) => {
+        const payload = JSON.parse(JSON.parse(init.body).input[1].content[0].text.split("\n").slice(1).join("\n"));
+        const footer = appendix === "store" ? payload.facebookStoreGuidance
+          : appendix === "care" ? payload.customerGuidance : appendix;
+        const content = validGeneratedContent();
+        content.channels = { facebook: { ...content.channels.facebook,
+          body: `${hasApplication ? valid : valid.slice(0, valid.indexOf("Ứng dụng:") + "Ứng dụng:".length)}\n${footer}`,
+        } };
+        return Response.json(responsesEnvelope(content));
+      }), (error) => error.code === "OPENAI_FACEBOOK_STRUCTURE_INCOMPLETE", `${appendix}, application=${hasApplication}`);
+    }
+  }
+});
+
 test("Facebook footer never invents product gifts, warranty, sizes or colors from the reference", async () => {
   const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
   const generated = validGeneratedContent();
   generated.channels = { facebook: generated.channels.facebook };
-  for (const description of [undefined, "Không bảo hành 12 tháng. Không có quà tặng khử mùi và vớ thể thao."]) {
+  for (const description of [
+    undefined,
+    "Không bảo hành 12 tháng. Không có quà tặng khử mùi và vớ thể thao.",
+    "Không được bảo hành 12 tháng. Quà tặng: không có vớ thể thao.",
+    "Không còn áp dụng bảo hành 12 tháng. Tặng kèm: không bao gồm khử mùi.",
+    "Bảo hành 12 tháng: không áp dụng. Quà tặng vớ thể thao: đã hết.",
+    "Chưa hỗ trợ bảo hành 12 tháng. Quà tặng: chưa có khử mùi và vớ thể thao.",
+    "Ngừng áp dụng bảo hành 12 tháng. Đã ngừng quà tặng vớ thể thao.",
+  ]) {
     const result = await client.generateProductContent({
       product: { sku: "TAHA-001", name: "Sneaker TAHA", description }, targetProviders: ["facebook"],
     }, async () => Response.json(responsesEnvelope(generated)));
@@ -407,6 +441,41 @@ test("Facebook footer never invents product gifts, warranty, sizes or colors fro
     assert.doesNotMatch(body, /Quà tặng kèm:|Bảo hành \d|Màu:|Size hiện có:|PH0073|40–45|khử mùi|vớ thể thao/iu);
     assert.match(body, /Đổi size miễn phí trong 7 ngày/);
   }
+});
+
+test("Facebook keeps affirmative claims separate from denied claims in catalog fields", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const generated = validGeneratedContent();
+  generated.channels = { facebook: generated.channels.facebook };
+  for (const product of [
+    { name: "Sneaker TAHA - Không tặng kèm vớ thể thao - Bảo hành 12 tháng", specifications: [] },
+    { name: "Sneaker TAHA", specifications: ["Bảo hành 12 tháng", "Quà tặng: không có vớ thể thao"] },
+  ]) {
+    const result = await client.generateProductContent({
+      product: { sku: "TAHA-001", ...product }, targetProviders: ["facebook"],
+    }, async () => Response.json(responsesEnvelope(generated)));
+    assert.match(result.content.channels.facebook.body, /Bảo hành 12 tháng/);
+    assert.doesNotMatch(result.content.channels.facebook.body, /Quà tặng kèm:/);
+  }
+});
+
+test("Facebook sanitizes structured gift values without failing otherwise valid generation", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const generated = validGeneratedContent();
+  generated.channels = { facebook: generated.channels.facebook };
+  const result = await client.generateProductContent({
+    product: {
+      sku: "TAHA-001", name: "Sneaker TAHA",
+      gifts: [
+        "Vớ thể thao trị giá 50.000đ", "Khử mùi; nguồn dữ liệu Google Sheets",
+        "Google Drive", "50.000đ", "Túi giày giá bán: 50.000đ",
+        "Quà tặng: không có túi giày", "Chưa có dây giày", "Đã hết mũ thể thao",
+      ],
+    }, targetProviders: ["facebook"],
+  }, async () => Response.json(responsesEnvelope(generated)));
+  const body = result.content.channels.facebook.body;
+  assert.match(body, /Quà tặng kèm: Vớ thể thao \+ Khử mùi\./);
+  assert.doesNotMatch(body, /trị giá|50\.000|Google|Drive|Sheets|túi giày|dây giày|mũ thể thao/iu);
 });
 
 test("Facebook-only structure and footer do not change other channel requirements", async () => {

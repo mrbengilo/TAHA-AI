@@ -1,0 +1,56 @@
+name: TAHA website receiver read-only diagnosis
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/vps-website-diagnose.yml
+      - deploy/vps/website-runtime-diagnose.py
+      - deploy/vps/website-state-diagnose.mjs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/main' && github.repository == 'mrbengilo/TAHA-AI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Guard trusted source and configure SSH
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = mrbengilo/TAHA-AI
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Read receiver runtime and Compose identity
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 - < deploy/vps/website-runtime-diagnose.py
+      - name: Read exact PH0015 trial and website backlog
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'docker exec -i taha-ai node --input-type=module' < deploy/vps/website-state-diagnose.mjs
+      - name: Remove runner key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
