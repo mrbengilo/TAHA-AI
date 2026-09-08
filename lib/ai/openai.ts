@@ -7,6 +7,11 @@ import {
   shoeCustomerReferenceText,
 } from "./shoe-content";
 import { buildShoeImageEditPrompt, SHOE_LIFESTYLE_IMAGE_PROMPTS } from "./shoe-image-prompts";
+import {
+  FACEBOOK_CONTENT_INSTRUCTIONS,
+  facebookStoreReferenceText,
+  hasCompleteFacebookStructure,
+} from "./facebook-content";
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_TEXT_MODEL = "gpt-5.6-luna";
@@ -341,10 +346,7 @@ function validateGeneratedProductContent(value: unknown, targetProviders: string
 }
 
 function contentInstructions(targetProviders: string[]) {
-  const facebookInstructions = targetProviders.includes("facebook") ? [
-    "Riêng Facebook: dùng cấu trúc của bài TAHA SHOES ngày 28/08/2026 đã được duyệt: tiêu đề ngắn có emoji và điểm nhận diện; tiếp theo là ba ý dễ quét theo nhãn Thiết kế, Ưu điểm, Ứng dụng; kết thúc bằng hashtag liên quan. Chỉ học cấu trúc và giọng điệu; không sao chép câu, thông số, size, màu hoặc SKU của bài mẫu.",
-    "Không tự viết khối Size/Màu/SKU trong body Facebook vì hệ thống sẽ nối khối này bằng dữ liệu chính xác của sản phẩm. Chỉ nêu quà tặng, bảo hành, đổi trả, giao hàng hoặc cam kết nếu dữ liệu sản phẩm hiện tại có nội dung đó.",
-  ] : [];
+  const facebookInstructions = targetProviders.includes("facebook") ? [FACEBOOK_CONTENT_INSTRUCTIONS] : [];
   const websiteInstructions = targetProviders.includes("website") ? [
     "Riêng kênh website, tham khảo bố cục mô tả sản phẩm đang dùng trên tahashoes.vn: tên sản phẩm; size và màu nếu dữ liệu có; thông tin sản phẩm; đặc điểm nổi bật; mã SKU và thương hiệu; lợi ích khi sử dụng. Không sao chép câu chữ của sản phẩm khác và không lặp phần bảng size/chăm sóc sẽ được hệ thống nối sau.",
     "Tiêu đề website phải tự nhiên, rõ công dụng hoặc phong cách có căn cứ, kết thúc bằng đúng mã SKU. Body website là mô tả chi tiết theo các đoạn có tiêu đề ngắn, ưu tiên dữ liệu riêng của sản phẩm thay vì câu quảng cáo chung.",
@@ -394,7 +396,11 @@ export async function generateProductContent(
         },
         {
           role: "user",
-          content: [{ type: "input_text", text: `Dữ liệu sản phẩm (JSON):\n${JSON.stringify({ product, customerGuidance: shoeCustomerReferenceText(product) })}` }],
+          content: [{ type: "input_text", text: `Dữ liệu sản phẩm (JSON):\n${JSON.stringify({
+            product,
+            customerGuidance: shoeCustomerReferenceText(product),
+            ...(targetProviders.includes("facebook") ? { facebookStoreGuidance: facebookStoreReferenceText(product) } : {}),
+          })}` }],
         },
       ],
       text: {
@@ -429,10 +435,15 @@ export async function generateProductContent(
   if (!productSupportsWaterResistance && hasWaterResistanceClaim(generatedText)) {
     throw new OpenAiClientError("OPENAI_UNSUPPORTED_PRODUCT_CLAIM");
   }
-  for (const channel of Object.values(content.channels)) {
+  for (const [provider, channel] of Object.entries(content.channels)) {
     assertCustomerCopyAllowed(channel);
-    channel.body = appendShoeCustomerReference(channel.body, product);
-    assertCustomerCopyAllowed(channel);
+    let completedBody = appendShoeCustomerReference(channel.body, product);
+    if (provider === "facebook") completedBody += `\n\n${facebookStoreReferenceText(product)}`;
+    assertCustomerCopyAllowed({ ...channel, body: completedBody });
+    if (provider === "facebook" && !hasCompleteFacebookStructure(channel.body)) {
+      throw new OpenAiClientError("OPENAI_FACEBOOK_STRUCTURE_INCOMPLETE");
+    }
+    channel.body = completedBody;
   }
   content.productDescription = appendShoeCustomerReference(content.productDescription, product);
   assertCustomerCopyAllowed({ body: content.productDescription, hashtags: content.hashtags });

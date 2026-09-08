@@ -15,6 +15,9 @@ type WebsiteInput = { connectionId: string; payload: Record<string, unknown>; id
 export type FacebookRemoteInput = Omit<FacebookInput, "idempotencyKey"> & { assertLease?: () => Promise<void> };
 export type WebsiteRemoteInput = WebsiteInput & { jobId: string };
 
+const WEBSITE_RECEIPT_ID_MAX_LENGTH = 512;
+const WEBSITE_RECEIPT_URL_MAX_LENGTH = 2_048;
+
 export class PublishDeliveryError extends Error {
   readonly code: string;
   readonly retryable: boolean;
@@ -33,6 +36,43 @@ function database() {
   const value = getRuntimeEnv().DB;
   if (!value) throw new Error("DATABASE_UNAVAILABLE");
   return value;
+}
+
+function configuredWebsiteOrigin(value: string) {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("WEBSITE_BASE_URL_INVALID");
+    return url.origin;
+  } catch {
+    throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
+  }
+}
+
+function websiteReceipt(value: unknown, configuredOrigin: string) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new PublishDeliveryError("WEBSITE_RECEIPT_INVALID", { retryable: true });
+  }
+  const receipt = value as Record<string, unknown>;
+  const id = typeof receipt.id === "string" ? receipt.id.trim() : "";
+  const rawUrl = typeof receipt.url === "string" ? receipt.url.trim() : "";
+  const idHasControlCharacter = [...id].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31 || codePoint === 127;
+  });
+  if (!id || id.length > WEBSITE_RECEIPT_ID_MAX_LENGTH || idHasControlCharacter
+    || !rawUrl || rawUrl.length > WEBSITE_RECEIPT_URL_MAX_LENGTH) {
+    throw new PublishDeliveryError("WEBSITE_RECEIPT_INVALID", { retryable: true });
+  }
+  try {
+    const url = new URL(rawUrl);
+    if (!["http:", "https:"].includes(url.protocol)
+      || url.origin !== configuredOrigin || url.username || url.password) {
+      throw new Error("WEBSITE_RECEIPT_URL_INVALID");
+    }
+  } catch {
+    throw new PublishDeliveryError("WEBSITE_RECEIPT_INVALID", { retryable: true });
+  }
+  return { id, url: rawUrl };
 }
 
 async function facebookJson(url: string | URL, init: RequestInit, phase: "media" | "publish") {
@@ -151,8 +191,10 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   if (copyViolation) throw new PublishDeliveryError(copyViolation);
   const connection = await getConnectedIntegration<{ webhookSecret?: unknown }>("website", input.connectionId);
   const secret = typeof connection.credentials.webhookSecret === "string" ? connection.credentials.webhookSecret : "";
+  const baseUrl = typeof connection.config.baseUrl === "string" ? connection.config.baseUrl : "";
   const endpoint = typeof connection.config.publishEndpoint === "string" ? connection.config.publishEndpoint : "";
-  if (!secret || !endpoint) throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
+  if (!secret || !baseUrl || !endpoint) throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
+  const websiteOrigin = configuredWebsiteOrigin(baseUrl);
 
   const mediaIds = Array.isArray(input.payload.mediaIds)
     ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, WEBSITE_PRODUCT_MAX_IMAGES)
@@ -218,10 +260,13 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
       retryable: response.status === 429 || response.status >= 500,
     });
   }
-  const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+  let result: unknown;
+  try { result = await response.json(); }
+  catch { throw new PublishDeliveryError("WEBSITE_RECEIPT_INVALID", { retryable: true }); }
+  const receipt = websiteReceipt(result, websiteOrigin);
   return {
-    externalId: typeof result.id === "string" ? result.id : input.jobId,
-    externalUrl: typeof result.url === "string" ? result.url : null,
+    externalId: receipt.id,
+    externalUrl: receipt.url,
     providerResponse: { accepted: true },
   };
 }

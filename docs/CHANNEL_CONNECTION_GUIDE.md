@@ -277,19 +277,21 @@ TAHA AI gửi:
 ```http
 POST /api/taha/publish
 Content-Type: application/json
+X-TAHA-Timestamp: <UNIX_SECONDS>
 X-TAHA-Signature: sha256=<HMAC_SHA256_HEX>
 X-TAHA-Idempotency-Key: <KHOA_KHONG_TRUNG>
 ```
 
-Chữ ký là HMAC-SHA256 của **nguyên văn request body** bằng secret dùng chung. Body gồm snapshot nội dung đã duyệt như `provider`, `contentType`, `title`, `message`, `hashtags`, `mediaIds`, `platformData`, `publishOptions`, `occurrenceAt` và `tahaJobId`.
+Chữ ký là HMAC-SHA256 của chuỗi `timestamp + "." + rawBody` bằng secret dùng chung; không parse rồi tuần tự hóa lại JSON trước khi kiểm tra. Body dùng schema `taha.website.product.v1`, thao tác `upsert_product`, gồm `tahaJobId`, `idempotencyKey`, dữ liệu `product` và thông tin nguồn draft.
 
 Website phải:
 
 1. đọc raw body trước khi parse JSON;
-2. tính lại và so sánh chữ ký an toàn;
+2. kiểm tra timestamp còn hiệu lực, tính lại và so sánh chữ ký an toàn;
 3. chống đăng trùng bằng `X-TAHA-Idempotency-Key`;
-4. trả HTTP `2xx` khi thành công;
-5. nên trả JSON `{ "id": "...", "url": "https://..." }` để TAHA AI lưu liên kết bài/sản phẩm.
+4. upsert theo SKU để một sản phẩm không bị tạo trùng bởi hai khóa job khác nhau;
+5. trả đúng HTTP `200` hoặc `201` cùng JSON `{ "id": "...", "url": "https://..." }`;
+6. bảo đảm `url` là URL tuyệt đối thuộc cùng origin với `WEBSITE_BASE_URL`.
 
 ### 7.3. Giá trị cần nhập trên máy chủ
 
