@@ -1,4 +1,4 @@
-"""Read-only progress for the exact SKU/size catalog accelerator. Probe 36."""
+"""Read-only progress for the exact SKU/size catalog accelerator. Probe 37."""
 import json
 from pathlib import Path
 import sqlite3
