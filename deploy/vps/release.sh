@@ -177,11 +177,16 @@ docker run -d --name taha-ai --restart always --network "$NETWORK" -p 127.0.0.1:
 probe 8787 || { echo 'PRODUCTION_PROBE_FAILED'; exit 27; }
 image_probe 8787 || { echo 'PRODUCTION_IMAGE_ENCODER_FAILED'; exit 29; }
 docker tag "$NEW_IMAGE" "${IMAGE_REPO}:latest"
-systemctl start taha-ai-cron.timer
-systemctl is-active --quiet taha-ai-cron.timer
+if [ "$TIMER_WAS_ACTIVE" = yes ]; then
+  systemctl start taha-ai-cron.timer
+  systemctl is-active --quiet taha-ai-cron.timer
+  echo 'CRON_ACTIVE=yes'
+else
+  ! systemctl is-active --quiet taha-ai-cron.timer
+  echo 'CRON_PRESERVED_INACTIVE=yes'
+fi
 RELEASE_OK=yes
 echo 'PRODUCTION_AUTHENTICATED_UI_OK=yes'
-echo 'CRON_ACTIVE=yes'
 echo "FINAL_REPO=$(git -C "$REPO" rev-parse HEAD)"
 echo "FINAL_IMAGE=$(docker inspect taha-ai -f '{{.Config.Image}}')"
 echo "ROLLBACK_CONTAINER=$ROLLBACK"
