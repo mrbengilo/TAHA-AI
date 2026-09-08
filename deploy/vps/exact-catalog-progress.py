@@ -1,4 +1,4 @@
-"""Read-only progress for the exact SKU/size catalog accelerator. Probe 38."""
+"""Read-only progress for the exact SKU/size catalog accelerator. Probe 39."""
 import json
 from pathlib import Path
 import sqlite3
@@ -66,6 +66,22 @@ def main():
                 f"WHERE j.workspace_id=? AND s.created_by IN ({','.join('?' for _ in ids)})",
                 [WORKSPACE, *['automation:' + run_id for run_id in ids]],
             ).fetchone()[0]
+            ph0014 = [dict(row) for row in db.execute(
+                "SELECT d.id,d.target_provider,d.content_type,d.status,d.created_at,d.updated_at,"
+                "json_extract(d.generation_meta_json,'$.automationRunId') AS run_id,"
+                "substr(d.body,1,500) AS body_preview,count(DISTINCT dm.media_id) AS images,"
+                "group_concat(DISTINCT s.status) AS schedule_statuses,"
+                "group_concat(DISTINCT s.id) AS schedule_ids,"
+                "group_concat(DISTINCT j.status) AS job_statuses,"
+                "group_concat(DISTINCT j.external_post_id) AS external_post_ids "
+                "FROM content_drafts d JOIN products p ON p.id=d.product_id AND p.workspace_id=d.workspace_id "
+                "LEFT JOIN content_draft_media dm ON dm.draft_id=d.id AND dm.workspace_id=d.workspace_id "
+                "LEFT JOIN schedules s ON s.draft_id=d.id AND s.workspace_id=d.workspace_id "
+                "LEFT JOIN publish_jobs j ON j.draft_id=d.id AND j.workspace_id=d.workspace_id "
+                "WHERE d.workspace_id=? AND p.base_sku='PH0014' "
+                "GROUP BY d.id,d.target_provider,d.content_type,d.status,d.created_at,d.updated_at,d.generation_meta_json,d.body "
+                "ORDER BY d.created_at DESC", [WORKSPACE],
+            )]
             print('EXACT_CATALOG_PROGRESS=' + json.dumps({
                 'runs': [{'sku': row['base_sku'], 'status': row['status'], 'code': row['error_code'],
                           'requestedImages': row['requested_image_count'], 'generatedImages': row['completed_image_count']}
@@ -74,6 +90,7 @@ def main():
                 'readyDrafts': drafts,
                 'scheduled': schedules,
                 'publishJobs': jobs,
+                'ph0014Candidates': ph0014,
                 'cronTimer': subprocess.run(['systemctl', 'is-active', 'taha-ai-cron.timer'],
                                              capture_output=True, text=True, timeout=15).stdout.strip(),
                 'releaseLockHeld': subprocess.run(['flock', '-n', '/var/lock/taha-ai-release.lock', 'true'],
