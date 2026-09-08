@@ -1,7 +1,8 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 29: inspect catalog and website receiver.
+# Probe generation 30: inspect catalog and website API surface.
 import base64
 import json
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -29,14 +30,32 @@ def safe_marker(path, ids):
 
 
 def website_probe():
+    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'vhostOnAutomationVps': False}
     request = urllib.request.Request('https://tahashoes.vn/api/taha/publish', method='GET')
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            return {'status': response.status, 'allow': response.headers.get('Allow'), 'reachable': True}
+            result.update(status=response.status, allow=response.headers.get('Allow'), reachable=True)
     except urllib.error.HTTPError as error:
-        return {'status': error.code, 'allow': error.headers.get('Allow'), 'reachable': True}
+        result.update(status=error.code, allow=error.headers.get('Allow'), reachable=True)
     except Exception:
-        return {'status': None, 'allow': None, 'reachable': False}
+        pass
+    try:
+        html = urllib.request.urlopen('https://tahashoes.vn/', timeout=10).read().decode('utf-8', 'replace')
+        scripts = re.findall(r'<script[^>]+src=["\\\']([^"\\\']+)', html)
+        main = next((value for value in scripts if '/static/js/main.' in value), None)
+        if main:
+            bundle = urllib.request.urlopen('https://tahashoes.vn' + main, timeout=20).read().decode('utf-8', 'replace')
+            paths = sorted(set(re.findall(r'/(?:api|admin)/[A-Za-z0-9_?=&.{}:$%\\/-]{2,160}', bundle)))
+            result['apiPaths'] = [value for value in paths if not re.search(r'(token|secret|password|key)=', value, re.I)][:80]
+    except Exception:
+        pass
+    try:
+        check = subprocess.run(['grep', '-Rsl', 'server_name[^;]*tahashoes\\.vn', '/etc/nginx'],
+                               capture_output=True, text=True, timeout=10)
+        result['vhostOnAutomationVps'] = check.returncode == 0 and bool(check.stdout.strip())
+    except Exception:
+        pass
+    return result
 
 
 def main():
