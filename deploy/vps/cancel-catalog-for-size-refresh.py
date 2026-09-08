@@ -22,6 +22,7 @@ LOCK = Path('/var/lock/taha-ai-release.lock')
 CATALOG = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
 RECEIPT = Path('/var/lib/taha-ai/ops-recovery/catalog-size-refresh-v1.json')
 BACKUP_ROOT = Path('/var/backups/taha-ai')
+EXPECTED_COMPETITOR = 'eedbea4c-e66b-4c28-bc1a-a603c21c0830'
 
 
 def command(*args, check=True, timeout=45):
@@ -181,13 +182,27 @@ def quarantine(database, ids):
     return before, after
 
 
+def quarantine_ids(database, catalog_run_ids):
+    placeholders = ','.join('?' for _ in catalog_run_ids)
+    with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as db:
+        competitors = [row[0] for row in db.execute(
+            f"SELECT id FROM automation_runs WHERE workspace_id=? AND id NOT IN ({placeholders}) "
+            f"AND product_id IN (SELECT product_id FROM automation_runs WHERE workspace_id=? AND id IN ({placeholders})) "
+            f"AND status IN ('queued','processing') ORDER BY id",
+            [WORKSPACE, *catalog_run_ids, WORKSPACE, *catalog_run_ids],
+        )]
+    if competitors not in ([], [EXPECTED_COMPETITOR]):
+        raise RuntimeError('CATALOG_SIZE_REFRESH_COMPETITOR_CHANGED')
+    return catalog_run_ids + competitors
+
+
 def wait_for_app():
     for _ in range(60):
-        root = command('curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '3',
-                       'http://127.0.0.1:8787/', check=False, timeout=8).stdout.strip()
+        automation = command('curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '3',
+                             'http://127.0.0.1:8787/automation', check=False, timeout=8).stdout.strip()
         api = command('curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '3',
                       'http://127.0.0.1:8787/api/integrations', check=False, timeout=8).stdout.strip()
-        if root == '200' and api == '401':
+        if automation == '200' and api == '401':
             return
         time.sleep(1)
     raise RuntimeError('CATALOG_SIZE_REFRESH_RESTART_FAILED')
@@ -202,8 +217,9 @@ def main():
         runtime = command('docker', 'inspect', 'taha-ai', '--format', '{{.Config.Image}}|{{.Image}}|{{.State.Status}}').stdout.strip()
         if runtime != IMAGE + '|' + IMAGE_ID + '|running':
             raise RuntimeError('CATALOG_SIZE_REFRESH_DEPLOYMENT_CHANGED')
-        ids = catalog_ids()
-        database = find_database(ids)
+        catalog_run_ids = catalog_ids()
+        database = find_database(catalog_run_ids)
+        ids = quarantine_ids(database, catalog_run_ids)
         stopped = False
         try:
             command('docker', 'stop', '--time', '30', 'taha-ai', timeout=45)
@@ -214,11 +230,16 @@ def main():
                 source.backup(target)
             os.chmod(backup, 0o600)
             before, after = quarantine(database, ids)
+            replace_receipt({'stage': 'database-quarantined', 'revision': REVISION,
+                             'catalogRunIds': catalog_run_ids, 'quarantinedRunIds': ids,
+                             'before': before, 'after': after, 'backup': str(backup),
+                             'updatedAt': int(time.time())})
         finally:
             if stopped:
                 command('docker', 'start', 'taha-ai')
                 wait_for_app()
-        receipt = {'stage': 'quarantined', 'revision': REVISION, 'catalogRunIds': ids,
+        receipt = {'stage': 'quarantined', 'revision': REVISION, 'catalogRunIds': catalog_run_ids,
+                   'quarantinedRunIds': ids,
                    'before': before, 'after': after, 'backup': str(backup), 'updatedAt': int(time.time())}
         replace_receipt(receipt)
         if command('systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer', check=False).returncode == 0:

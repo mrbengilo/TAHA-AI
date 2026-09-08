@@ -17,6 +17,11 @@ class CatalogSizeRefreshSafetyTest(unittest.TestCase):
         self.assertIn("os.chmod(backup, 0o600)", SOURCE)
         self.assertIn("command('docker', 'stop'", SOURCE)
         self.assertIn("command('docker', 'start'", SOURCE)
+        self.assertIn("EXPECTED_COMPETITOR = 'eedbea4c-e66b-4c28-bc1a-a603c21c0830'", SOURCE)
+        self.assertIn("'CATALOG_SIZE_REFRESH_COMPETITOR_CHANGED'", SOURCE)
+        self.assertIn("'quarantinedRunIds': ids", SOURCE)
+        self.assertIn("'database-quarantined'", SOURCE)
+        self.assertIn("'http://127.0.0.1:8787/automation'", SOURCE)
         self.assertNotIn('DELETE FROM', SOURCE.upper())
 
 

@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: taha-vps-catalog-size-refresh
+  cancel-in-progress: false
+
 jobs:
   quarantine:
     runs-on: ubuntu-latest
@@ -28,6 +32,7 @@ jobs:
           chmod 600 ~/.ssh/id_taha_vps
       - name: Quarantine old catalog batch
         run: |
+          set -o pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             python3 -u - < deploy/vps/cancel-catalog-for-size-refresh.py 2>&1 | tee deploy/vps/catalog-size-refresh-output.txt
