@@ -37,7 +37,7 @@ function main() {
   };
   // String values are identifiers/statuses only; block unexpected free text from entering logs.
   const safe = JSON.stringify(state, (_key, value) => typeof value === 'string'
-    && !/^[A-Za-z0-9_.:\-]{0,220}$/.test(value) ? '[UNEXPECTED_VALUE]' : value);
+    && !/^[A-Za-z0-9_.:-]{0,220}$/.test(value) ? '[UNEXPECTED_VALUE]' : value);
   console.log('WEBSITE_STATE_DIAG=' + safe);
 }
 
