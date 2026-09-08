@@ -72,12 +72,17 @@ def validate_old(old, items, protected):
         require(not any(ref.split(':')[0].lstrip('/') in aliases for ref in refs), 'RETENTION_CONTAINER_REFERENCED')
 
 
-def remove_unreferenced(image_id, protected_images):
+def remove_unreferenced(image_id, protected_images, owned_container=False):
     if image_id in protected_images or any(item['Image'] == image_id for item in inventory()):
         return
     info = inspect('image', image_id)
     tags = info.get('RepoTags') or []
-    require(tags and all(tag.startswith(REPO + ':') and not tag.endswith(':latest') for tag in tags),
+    if not tags:
+        require(owned_container, 'RETENTION_UNTAGGED_IMAGE_OWNERSHIP_UNKNOWN')
+        require(not any(item['Image'] == image_id for item in inventory()), 'RETENTION_IMAGE_REFERENCED')
+        docker('image', 'rm', image_id)
+        return
+    require(all(tag.startswith(REPO + ':') and not tag.endswith(':latest') for tag in tags),
             'RETENTION_IMAGE_TAGS_NOT_OWNED')
     for tag in tags:
         require(inspect('image', tag)['Id'] == image_id, 'RETENTION_IMAGE_TAG_CHANGED')
@@ -124,7 +129,7 @@ def main(apply):
                 output.flush()
                 os.fsync(output.fileno())
             docker('container', 'rm', old['Id'])
-            remove_unreferenced(old['Image'], protected_images)
+            remove_unreferenced(old['Image'], protected_images, owned_container=True)
             print('RETENTION_REMOVED=' + old['Name'] + ';freeBytes=' + str(free_bytes()), flush=True)
         current, keep, _ = select(inventory())
         require(current['Id'] == active['Id'] and {item['Id'] for item in keep} == {item['Id'] for item in retained},

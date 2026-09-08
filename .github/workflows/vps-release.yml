@@ -30,7 +30,7 @@ jobs:
     needs: quality
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 85
+    timeout-minutes: 120
     env:
       VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
       VPS_USER: ${{ secrets.TAHA_VPS_USER }}
@@ -83,7 +83,7 @@ jobs:
             bash -s -- "$TARGET_SHA" "/var/tmp/taha-source-$TARGET_SHA.bundle" < deploy/vps/release.sh
       - name: Install receiver and publish exactly the authorized PH0015 trial
         if: ${{ contains(github.event.head_commit.message, '[website-trial-PH0015]') }}
-        timeout-minutes: 45
+        timeout-minutes: 95
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |

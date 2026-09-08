@@ -26,7 +26,7 @@ def read(args):
 
 
 def run(script, args, timeout):
-    result = subprocess.run(['python3', '-u', str(HERE / script), *args], timeout=timeout, cwd=REPO)
+    result = subprocess.run(['python3', '-B', '-u', str(HERE / script), *args], timeout=timeout, cwd=REPO)
     require(result.returncode == 0, 'WEBSITE_RECOVERY_STAGE_FAILED')
 
 
@@ -45,10 +45,11 @@ def main(args):
             run('website-one-product-trial.py', [], 180)
             print('WEBSITE_RECOVERY_CHECK=ready; receiver_build_and_secret_wiring_pending')
             return
-        run('website-receiver-install.py', install_args + ['--apply'], 1500)
+        # Each installer operation has its own timeout; do not kill a rollback midway.
+        run('website-receiver-install.py', install_args + ['--apply'], None)
         current = json.loads(read(['docker', 'inspect', 'tahashoes-backend']))[0]
         run('website-runtime-repair.py', ['--expected-container-id', current['Id'],
-            '--expected-image-id', current['Image'], '--apply'], 600)
+            '--expected-image-id', current['Image'], '--apply'], None)
         run('website-one-product-trial.py', ['--apply'], 900)
         print('WEBSITE_RECOVERY_COMPLETE=PH0015')
 
