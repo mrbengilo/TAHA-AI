@@ -24,6 +24,8 @@ on:
       - .github/workflows/vps-commerce-callback.yml
       - deploy/vps/commerce-callback-repair.py
       - tests/vps_commerce_callback_test.py
+      - .github/workflows/vps-commerce-release-resume.yml
+      - deploy/vps/resume-commerce-release.py
   workflow_dispatch:
     inputs:
       run_facebook_trial:
