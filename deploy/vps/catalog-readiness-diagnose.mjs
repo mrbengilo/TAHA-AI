@@ -1,13 +1,14 @@
-// Read production readiness logic against SQLite in read-only mode. No writes or network.
+// Read the configured production D1 through SELECT-only Wrangler queries.
+// Reconstruct only a transient in-memory snapshot; production data is never written.
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import vm from 'node:vm';
 import { parseEnv } from 'node:util';
 import { createRequire } from 'node:module';
 
 const ROOT = '/app';
-const DATA = '/data';
 const W = '00000000-0000-4000-8000-000000000001';
 const requirePackage = createRequire('/app/package.json');
 const ts = requirePackage('typescript');
@@ -20,37 +21,43 @@ function code(error) {
   return /^(?:PRODUCT_|SKU_|WEBSITE_|CONTENT_|CATALOG_)[A-Z_]+$/.test(error?.message || '')
     ? error.message : 'CATALOG_READINESS_CHECK_FAILED';
 }
-function sqliteFiles(directory, output = [], depth = 0) {
-  requireState(depth < 20 && output.length < 100, 'CATALOG_DATABASE_SEARCH_LIMIT');
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const filename = path.join(directory, entry.name);
-    if (entry.isDirectory()) sqliteFiles(filename, output, depth + 1);
-    else if (entry.isFile() && entry.name.endsWith('.sqlite')) output.push(filename);
-  }
-  return output;
-}
-function discoverDatabase() {
-  const matches = [];
-  for (const filename of sqliteFiles(DATA)) {
-    let sqlite;
-    try {
-      const resolved = realpathSync(filename);
-      requireState(resolved.startsWith(DATA + '/'), 'CATALOG_DATABASE_PATH_INVALID');
-      sqlite = new DatabaseSync(resolved, { readOnly: true, allowExtension: false });
-      const tables = sqlite.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('products','workspaces','content_drafts','channel_connections','product_media','media_assets','product_variants')").all();
-      if (tables.length === 7 && sqlite.prepare('SELECT id FROM workspaces WHERE id=?').get(W)) {
-        matches.push(sqlite);
-        sqlite = null;
+function snapshotDatabase() {
+  const tables = ['products', 'workspaces', 'content_drafts', 'channel_connections',
+    'product_media', 'media_assets', 'product_variants'];
+  const statements = ["SELECT name,sql FROM sqlite_master WHERE type='table' AND name IN ("
+    + tables.map(table => "'" + table + "'").join(',') + ')',
+  ...tables.map(table => `SELECT * FROM ${table} WHERE ${table === 'workspaces' ? 'id' : 'workspace_id'}='${W}'`)];
+  // One CLI invocation resolves DB using its actual Wrangler configuration,
+  // avoiding accidental selection among old local D1 SQLite files.
+  const raw = execFileSync('pnpm', ['exec', 'wrangler', 'd1', 'execute', 'DB', '--local',
+    '--persist-to=/data', '--config=/app/wrangler.vps.jsonc', '--json', '--command', statements.join(';')],
+  { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000, maxBuffer: 64 * 1024 * 1024 });
+  const results = JSON.parse(raw);
+  requireState(Array.isArray(results) && results.length === tables.length + 1
+    && results.every(result => result.success === true && Array.isArray(result.results)), 'CATALOG_SNAPSHOT_INVALID');
+  const schemas = results[0].results;
+  requireState(schemas.length === tables.length && new Set(schemas.map(row => row.name)).size === tables.length
+    && schemas.every(row => tables.includes(row.name) && typeof row.sql === 'string'
+      && /^CREATE TABLE\s/iu.test(row.sql) && !row.sql.includes(';')), 'CATALOG_SCHEMA_INVALID');
+  requireState(results[2].results.length === 1 && results[2].results[0].id === W, 'CATALOG_WORKSPACE_INVALID');
+  const sqlite = new DatabaseSync(':memory:', { allowExtension: false });
+  try {
+    sqlite.exec('PRAGMA foreign_keys=OFF');
+    for (const schema of schemas) sqlite.exec(schema.sql);
+    for (const [index, table] of tables.entries()) {
+      for (const row of results[index + 1].results) {
+        requireState(row && (table === 'workspaces' ? row.id : row.workspace_id) === W, 'CATALOG_SNAPSHOT_SCOPE_INVALID');
+        const columns = Object.keys(row);
+        requireState(columns.length > 0 && columns.every(column => /^[A-Za-z_][A-Za-z0-9_]*$/.test(column)), 'CATALOG_COLUMN_INVALID');
+        const insert = sqlite.prepare(`INSERT INTO "${table}" (${columns.map(column => '"' + column + '"').join(',')}) VALUES (${columns.map(() => '?').join(',')})`);
+        insert.run(...columns.map(column => row[column]));
       }
-    } catch { /* Not the production application database. */ }
-    finally { sqlite?.close(); }
-  }
-  if (matches.length !== 1) {
-    for (const sqlite of matches) sqlite.close();
-    throw Error('CATALOG_DATABASE_AMBIGUOUS');
-  }
-  return matches[0];
+    }
+    sqlite.exec('PRAGMA query_only=ON');
+    return sqlite;
+  } catch (error) { sqlite.close(); throw error; }
 }
+
 function readDatabase(sqlite) {
   return { prepare(sql) {
     requireState(/^\s*SELECT\b/iu.test(sql) && !sql.includes(';'), 'CATALOG_SELECT_ONLY');
@@ -99,7 +106,7 @@ function stringCount(value) {
   return new Set(values.filter(item => typeof item === 'string' && item.trim()).map(item => item.trim().slice(0, 160))).size;
 }
 async function main() {
-  const sqlite = discoverDatabase();
+  const sqlite = snapshotDatabase();
   try {
     const db = readDatabase(sqlite);
     const runtime = { ...parseEnv(readFileSync('/app/.dev.vars', 'utf8')), DB: db };
