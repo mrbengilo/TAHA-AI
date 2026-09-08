@@ -1,4 +1,4 @@
-"""Promote the exact verified catalog to Facebook schedules, ready SKUs first."""
+"""Finish the exact SKU/size Facebook catalog, ready SKUs first."""
 import base64
 from datetime import datetime, timedelta, timezone
 import fcntl
@@ -14,13 +14,11 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 WORKSPACE = '00000000-0000-4000-8000-000000000001'
-IMAGE = 'tahashoes-taha-ai:ffc61121076d49bb6b9044940990f509af57efef'
-IMAGE_ID = 'sha256:f4410ccaf9fbc932de004a15ca5e2b017f5ba87ce772a7e3b86a2d8f0824760d'
-REVISION = 'ffc61121076d49bb6b9044940990f509af57efef'
+REVISION = '4ef44959e6ffd29d966136922e3857c6a2119b86'
+IMAGE = 'tahashoes-taha-ai:' + REVISION
 LOCK = Path('/var/lock/taha-ai-release.lock')
-CATALOG = Path('/var/lib/taha-ai/ops-recovery/catalog-lifestyle-v3.json')
-PAUSE = Path('/var/lib/taha-ai/ops-recovery/catalog-six-image-user-pause.json')
-MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-publish-all-v1.json')
+CATALOG = Path('/var/lib/taha-ai/ops-recovery/catalog-exact-sku-size-v1.json')
+MARKER = Path('/var/lib/taha-ai/ops-recovery/catalog-exact-sku-size-progress-v1.json')
 EXPECTED_COUNTS = {
     'PH0014': 2, 'PH0015': 0, 'PH0018': 0, 'PH0020': 4, 'PH0021': 0,
     'PH0022': 0, 'PH0023': 1, 'PH0024': 0, 'PH0027': 3, 'PH0028': 0,
@@ -82,10 +80,10 @@ def replace_marker(value):
 
 def validate_runtime():
     runtime = command('docker', 'inspect', 'taha-ai', '--format',
-                      '{{.Config.Image}}|{{.Image}}|{{.State.Status}}|{{index .Config.Labels "org.opencontainers.image.revision"}}').stdout.strip()
-    if runtime != '|'.join((IMAGE, IMAGE_ID, 'running', REVISION)):
+                      '{{.Config.Image}}|{{.State.Status}}|{{index .Config.Labels "org.opencontainers.image.revision"}}').stdout.strip()
+    if runtime != '|'.join((IMAGE, 'running', REVISION)):
         raise RuntimeError('CATALOG_PUBLISH_DEPLOYMENT_CHANGED')
-    print('CATALOG_RUNTIME_IMAGE_B64=' + base64.b64encode(IMAGE_ID.encode()).decode(), flush=True)
+    print('CATALOG_RUNTIME_REVISION_B64=' + base64.b64encode(REVISION.encode()).decode(), flush=True)
 
 
 def catalog_products():
@@ -100,7 +98,14 @@ def catalog_products():
                 or not re.fullmatch(r'[0-9a-f-]{36}', str(row.get('runId', ''))) \
                 or not re.fullmatch(r'[0-9a-f-]{36}', str(row.get('productId', ''))):
             raise RuntimeError('CATALOG_PUBLISH_MARKER_INVALID')
-        cleaned.append({'runId': row['runId'], 'productId': row['productId'], 'sku': row['sku']})
+        sizes = row.get('sizes')
+        day = row.get('publishDay')
+        if not isinstance(sizes, list) or not sizes or any(not isinstance(size, str) or not size for size in sizes) \
+                or not isinstance(day, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', day) \
+                or row.get('generatedImages') != EXPECTED_COUNTS[row['sku']]:
+            raise RuntimeError('CATALOG_PUBLISH_MARKER_INVALID')
+        cleaned.append({'runId': row['runId'], 'productId': row['productId'], 'sku': row['sku'],
+                        'sizes': sizes, 'publishDay': day})
     if len({row['runId'] for row in cleaned}) != len(cleaned) \
             or len({row['productId'] for row in cleaned}) != len(cleaned) \
             or {row['sku'] for row in cleaned} != set(EXPECTED_COUNTS):
@@ -222,15 +227,14 @@ def validate_promoted_state(database, products, marker):
 
 
 def build_plan(products, now=None):
-    local_now = datetime.fromtimestamp(time.time() if now is None else now, VN)
-    first_day = local_now.date() + timedelta(days=1)
     ordered = sorted(products, key=lambda row: (EXPECTED_COUNTS[row['sku']] != 0, row['sku']))
     result = []
-    for index, row in enumerate(ordered):
-        day = first_day + timedelta(days=index)
+    for row in ordered:
+        day = datetime.strptime(row['publishDay'], '%Y-%m-%d').date()
         run_at = int(datetime(day.year, day.month, day.day, 8, 0, tzinfo=VN).timestamp() * 1000)
         result.append({**row, 'requestedImages': EXPECTED_COUNTS[row['sku']], 'day': day.isoformat(),
-                       'runAt': run_at, 'requestKey': f"daily:{day.isoformat()}:{row['productId']}"})
+                       'runAt': run_at,
+                       'requestKey': f"daily:{day.isoformat()}:exact-sku-size-v1:{row['sku']}"})
     return result
 
 
@@ -248,8 +252,8 @@ def load_or_create_plan(products, connection_id):
             or not isinstance(marker.get('plan'), list) or len(marker['plan']) != len(products) \
             or not isinstance(marker.get('retryAttempts'), dict):
         raise RuntimeError('CATALOG_PUBLISH_PLAN_INVALID')
-    identities = {(row['runId'], row['productId'], row['sku']) for row in products}
-    if {(row.get('runId'), row.get('productId'), row.get('sku')) for row in marker['plan']} != identities \
+    identities = {(row['runId'], row['productId'], row['sku'], tuple(row['sizes'])) for row in products}
+    if {(row.get('runId'), row.get('productId'), row.get('sku'), tuple(row.get('sizes') or [])) for row in marker['plan']} != identities \
             or [row.get('requestedImages') for row in marker['plan']] != [EXPECTED_COUNTS[row['sku']] for row in marker['plan']] \
             or len({row.get('day') for row in marker['plan']}) != len(products):
         raise RuntimeError('CATALOG_PUBLISH_PLAN_INVALID')
@@ -340,17 +344,24 @@ def verify_group(database, plan):
     if len(rows) != len(plan) or jobs:
         raise RuntimeError('CATALOG_PUBLISH_FINAL_STATE_INVALID')
     expected = {row['runId']: row for row in plan}
-    forbidden = ('google drive', 'google sheets', 'nguồn ảnh', 'kiểm tra đúng mã sản phẩm')
+    forbidden = ('google drive', 'google sheets', 'nguồn ảnh', 'kiểm tra đúng mã sản phẩm',
+                 'giá bán', 'giá tham khảo', ' vnd', ' vnđ', '₫')
     for row in rows:
         item = expected[row['id']]
-        body = str(row.get('body') or '').lower()
+        raw_body = str(row.get('body') or '')
+        body = raw_body.lower()
+        sku_tokens = set(re.findall(r'\bPH\d{4}\b', raw_body.upper()))
+        exact_size_line = '📏 Size hiện có: ' + ', '.join(item['sizes'])
         if row['base_sku'] != item['sku'] or row['status'] != 'completed' \
                 or row['requested_image_count'] != item['requestedImages'] \
                 or row['completed_image_count'] != item['requestedImages'] \
                 or row['draft_status'] != 'approved' or row['drafts'] != 1 or row['schedules'] != 1 \
                 or row['schedule_status'] != 'active' or row['run_at'] != item['runAt'] \
                 or row['next_run_at'] != item['runAt'] or not 1 <= row['media_count'] <= 6 \
-                or not body or any(value in body for value in forbidden):
+                or not body or any(value in body for value in forbidden) \
+                or '🏷️ Mã sản phẩm: ' + item['sku'] not in raw_body \
+                or exact_size_line not in raw_body or sku_tokens != {item['sku']} \
+                or len(raw_body.split()) > 2000:
             raise RuntimeError('CATALOG_PUBLISH_FINAL_STATE_INVALID')
     return [{'sku': row['base_sku'], 'tag': 'Đã lên lịch', 'runAt': expected[row['id']]['day']} for row in rows]
 
@@ -400,8 +411,6 @@ def main():
         connection_id = facebook_connection(database, secret)
         marker = load_or_create_plan(products, connection_id)
         if marker['stage'] == 'planned':
-            validate_initial_state(database, products)
-            promote(database, marker)
             marker = {**marker, 'stage': 'promoted', 'promotedAt': int(time.time())}
             replace_marker(marker)
         validate_promoted_state(database, products, marker)

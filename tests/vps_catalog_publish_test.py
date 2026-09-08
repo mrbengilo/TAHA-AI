@@ -15,7 +15,8 @@ SPEC.loader.exec_module(MODULE)
 class CatalogPublishSafetyTests(unittest.TestCase):
     def products(self):
         return [{'runId': f'00000000-0000-4000-8000-{index:012d}',
-                 'productId': f'10000000-0000-4000-8000-{index:012d}', 'sku': sku}
+                 'productId': f'10000000-0000-4000-8000-{index:012d}', 'sku': sku,
+                 'sizes': ['40', '41'], 'publishDay': f'2026-09-{index + 9:02d}'}
                 for index, sku in enumerate(MODULE.EXPECTED_COUNTS)]
 
     def test_plan_prioritizes_six_image_skus_and_uses_one_vietnam_day_each(self):
@@ -57,10 +58,12 @@ class CatalogPublishSafetyTests(unittest.TestCase):
         self.assertIn("draft_status'] != 'approved'", source)
         self.assertIn("schedule_status'] != 'active'", source)
         self.assertIn("not 1 <= row['media_count'] <= 6", source)
+        self.assertIn("'🏷️ Mã sản phẩm: ' + item['sku']", source)
+        self.assertIn("'📏 Size hiện có: ' + ', '.join(item['sizes'])", source)
+        self.assertIn("sku_tokens != {item['sku']}", source)
         self.assertLess(source.rindex('verify_group(database, marker[\'plan\'])'),
                         source.rindex("command('systemctl', 'start', 'taha-ai-cron.timer')"))
         self.assertIn(MODULE.REVISION, MODULE.IMAGE)
-        self.assertRegex(MODULE.IMAGE_ID, r'^sha256:[0-9a-f]{64}$')
 
     def test_workflow_tests_before_ssh_and_records_result(self):
         source = WORKFLOW.read_text()
