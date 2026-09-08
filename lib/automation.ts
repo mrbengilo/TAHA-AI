@@ -17,7 +17,7 @@ export const AUTOMATION_TARGET_PROVIDERS = [
 type TargetProvider = (typeof AUTOMATION_TARGET_PROVIDERS)[number];
 type StepType = "content" | "optimize" | "image" | "finalize";
 const AUTOMATION_LEASE_MS = 15 * 60_000;
-const CONTENT_TEMPLATE_VERSION = "taha-approved-template-v1";
+const CONTENT_TEMPLATE_VERSION = "taha-approved-template-v2";
 
 type AutomationStatement = {
   bind(...values: unknown[]): AutomationStatement;

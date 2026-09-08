@@ -43,6 +43,13 @@
       "when": 1788890854833,
       "tag": "0005_template_content_cleanup",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788895200000,
+      "tag": "0006_facebook_template_retry",
+      "breakpoints": true
     }
   ]
 }

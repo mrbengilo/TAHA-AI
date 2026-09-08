@@ -29,8 +29,8 @@ test("approved template writes every channel without OpenAI, image generation or
     targetProviders: ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"],
   });
 
-  assert.equal(result.model, "taha-approved-template-v1");
-  assert.equal(JSON.stringify(result.usage), JSON.stringify({ source: "approved-template", externalRequests: 0 }));
+  assert.equal(result.model, "taha-approved-template-v2");
+  assert.equal(JSON.stringify(result.usage), JSON.stringify({ source: "approved-template", externalRequests: 0, sourceCorrections: [] }));
   assert.equal(externalRequests, 0);
   assert.equal(result.content.sku, "PH0018");
   assert.deepEqual(Object.keys(result.content.channels), ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"]);
@@ -52,4 +52,49 @@ test("approved template is deterministic for the same exact SKU", async () => {
   const first = await template.generateProductContent(input);
   const second = await template.generateProductContent(input);
   assert.deepEqual(first, second);
+});
+
+test("approved Facebook template accepts production SEO names with store-policy suffixes", async () => {
+  const { template } = loadTemplate();
+  const result = await template.generateProductContent({
+    product: {
+      sku: "PH0022",
+      name: "Lituo Sport Giày Chính Hãng SKU - Sneaker Cao Cấp Thoải Mái & Phong Cách - Bảo Hành 12 Tháng - Quà Tặng Khử Mùi & Vớ Thể Thao",
+      brand: "Lituo Sport",
+      category: "Sneaker cao cấp",
+      sizes: ["36", "37", "38", "39", "40", "41", "42", "43"],
+    },
+    targetProviders: ["facebook"],
+  });
+
+  const body = result.content.channels.facebook.body;
+  const productSections = body.split("MUA SẮM CÙNG TAHA SHOES")[0];
+  assert.match(productSections, /PH0022/);
+  assert.match(productSections, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
+  assert.doesNotMatch(productSections, /bảo\s*hành|quà\s*tặng/iu);
+  assert.match(body, /Bảo hành 12 tháng/u);
+  assert.match(body, /Quà tặng kèm: khử mùi \+ vớ thể thao/u);
+  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify(["facebook_editorial_name_normalized"]));
+});
+
+test("approved Facebook template repairs malformed Sheet display text without a manual retry", async () => {
+  const { template } = loadTemplate();
+  const result = await template.generateProductContent({
+    product: {
+      sku: "PH0099",
+      name: "Hotline: 0765.109.784 - Quà tặng - Bảo hành",
+      brand: "",
+      category: "",
+      sizes: ["39", "40"],
+    },
+    targetProviders: ["facebook"],
+  });
+
+  const body = result.content.channels.facebook.body;
+  assert.match(body, /Mẫu giày PH0099/u);
+  assert.match(body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
+  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
+    "facebook_editorial_name_normalized",
+    "facebook_structure_fallback",
+  ]));
 });

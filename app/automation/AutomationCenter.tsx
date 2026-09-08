@@ -146,7 +146,7 @@ export default function AutomationCenter() {
           body: JSON.stringify({
             productId: selectedProductId,
             targetProviders: targets,
-            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:approved-template-v1`,
+            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:approved-template-v2`,
           }),
         });
         const run = payload.data?.run as AutomationRun | undefined;
