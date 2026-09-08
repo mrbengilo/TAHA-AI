@@ -1,0 +1,50 @@
+name: Publish verified SKU catalog in priority order
+
+on:
+  push:
+    branches: [codex/vps-release-space]
+    paths: [deploy/vps/publish-catalog.py, .github/workflows/vps-publish-catalog.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: taha-catalog-recovery-v3
+  cancel-in-progress: false
+
+jobs:
+  publish-catalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify catalog publication safety contract
+        run: python3 -m unittest discover -s tests -p vps_catalog_publish_test.py
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Prepare ready SKUs first, then schedule all products
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/publish-catalog.py 2>&1 | tee deploy/vps/catalog-publish-output.txt
+      - name: Save catalog publication snapshot
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/catalog-publish-output.txt
+          git commit -m "ops: record catalog publication progress" || exit 0
+          git push origin HEAD:codex/vps-release-space
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
