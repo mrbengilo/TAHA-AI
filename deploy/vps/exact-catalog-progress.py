@@ -1,4 +1,4 @@
-"""Read-only progress for the exact SKU/size catalog accelerator. Probe 35."""
+"""Read-only progress for the exact SKU/size catalog accelerator. Probe 36."""
 import json
 from pathlib import Path
 import sqlite3
@@ -43,8 +43,8 @@ def main():
             if len(rows) != 15:
                 continue
             steps = [dict(row) for row in db.execute(
-                f"SELECT step_type,status,count(*) AS total FROM automation_steps WHERE workspace_id=? "
-                f"AND run_id IN ({placeholders}) GROUP BY step_type,status ORDER BY step_type,status",
+                f"SELECT step_type,status,error_code,count(*) AS total FROM automation_steps WHERE workspace_id=? "
+                f"AND run_id IN ({placeholders}) GROUP BY step_type,status,error_code ORDER BY step_type,status,error_code",
                 [WORKSPACE, *ids],
             )]
             drafts = [dict(row) for row in db.execute(
