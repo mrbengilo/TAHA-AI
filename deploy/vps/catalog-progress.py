@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 31: inspect public website API origins.
+# Probe generation 32: inspect website API auth and product fields.
 import base64
 import json
 import re
@@ -30,7 +30,7 @@ def safe_marker(path, ids):
 
 
 def website_probe():
-    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'apiOrigins': [], 'productApiContext': [], 'vhostOnAutomationVps': False}
+    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'apiOrigins': [], 'productApiContext': [], 'contractContext': [], 'vhostOnAutomationVps': False}
     request = urllib.request.Request('https://tahashoes.vn/api/taha/publish', method='GET')
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -60,6 +60,14 @@ def website_probe():
                 contexts.append(sample)
                 start = index + len(needle)
             result['productApiContext'] = contexts
+            contract_contexts = []
+            for needle in ('baseURL', 'Authorization', 'shortDescription', 'soldCount', 'reviewCount', 'originalPrice', 'costPrice', 'descriptionDetail', 'technicalSpecs'):
+                index = bundle.find(needle)
+                if index < 0: continue
+                sample = bundle[max(0, index - 360):index + 720]
+                sample = re.sub(r'[A-Za-z0-9_-]{32,}', '<redacted>', sample)
+                contract_contexts.append({'needle': needle, 'sample': sample})
+            result['contractContext'] = contract_contexts
     except Exception:
         pass
     try:
