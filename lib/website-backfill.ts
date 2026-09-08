@@ -1,4 +1,4 @@
-import { customerCopyViolation } from "./ai/shoe-content";
+import { customerCopyViolation, sanitizeProductTextForCopy } from "./ai/shoe-content";
 import { getRuntimeEnv } from "./integrations/env";
 import { TAHA_WORKSPACE_ID } from "./integrations/store";
 import { objectJson, productFingerprint, productSources } from "./product-integrity";
@@ -93,7 +93,12 @@ async function preparedListing(source: ReadyDraft, db: WebsiteBackfillDatabase) 
   if (!body || customerCopyViolation({ title, body, hashtags })) {
     // A website listing does not need a Facebook post. Canonical catalog copy
     // is already a valid source of product facts for new or changed products.
-    body = sources.product.description.trim();
+    const canonicalBody = sources.product.description.trim();
+    // Remove catalog bookkeeping/price clauses using the existing customer-copy
+    // policy. Preserve already valid copy byte-for-byte so published revisions
+    // remain stable; the same strict validation still runs below.
+    body = customerCopyViolation({ body: canonicalBody })
+      ? sanitizeProductTextForCopy(canonicalBody) : canonicalBody;
     title = sources.product.name;
     hashtags = [];
     platformData = {};

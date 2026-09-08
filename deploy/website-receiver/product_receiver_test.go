@@ -106,6 +106,34 @@ func TestDecodeWebsiteProductPayloadRejectsUnknownFieldAndMismatchedKey(t *testi
 	}
 }
 
+func TestWebsiteProductHandlerPassesBodyAboveLegacyThreeMiBLimitToValidation(t *testing.T) {
+	var value map[string]any
+	if err := json.Unmarshal(testWebsiteProductBody(t, 1), &value); err != nil {
+		t.Fatal(err)
+	}
+	product, ok := value["product"].(map[string]any)
+	if !ok {
+		t.Fatal("product fixture is not an object")
+	}
+	product["description"] = strings.Repeat("x", (3<<20)+1024)
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) <= 3<<20 || len(body) >= websiteProductMaxBody {
+		t.Fatalf("fixture must be above the retired 3 MiB cap and below the receiver cap: %d", len(body))
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/taha/publish", bytes.NewReader(body))
+	if !tryPublishWebsiteProduct(recorder, request, body, "publish-PH0015-v1") {
+		t.Fatal("product payload was not handled")
+	}
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid product description") {
+		t.Fatalf("large product body must reach schema validation instead of 413, got %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestValidateWebsiteProductMediaRejectsCountTypeAndSize(t *testing.T) {
 	valid := base64.StdEncoding.EncodeToString(testWebsiteProductJPEG(t))
 	makeItem := func(index int) websiteProductMedia {

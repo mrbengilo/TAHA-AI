@@ -24,8 +24,8 @@ COMPOSE_FILE = BASE / 'docker-compose.yml'
 CONTAINER = 'tahashoes-backend'
 HERE = Path(__file__).resolve().parent
 RECEIVER_DIR = HERE.parent / 'website-receiver' if HERE.name == 'vps' else HERE
-ADAPTER_HASH = 'd8111a98529c8d8ed7fc17e4e7f107b863aff7afc3c58787fb14ed6def85c1e7'
-TEST_HASH = 'c5c0c64844ba788a77f0e17ae49192e75a5b68119a1238c15f7a24c5b70b9a5e'
+ADAPTER_HASH = 'e61cdd544e132986f77bd71e92349abdd08a8e25c6d095518b9257670c54beda'
+TEST_HASH = '7c8386c7db591820025441a82b51f0e90d3259ee5876548f329686d1467876a7'
 FILES = ('article.go', 'product_receiver.go', 'product_receiver_test.go')
 LABELS = {
     'com.docker.compose.project': 'tahashoes',

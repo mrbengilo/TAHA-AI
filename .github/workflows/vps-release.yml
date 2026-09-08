@@ -119,6 +119,17 @@ jobs:
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "python3 -u /var/www/taha-ai/deploy/vps/enable-catalog-automation.py --expected-release-sha $TARGET_SHA --apply"
+      - name: Complete all-photo website catalog publishing
+        if: ${{ contains(github.event.head_commit.message, '[catalog-complete]') }}
+        timeout-minutes: 30
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "python3 -u /var/www/taha-ai/deploy/vps/complete-catalog-publish.py --expected-release-sha $TARGET_SHA"
       - name: Verify existing trial Facebook permissions without publishing
         run: |
           set -euo pipefail

@@ -106,6 +106,47 @@ test("stale prepared copy falls back to current canonical catalog description", 
   assert.equal(JSON.parse(draft.platform_data_json).websiteSourceDraftId, null);
 });
 
+test("canonical catalog bookkeeping is removed while real product facts and final copy validation are preserved", async () => {
+  const h = harness();
+  h.seedProduct();
+  seedWebsiteConnection(h);
+  const description = "Thân giày bằng vải lưới. Thông tin lấy từ Google Sheets; Đế cao su; Không chống nước. "
+    + "Hình ảnh sản phẩm sử dụng ảnh có sẵn từ Google Drive. Size 38, 39, 40; Giá bán: 490.000 VND";
+  h.sqlite.prepare("UPDATE products SET description=? WHERE id='product-1'").run(description);
+  assert.equal((await backfill(h)).queued, 1);
+  const draft = h.sqlite.prepare("SELECT body FROM content_drafts WHERE generator='website-backfill'").get();
+  assert.equal(draft.body, "Thân giày bằng vải lưới\nĐế cao su\nKhông chống nước\nSize 38, 39, 40");
+  assert.equal(h.load("lib/ai/shoe-content.ts").customerCopyViolation({ body: draft.body }), null);
+  assert.equal(h.sqlite.prepare("SELECT description FROM products WHERE id='product-1'").get().description, description);
+});
+
+test("existing valid canonical and prepared copy remain byte-for-byte stable", async () => {
+  for (const prepared of [false, true]) {
+    const h = harness();
+    h.seedProduct();
+    seedWebsiteConnection(h);
+    const description = "Thân giày bằng vải lưới. Đế cao su; Không chống nước.";
+    h.sqlite.prepare("UPDATE products SET description=? WHERE id='product-1'").run(description);
+    if (prepared) await seedReadyDraft(h);
+    assert.equal((await backfill(h)).queued, 1);
+    const before = h.sqlite.prepare("SELECT body,platform_data_json FROM content_drafts WHERE generator='website-backfill'").get();
+    assert.equal(before.body, prepared ? "Mô tả website đã chuẩn bị" : description);
+    await recordDelivery(h);
+    assert.equal((await backfill(h)).queued, 0);
+    const after = h.sqlite.prepare("SELECT body,platform_data_json FROM content_drafts WHERE generator='website-backfill'").get();
+    assert.deepEqual(after, before);
+  }
+});
+
+test("catalog text containing only internal notes does not invent a publishable description", async () => {
+  const h = harness();
+  h.seedProduct();
+  seedWebsiteConnection(h);
+  h.sqlite.prepare("UPDATE products SET description='Thông tin lấy từ Google Sheets. Ảnh có sẵn từ Google Drive.' WHERE id='product-1'").run();
+  assert.equal((await backfill(h)).queued, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM schedules").get().n, 0);
+});
+
 test("catalog stock changes and reverts create one new upsert each after completed deliveries", async () => {
   const h = harness();
   h.seedProduct();

@@ -30,7 +30,7 @@ import (
 const (
 	websiteProductSchema       = "taha.website.product.v1"
 	websiteProductOperation    = "upsert_product"
-	websiteProductMaxBody      = 3 << 20
+	websiteProductMaxBody      = 34 << 20
 	websiteProductMaxImageSize = 300_000
 	websiteProductMaxDimension = 12_000
 	websiteProductMaxPixels    = 40_000_000
