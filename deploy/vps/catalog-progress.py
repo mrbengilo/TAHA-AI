@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 26: inspect ready-first schedule count.
+# Probe generation 27: inspect priority publication progress.
 import base64
 import json
 from pathlib import Path
