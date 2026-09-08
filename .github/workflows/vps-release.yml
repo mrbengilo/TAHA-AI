@@ -19,6 +19,8 @@ on:
       - tests/vps_website_capacity_test.py
       - .github/workflows/vps-resume-catalog.yml
       - deploy/vps/resume-catalog-release.py
+      - .github/workflows/vps-commerce-diagnose.yml
+      - deploy/vps/commerce-connection-diagnose.mjs
   workflow_dispatch:
     inputs:
       run_facebook_trial:
