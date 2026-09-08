@@ -24,7 +24,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Inspect the receiver implementation and configured variable names
+      - name: Inspect the Go receiver and existing Compose secret wiring
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \

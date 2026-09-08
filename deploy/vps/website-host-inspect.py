@@ -30,7 +30,7 @@ for root,dirs,files in os.walk(backend):
     dirs[:]=[d for d in dirs if d not in ['node_modules','.git','uploads','logs']]
     for filename in files:
         path=Path(root)/filename
-        if path.suffix not in ['.js','.cjs','.mjs','.ts'] or path.stat().st_size>200000:continue
+        if path.suffix not in ['.js','.cjs','.mjs','.ts','.go'] or path.stat().st_size>200000:continue
         lines=path.read_text(errors='replace').splitlines()
         hits=[i for i,line in enumerate(lines) if re.search(r'receiver not configured|/taha/publish|TAHA_WEBHOOK|TAHA_PUBLISH|tahaRoutes',line)]
         if not hits:continue
@@ -44,6 +44,12 @@ for root,dirs,files in os.walk(backend):
         print('TAHASHOES_RECEIVER_SOURCE='+json.dumps({'file':str(path.relative_to(base)),'lines':safe},ensure_ascii=False))
 process_env=json.loads(subprocess.run(['docker','inspect','tahashoes-backend','--format','{{json .Config.Env}}'],capture_output=True,text=True,check=True).stdout)
 print('TAHASHOES_RECEIVER_ENV_PRESENCE='+json.dumps({item.split('=',1)[0]:bool(item.split('=',1)[1]) for item in process_env if item.startswith(('TAHA_','WEBSITE_'))}))
+labels=json.loads(subprocess.run(['docker','inspect','tahashoes-backend','--format','{{json .Config.Labels}}'],capture_output=True,text=True,check=True).stdout)
+print('TAHASHOES_COMPOSE_SERVICE='+json.dumps({key:labels.get(key) for key in ['com.docker.compose.project','com.docker.compose.service','com.docker.compose.project.config_files','com.docker.compose.project.working_dir']}))
+compose=base/'docker-compose.yml'
+for line in compose.read_text().splitlines():
+    if 'TAHA_WEBHOOK_SECRET' in line:
+        print('TAHASHOES_SECRET_WIRING='+json.dumps({'usesInterpolation':'${TAHA_WEBHOOK_SECRET' in line,'key':'TAHA_WEBHOOK_SECRET'}))
 for filename in ['docker-compose.yml','compose.yml']:
     path=base/filename
     if path.is_file():
