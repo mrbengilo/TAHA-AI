@@ -1,6 +1,7 @@
 """Read-only, fixed-scope production diagnosis. Never print Docker config/env/source."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -96,6 +97,22 @@ def cron_state():
             'cronServiceActive': service.stdout.strip() == b'active', 'cronServiceReturnCode': service.returncode}
 
 
+def disk_state():
+    fs = os.statvfs('/')
+    ids = command(['docker', 'container', 'ls', '-aq']).decode().split()
+    containers = json.loads(command(['docker', 'inspect', *ids])) if ids else []
+    images = command(['docker', 'image', 'ls', '--no-trunc', '--format', '{{json .}}']).decode().splitlines()
+    rows = [json.loads(line) for line in images if line.strip()]
+    return {
+        'diskFreeBytes': fs.f_bavail * fs.f_frsize,
+        'containerImages': [{'name': row.get('Name'), 'imageId': row.get('Image'),
+                             'status': (row.get('State') or {}).get('Status')}
+                            for row in containers],
+        'tahaImageInventory': [{key: row.get(key) for key in ('Repository', 'Tag', 'ID', 'Size', 'CreatedAt')}
+                               for row in rows if row.get('Repository') == 'tahashoes-taha-ai'],
+    }
+
+
 def compose_cli():
     for args in (['docker', 'compose'], ['docker-compose']):
         try:
@@ -152,7 +169,8 @@ def main():
         ('container', container_state), ('hostSource', host_source_state),
         ('containerProductSource', lambda: container_source_state('product_receiver.go')),
         ('containerArticleSource', lambda: container_source_state('article.go')),
-        ('binary', binary_state), ('cron', cron_state), ('composeVersion', compose_version_state), ('compose', compose_state),
+        ('binary', binary_state), ('cron', cron_state), ('disk', disk_state),
+        ('composeVersion', compose_version_state), ('compose', compose_state),
     ):
         collect_section(state, stage, callback)
     # Emit useful sections even if one source/config inspection is unavailable.
