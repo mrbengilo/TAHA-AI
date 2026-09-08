@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 30: inspect catalog and website API surface.
+# Probe generation 31: inspect public website API origins.
 import base64
 import json
 import re
@@ -30,7 +30,7 @@ def safe_marker(path, ids):
 
 
 def website_probe():
-    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'vhostOnAutomationVps': False}
+    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'apiOrigins': [], 'productApiContext': [], 'vhostOnAutomationVps': False}
     request = urllib.request.Request('https://tahashoes.vn/api/taha/publish', method='GET')
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -47,6 +47,19 @@ def website_probe():
             bundle = urllib.request.urlopen('https://tahashoes.vn' + main, timeout=20).read().decode('utf-8', 'replace')
             paths = sorted(set(re.findall(r'/(?:api|admin)/[A-Za-z0-9_?=&.{}:$%\\/-]{2,160}', bundle)))
             result['apiPaths'] = [value for value in paths if not re.search(r'(token|secret|password|key)=', value, re.I)][:80]
+            origins = sorted(set(re.findall(r'https://[A-Za-z0-9.-]+(?::[0-9]+)?', bundle)))
+            result['apiOrigins'] = [value for value in origins if 'taha' in value.lower()][:20]
+            contexts = []
+            needle = '/admin/products'
+            start = 0
+            while len(contexts) < 8:
+                index = bundle.find(needle, start)
+                if index < 0: break
+                sample = bundle[max(0, index - 260):index + 420]
+                sample = re.sub(r'[A-Za-z0-9_-]{32,}', '<redacted>', sample)
+                contexts.append(sample)
+                start = index + len(needle)
+            result['productApiContext'] = contexts
     except Exception:
         pass
     try:
