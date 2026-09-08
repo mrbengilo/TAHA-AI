@@ -6,7 +6,7 @@ on:
     paths: [deploy/vps/cancel-catalog-for-size-refresh.py, .github/workflows/vps-cancel-catalog-for-size-refresh.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   quarantine:
@@ -30,7 +30,15 @@ jobs:
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -u - < deploy/vps/cancel-catalog-for-size-refresh.py
+            python3 -u - < deploy/vps/cancel-catalog-for-size-refresh.py 2>&1 | tee deploy/vps/catalog-size-refresh-output.txt
+      - name: Save quarantine result
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/catalog-size-refresh-output.txt
+          git commit -m "ops: record catalog size quarantine" || exit 0
+          git push origin HEAD:codex/vps-release-space
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps
