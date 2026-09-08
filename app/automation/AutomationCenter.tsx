@@ -288,7 +288,7 @@ export default function AutomationCenter() {
             {providerOptions.map((provider) => {
               const selected = targets.includes(provider.id);
               return (
-                <label className={selected ? "is-selected" : ""} key={provider.id}>
+                <label className={selected ? "is-selected" : ""} data-provider={provider.id} key={provider.id}>
                   <input type="checkbox" checked={selected} onChange={() => toggleTarget(provider.id)} />
                   <i>{provider.mark}</i><span>{provider.name}</span><b>{selected ? "✓" : "+"}</b>
                 </label>

@@ -60,6 +60,21 @@
 .automation-targets span { font-size: 11px; font-weight: 700; line-height: 1.2; }
 .automation-targets b { color: #7c8496; font-size: 12px; text-align: right; }
 .automation-targets .is-selected b { color: #3f49db; }
+.automation-targets label[data-provider="facebook"] i { background: #1877f2; color: #fff; }
+.automation-targets label[data-provider="facebook"]:hover, .automation-targets label[data-provider="facebook"].is-selected { background: rgba(24, 119, 242, .08); border-color: #1877f2; }
+.automation-targets label[data-provider="facebook"].is-selected b { color: #1877f2; }
+.automation-targets label[data-provider="zalo_personal"] i { background: #0068ff; color: #fff; }
+.automation-targets label[data-provider="zalo_personal"]:hover, .automation-targets label[data-provider="zalo_personal"].is-selected { background: rgba(0, 104, 255, .08); border-color: #0068ff; }
+.automation-targets label[data-provider="zalo_personal"].is-selected b { color: #0068ff; }
+.automation-targets label[data-provider="website"] i { background: linear-gradient(135deg, #4d56e8, #7a4ce0); color: #fff; }
+.automation-targets label[data-provider="website"]:hover, .automation-targets label[data-provider="website"].is-selected { background: rgba(77, 86, 232, .08); border-color: #5d64e8; }
+.automation-targets label[data-provider="website"].is-selected b { color: #4d56e8; }
+.automation-targets label[data-provider="tiktok_shop"] i { background: linear-gradient(135deg, #25f4ee 0 16%, #111 16% 80%, #fe2c55 80%); color: #fff; text-shadow: 1px 1px 0 #fe2c55; }
+.automation-targets label[data-provider="tiktok_shop"]:hover, .automation-targets label[data-provider="tiktok_shop"].is-selected { background: rgba(17, 17, 17, .055); border-color: #111; }
+.automation-targets label[data-provider="tiktok_shop"].is-selected b { color: #111; }
+.automation-targets label[data-provider="shopee"] i { background: #ee4d2d; color: #fff; }
+.automation-targets label[data-provider="shopee"]:hover, .automation-targets label[data-provider="shopee"].is-selected { background: rgba(238, 77, 45, .08); border-color: #ee4d2d; }
+.automation-targets label[data-provider="shopee"].is-selected b { color: #ee4d2d; }
 .automation-output-preview { background: #f7f8fc; border: 1px solid #eaedf3; border-radius: 10px; display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 18px; padding: 12px; }
 .automation-output-preview > div { display: grid; gap: 3px; padding: 0 12px; }
 .automation-output-preview > div + div { border-left: 1px solid #e0e4ec; }
