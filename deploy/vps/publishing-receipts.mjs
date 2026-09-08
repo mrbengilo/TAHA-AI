@@ -2,6 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
+import vm from "node:vm";
+import ts from "typescript";
 
 const settings = Object.fromEntries(readFileSync("/app/.dev.vars", "utf8").split(/\r?\n/).flatMap((line) => {
   const index = line.indexOf("=");
@@ -15,6 +17,16 @@ function query(sql) {
   return JSON.parse(raw)[0]?.results ?? [];
 }
 async function main() {
+  const policyModule = { exports: {} };
+  const compiled = ts.transpileModule(readFileSync('/app/lib/ai/shoe-content.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  new vm.Script(compiled).runInContext(vm.createContext({ module: policyModule, exports: policyModule.exports }));
+  const failures = query("SELECT j.id,j.payload_snapshot_json,d.id AS draft_id,d.version,d.title,d.body,d.hashtags_json,p.base_sku FROM publish_jobs j JOIN content_drafts d ON d.id=j.draft_id JOIN products p ON p.id=j.product_id WHERE j.workspace_id='00000000-0000-4000-8000-000000000001' AND j.error_code='CONTENT_PRICE_FORBIDDEN'");
+  report('PRICE_BLOCK_DETAILS', failures.map((row) => {
+    const payload = JSON.parse(row.payload_snapshot_json);
+    return { jobId: row.id, draftId: row.draft_id, version: row.version, sku: row.base_sku,
+      offendingLines: [payload.title ?? '', payload.message ?? '', ...(payload.hashtags ?? [])].join('\n').split('\n').filter(line => policyModule.exports.hasPriceDisclosure(line)),
+      currentDraftViolation: policyModule.exports.customerCopyViolation({title: row.title, body: row.body, hashtags: JSON.parse(row.hashtags_json)}) };
+  }));
   const [connection] = query("SELECT external_account_id,display_name,status,publish_mode,config_json,auth_ciphertext,auth_iv FROM channel_connections WHERE workspace_id='00000000-0000-4000-8000-000000000001' AND provider='facebook' AND status='connected' ORDER BY updated_at DESC LIMIT 1");
   if (!connection || !/^\d+$/.test(connection.external_account_id)) throw new Error("TRIAL_FACEBOOK_CONNECTION_INVALID");
   const pageId = connection.external_account_id;
