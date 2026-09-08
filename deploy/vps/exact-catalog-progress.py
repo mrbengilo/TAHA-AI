@@ -1,4 +1,4 @@
-"""Read-only progress for the exact SKU/size catalog accelerator. Probe 40."""
+"""Read-only progress for the exact SKU/size catalog accelerator. Probe 41."""
 import json
 from pathlib import Path
 import sqlite3
@@ -28,6 +28,8 @@ def main():
     ids = list(expected)
     placeholders = ','.join('?' for _ in ids)
     for path in Path('/var/lib/taha-ai').rglob('*.sqlite'):
+        if 'ops-recovery' in path.parts:
+            continue
         with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as db:
             db.row_factory = sqlite3.Row
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
