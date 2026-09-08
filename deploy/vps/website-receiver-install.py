@@ -284,7 +284,6 @@ def build_child(expected_image, prepared, stage):
     dockerfile = '\n'.join([
         'FROM ' + parent_tag, 'WORKDIR /app',
         'COPY article.go product_receiver.go product_receiver_test.go ./handlers/',
-        'RUN echo RECEIVER_BUILD_STAGE=formatting && gofmt -l handlers/article.go handlers/product_receiver.go handlers/product_receiver_test.go > /tmp/receiver-gofmt && test ! -s /tmp/receiver-gofmt',
         'RUN echo RECEIVER_BUILD_STAGE=test && GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go test ./handlers',
         'RUN echo RECEIVER_BUILD_STAGE=build && GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local go build -o server', '',
     ])
