@@ -1,0 +1,69 @@
+name: Restore full website photo albums
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/vps-website-capacity.yml
+      - deploy/vps/website-upload-capacity.py
+      - deploy/vps/website-capacity-retry.mjs
+      - deploy/vps/catalog-readiness-diagnose.mjs
+permissions:
+  contents: read
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/main' && github.repository == 'mrbengilo/TAHA-AI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate receiver upload route scope
+        run: python3 -B -m unittest discover -s tests -p 'vps_website_capacity_test.py' -v
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Read exact product readiness without publishing
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'docker exec -i taha-ai node --input-type=module -' < deploy/vps/catalog-readiness-diagnose.mjs
+      - name: Stage and verify the signed receiver upload capacity
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -B -u - --apply < deploy/vps/website-upload-capacity.py
+      - name: Deliver only confirmed size rejections using their original keys
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'umask 077; cat > /var/tmp/taha-website-capacity-retry.mjs' < deploy/vps/website-capacity-retry.mjs
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          trap 'systemctl start taha-ai-cron.timer; rm -f /var/tmp/taha-website-capacity-retry.mjs' EXIT
+          systemctl stop taha-ai-cron.timer
+          for attempt in $(seq 1 90); do
+            state=$(systemctl show -p ActiveState --value taha-ai-cron.service)
+            case "$state" in active|activating|deactivating) sleep 2 ;; *) break ;; esac
+          done
+          case "$state" in active|activating|deactivating) exit 26 ;; esac
+          docker exec -i taha-ai node --input-type=module - < /var/tmp/taha-website-capacity-retry.mjs
+          docker exec -i taha-ai node --input-type=module - status < /var/www/taha-ai/deploy/vps/catalog-automation-enable.mjs
+          REMOTE
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
