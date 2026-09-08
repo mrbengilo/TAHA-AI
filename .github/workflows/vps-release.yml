@@ -9,6 +9,9 @@ on:
       - .github/workflows/vps-website-diagnose.yml
       - deploy/vps/website-runtime-diagnose.py
       - deploy/vps/website-state-diagnose.mjs
+      - .github/workflows/vps-website-media.yml
+      - deploy/vps/website-media-repair.py
+      - tests/vps_website_media_test.py
   workflow_dispatch:
     inputs:
       run_facebook_trial:
