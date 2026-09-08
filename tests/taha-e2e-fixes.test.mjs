@@ -71,3 +71,11 @@ test("channel selectors use each platform's brand color", () => {
   assert.match(css, /data-provider="shopee"/);
   assert.match(css, /#ee4d2d/);
 });
+
+test("Facebook repost controls remain visible before any post is eligible", () => {
+  const ui = read("app/automation/FacebookSchedulingPanel.tsx");
+  assert.match(ui, /<option value="">Chưa có sản phẩm đủ điều kiện<\/option>/);
+  assert.match(ui, /className="facebook-primary-button is-repost"/);
+  assert.match(ui, /"Đăng lại theo lịch"/);
+  assert.doesNotMatch(ui, /\{products\.length \? <>/);
+});
