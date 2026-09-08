@@ -184,15 +184,20 @@ export default function FacebookSchedulingPanel() {
           <div className="facebook-admin-box-heading">
             <div><strong>Đăng lại bài Facebook</strong><span>Chỉ hiển thị sản phẩm đã đăng thành công</span></div>
           </div>
-          {products.length ? <>
-            <label className="facebook-wide-field"><span>Sản phẩm đã đăng</span><select value={repostProductId} onChange={(event) => setRepostProductId(event.target.value)}>{products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name}</option>)}</select></label>
-            <div className="facebook-plan-fields">
-              <label><span>Ngày đăng lại</span><input type="date" min={vietnamDate()} value={repostDate} onChange={(event) => setRepostDate(event.target.value)} /></label>
-              <label><span>Giờ đăng lại</span><input type="time" value={repostTime} onChange={(event) => setRepostTime(event.target.value)} /></label>
-            </div>
-            <p className="facebook-repost-note">Dùng lại nội dung và toàn bộ ảnh của lần đăng Facebook thành công gần nhất; không tạo ảnh hoặc viết lại bài.</p>
-            <button className="facebook-primary-button is-repost" type="button" aria-busy={busyAction === "repost"} onClick={scheduleRepost} disabled={loading || isPending || busyAction !== null || !repostProductId || !repostTime}>{busyAction === "repost" ? "Đang lên lịch…" : "Đăng lại theo lịch"}</button>
-          </> : <div className="automation-empty"><strong>Chưa có bài đủ điều kiện đăng lại</strong><span>Sản phẩm sẽ xuất hiện tại đây sau khi Facebook xác nhận đăng thành công.</span></div>}
+          <label className="facebook-wide-field">
+            <span>Sản phẩm đã đăng</span>
+            <select value={repostProductId} onChange={(event) => setRepostProductId(event.target.value)} disabled={loading || !products.length}>
+              {!products.length ? <option value="">Chưa có sản phẩm đủ điều kiện</option> : null}
+              {products.map((product) => <option key={product.id} value={product.id}>{product.sku} — {product.name}</option>)}
+            </select>
+          </label>
+          <div className="facebook-plan-fields">
+            <label><span>Ngày đăng lại</span><input type="date" min={vietnamDate()} value={repostDate} onChange={(event) => setRepostDate(event.target.value)} /></label>
+            <label><span>Giờ đăng lại</span><input type="time" value={repostTime} onChange={(event) => setRepostTime(event.target.value)} /></label>
+          </div>
+          {!loading && !products.length ? <div className="automation-empty"><strong>Chưa có bài đủ điều kiện đăng lại</strong><span>Nút vẫn hiển thị và sẽ tự mở khóa khi Facebook xác nhận một sản phẩm đã đăng thành công.</span></div> : null}
+          <p className="facebook-repost-note">Dùng lại nội dung và toàn bộ ảnh của lần đăng Facebook thành công gần nhất; không tạo ảnh hoặc viết lại bài.</p>
+          <button className="facebook-primary-button is-repost" type="button" aria-busy={busyAction === "repost"} onClick={scheduleRepost} disabled={loading || isPending || busyAction !== null || !repostProductId || !repostTime}>{busyAction === "repost" ? "Đang lên lịch…" : "Đăng lại theo lịch"}</button>
         </section>
       </div>
     </section>
