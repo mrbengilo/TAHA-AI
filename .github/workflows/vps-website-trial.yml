@@ -1,0 +1,34 @@
+name: TAHA website trial and content reference
+on:
+  push:
+    branches: [codex/test-website-publish-sep8]
+    paths: [.github/workflows/vps-website-trial.yml, deploy/vps/website-trial-inspect.mjs]
+permissions:
+  contents: read
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Read live website readiness and the August 28 reference
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'docker exec -i taha-ai node --input-type=module' < deploy/vps/website-trial-inspect.mjs
+      - name: Remove runner key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
