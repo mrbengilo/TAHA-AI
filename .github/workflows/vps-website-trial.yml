@@ -2,7 +2,7 @@ name: TAHA website trial and content reference
 on:
   push:
     branches: [codex/test-website-publish-sep8]
-    paths: [.github/workflows/vps-website-trial.yml, deploy/vps/website-trial-inspect.mjs]
+    paths: [.github/workflows/vps-website-trial.yml, deploy/vps/website-trial-inspect.mjs, deploy/vps/correct-ph0027-reference.mjs]
 permissions:
   contents: read
 concurrency:
@@ -24,11 +24,11 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Read live website readiness and the August 28 reference
+      - name: Correct the existing PH0027 post to the August 28 structure
         run: |
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            'docker exec -i taha-ai node --input-type=module' < deploy/vps/website-trial-inspect.mjs
+            'flock -n /var/lock/taha-ai-release.lock docker exec -i taha-ai node --input-type=module' < deploy/vps/correct-ph0027-reference.mjs
       - name: Remove runner key
         if: always()
         run: rm -f ~/.ssh/id_taha_vps
