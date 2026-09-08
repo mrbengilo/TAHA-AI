@@ -23,7 +23,7 @@ type ChannelGuide = {
   note?: string;
 };
 
-const appOrigin = "https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site";
+const appOrigin = "https://tahashoes.store";
 
 const channels: ChannelGuide[] = [
   {

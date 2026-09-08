@@ -2,14 +2,14 @@
 
 Tài liệu này là danh sách thông tin chủ hệ thống cần chuẩn bị. Không gửi App Secret, Partner Key, access token, refresh token, cookie hoặc mã QR qua chat. Nhập các giá trị bí mật trực tiếp vào secret manager hoặc tệp môi trường chỉ tồn tại trên máy chủ.
 
-Domain HTTPS đang triển khai là `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site`. Hướng dẫn thao tác chi tiết xem tại [CHANNEL_CONNECTION_GUIDE.md](./CHANNEL_CONNECTION_GUIDE.md).
+Domain HTTPS production là `https://tahashoes.store`. Hướng dẫn thao tác chi tiết xem tại [CHANNEL_CONNECTION_GUIDE.md](./CHANNEL_CONNECTION_GUIDE.md).
 
 ## 1. Google Drive và Google Sheet
 
 - Tạo/chọn dự án tại [Google Cloud – OAuth Clients](https://console.cloud.google.com/auth/clients).
 - Bật Google Drive API và Google Sheets API.
 - Tạo OAuth Client loại **Web application**.
-- Callback cần đăng ký: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/google/callback`.
+- Callback cần đăng ký: `https://tahashoes.store/api/integrations/google/callback`.
 - Scope đọc: `openid email profile https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly`.
 - Chuẩn bị: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, ID thư mục Drive, ID Google Sheet và tên/range sheet.
 - Tài khoản kết nối phải có quyền đọc thư mục và Sheet đã chọn.
@@ -17,7 +17,7 @@ Domain HTTPS đang triển khai là `https://taha-ai-commerce-vn.mrbengilo-76.ch
 ## 2. Facebook Page
 
 - Tạo/chọn ứng dụng tại [Meta for Developers – My Apps](https://developers.facebook.com/apps/).
-- Thêm Facebook Login và đăng ký callback: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/facebook/callback`.
+- Thêm Facebook Login và đăng ký callback: `https://tahashoes.store/api/integrations/facebook/callback`.
 - Xin các quyền: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`.
 - Chuẩn bị: `META_APP_ID`, `META_APP_SECRET`, phiên bản Graph API đang dùng.
 - Người bấm kết nối phải có task tạo nội dung trên Facebook Page.
@@ -33,14 +33,14 @@ Domain HTTPS đang triển khai là `https://taha-ai-commerce-vn.mrbengilo-76.ch
 
 - Đăng ký/chọn ứng dụng tại [Shopee Open Platform](https://open.shopee.com/).
 - Thị trường: Việt Nam; cần Shop/Auth, Product read/write, Media Space và Push.
-- Callback cần đăng ký: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/shopee/callback`.
+- Callback cần đăng ký: `https://tahashoes.store/api/integrations/shopee/callback`.
 - Chuẩn bị: `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, API base URL của ứng dụng live.
 - Sau khi ứng dụng được duyệt, cần thêm ánh xạ danh mục, thuộc tính bắt buộc, vận chuyển và ảnh Media Space trước khi bật tạo listing.
 
 ## 5. TikTok Shop
 
 - Tạo Custom App tại [TikTok Shop Partner Center](https://partner.tiktokshop.com/).
-- Callback cần đăng ký: `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/api/integrations/tiktok-shop/callback`.
+- Callback cần đăng ký: `https://tahashoes.store/api/integrations/tiktok-shop/callback`.
 - Quyền tối thiểu: `seller.authorization.info`, `seller.product.basic`, `seller.product.write`.
 - Chuẩn bị: `TIKTOK_SHOP_APP_KEY`, `TIKTOK_SHOP_APP_SECRET`, `TIKTOK_SHOP_SERVICE_ID`.
 - Shop cần hoàn tất KYC/audit; sản phẩm phải có category, thuộc tính và ảnh upload hợp lệ.
@@ -53,7 +53,7 @@ Domain HTTPS đang triển khai là `https://taha-ai-commerce-vn.mrbengilo-76.ch
 
 ## Sau khi nhập cấu hình trên máy chủ
 
-1. Mở `https://taha-ai-commerce-vn.mrbengilo-76.chatgpt.site/connections`.
+1. Mở `https://tahashoes.store/connections`.
 2. Bấm **Kết nối** ở Google, Facebook, Shopee và TikTok Shop để cấp quyền trên trang chính thức.
 3. Bấm **Bật trợ lý** cho Zalo cá nhân.
 4. Kết nối website và thử một sản phẩm/bài viết.

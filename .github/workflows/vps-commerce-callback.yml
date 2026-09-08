@@ -1,0 +1,43 @@
+name: Repair commerce OAuth callbacks
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/vps-commerce-callback.yml
+      - deploy/vps/commerce-callback-repair.py
+      - tests/vps_commerce_callback_test.py
+permissions:
+  contents: read
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/main' && github.repository == 'mrbengilo/TAHA-AI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate exact callback route scope
+        run: python3 -B -m unittest discover -s tests -p 'vps_commerce_callback_test.py' -v
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Expose signed one-time commerce callbacks
+        run: |
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -B -u - --apply < deploy/vps/commerce-callback-repair.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps

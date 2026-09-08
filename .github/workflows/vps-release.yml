@@ -21,6 +21,9 @@ on:
       - deploy/vps/resume-catalog-release.py
       - .github/workflows/vps-commerce-diagnose.yml
       - deploy/vps/commerce-connection-diagnose.mjs
+      - .github/workflows/vps-commerce-callback.yml
+      - deploy/vps/commerce-callback-repair.py
+      - tests/vps_commerce_callback_test.py
   workflow_dispatch:
     inputs:
       run_facebook_trial:
