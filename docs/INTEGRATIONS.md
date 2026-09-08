@@ -113,11 +113,15 @@ TAHA AI gửi:
 
 ```text
 Content-Type: application/json
-X-TAHA-Signature: sha256=<HMAC-SHA256(raw-body)>
+X-TAHA-Timestamp: <UNIX_SECONDS>
+X-TAHA-Signature: sha256=<HMAC-SHA256(timestamp + "." + raw-body)>
 X-TAHA-Idempotency-Key: <unique-key>
 ```
 
-Website phải kiểm tra chữ ký bằng `WEBSITE_WEBHOOK_SECRET`, chống xử lý trùng và trả JSON có thể gồm `id` và `url`.
+Website phải kiểm tra chữ ký bằng `WEBSITE_WEBHOOK_SECRET`, từ chối timestamp quá cũ và
+chống xử lý trùng bằng idempotency key. Thành công phải trả HTTP `200` hoặc `201` cùng
+JSON `{ "id": "...", "url": "https://..." }`; `url` phải thuộc đúng origin của
+`WEBSITE_BASE_URL`. TAHA AI chỉ ghi nhận đã đăng khi biên nhận này hợp lệ.
 
 Sau khi receiver đã được triển khai và kiểm thử, đặt `WEBSITE_READY_BACKFILL_ENABLED=1`.
 Khi đó mọi SKU có bài Facebook trạng thái `approved` nhưng chưa có bản website sẽ

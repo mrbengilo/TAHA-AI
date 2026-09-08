@@ -6,7 +6,7 @@ import ts from "typescript";
 
 async function loadOpenAiClient(runtime = {}) {
   const modules = {};
-  for (const name of ["shoe-content", "shoe-image-prompts", "openai"]) {
+  for (const name of ["shoe-content", "shoe-image-prompts", "facebook-content", "openai"]) {
     const source = await readFile(new URL(`../lib/ai/${name}.ts`, import.meta.url), "utf8");
     const compiled = ts.transpileModule(source, {
       compilerOptions: {
@@ -35,7 +35,12 @@ async function loadOpenAiClient(runtime = {}) {
 function validGeneratedContent() {
   const channel = {
     title: "Giày TAHA mới",
-    body: "Mẫu giày TAHA phù hợp cho ngày năng động.",
+    body: [
+      "👟 Sneaker TAHA giúp hoàn thiện phong cách thường ngày của bạn.",
+      "🎨 Thiết kế: Kiểu dáng sneaker gọn gàng dễ kết hợp cùng trang phục thường ngày.",
+      "✨ Ưu điểm: Phong cách giản dị giúp bạn lựa chọn trang phục đi kèm thuận tiện hơn.",
+      "🚶 Ứng dụng: Kết hợp cùng quần jeans hoặc trang phục casual cho những buổi dạo phố.",
+    ].join("\n\n"),
     hashtags: ["#TAHAShoes", "#GiayDep"],
   };
   return {
@@ -319,6 +324,100 @@ test("generation rejects a SKU copied from another product", async () => {
   await assert.rejects(client.generateProductContent({
     product: { sku: "TAHA-001", name: "Sneaker", sizes: ["39"] }, targetProviders: ["facebook"],
   }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_SKU_MISMATCH");
+});
+
+test("Facebook uses the August 28 structure and verified store footer with this product's facts", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const generated = {
+    sku: "PH0027",
+    productDescription: "Lituo Sport PH0027 là mẫu sneaker dành cho phong cách thường ngày.",
+    hashtags: ["#TAHASHOES", "#PH0027", "#LituoSport"],
+    channels: { facebook: {
+      title: "👟 PH0027 – Sneaker Lituo Sport cho phong cách thường ngày",
+      body: [
+        "👟 Lituo Sport PH0027 – một gợi ý sneaker cho phong cách thường ngày.",
+        "🎨 Thiết kế: Phong cách sneaker mang đến điểm nhấn thể thao cho bộ trang phục của bạn.",
+        "✨ Ưu điểm: Định hướng thoải mái trong thiết kế giúp bạn lựa chọn đôi giày cho sinh hoạt hằng ngày.",
+        "🚶 Ứng dụng: Phối cùng quần jeans hoặc trang phục casual để hoàn thiện một diện mạo giản dị khi dạo phố.",
+      ].join("\n\n"),
+      hashtags: ["#TAHASHOES", "#PH0027", "#LituoSport"],
+    } },
+  };
+  let request;
+  const result = await client.generateProductContent({
+    product: {
+      sku: "PH0027", brand: "Lituo Sport",
+      name: "Lituo Sport Sneaker Thoải Mái & Phong Cách - Bảo Hành 12 Tháng - Quà Tặng Khử Mùi & Vớ Thể Thao",
+      sizes: ["36", "37", "38", "39", "40"], colors: ["Kem", "Tím"],
+    },
+    targetProviders: ["facebook"],
+  }, async (_url, init) => {
+    request = JSON.parse(init.body);
+    return Response.json(responsesEnvelope(generated));
+  });
+  const text = result.content.channels.facebook.body;
+  assert.ok(text.startsWith(generated.channels.facebook.body));
+  for (const phrase of [
+    "Thiết kế:", "Ưu điểm:", "Ứng dụng:", "Mã sản phẩm: PH0027", "Màu: Kem, Tím", "Size hiện có: 36, 37, 38, 39, 40",
+    "Quà tặng kèm: khử mùi + vớ thể thao", "bọc chống sốc và hộp bảo vệ", "Bảo hành 12 tháng", "Miễn phí giao hàng toàn quốc",
+    "Đổi size miễn phí trong 7 ngày", "kiểm tra hàng trước khi nhận", "nhận hàng trước, thanh toán sau", "THÔNG TIN LIÊN HỆ",
+    "0765.109.784", "https://tahashoes.vn", "https://www.tiktok.com/@tahashoes.vn", "https://shopee.vn/bengilo#product_list",
+  ]) assert.ok(text.includes(phrase), phrase);
+  assert.doesNotMatch(text, /PH0073|40–45|màu đen|chunky|gym|41 →|42 →|43 →|44 →/iu);
+  assert.equal(text.split("Mã sản phẩm: PH0027").length - 1, 1);
+  assert.equal(text.split("THÔNG TIN LIÊN HỆ").length - 1, 1);
+  assert.ok(text.indexOf("Ứng dụng:") < text.indexOf("Mã sản phẩm: PH0027"));
+  assert.ok(text.indexOf("Mã sản phẩm: PH0027") < text.indexOf("Quà tặng kèm:"));
+  const instructions = request.input[0].content[0].text;
+  assert.match(instructions, /28\/08\/2026/);
+  assert.match(instructions, /Không chỉ viết tên sản phẩm, SKU, size rồi mời nhắn tin/);
+  assert.match(request.input[1].content[0].text, /facebookStoreGuidance/);
+});
+
+test("Facebook structure gate rejects sparse copy, empty labels, repeated content and missing opening", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const valid = validGeneratedContent().channels.facebook.body;
+  const cases = [
+    "Giày TAHA-001\nMã sản phẩm: TAHA-001\nNhắn tin để được tư vấn.",
+    "Sneaker TAHA-001\nThiết kế:\nƯu điểm:\nỨng dụng:",
+    "Sneaker TAHA-001\nThiết kế: Đẹp.\nƯu điểm: Tốt.\nỨng dụng: Đi chơi.",
+    "Sneaker TAHA-001\nThiết kế: Sản phẩm dành cho phong cách thường ngày của bạn.\nƯu điểm: Sản phẩm dành cho phong cách thường ngày của bạn.\nỨng dụng: Sản phẩm dành cho phong cách thường ngày của bạn.",
+    valid.slice(valid.indexOf("🎨 Thiết kế:")),
+    valid.replace("Ưu điểm:", "Thông tin:"),
+    `${valid}\nThiết kế: Một đoạn thừa lặp nhãn của phần thiết kế trước đó.`,
+  ];
+  for (const body of cases) {
+    const content = validGeneratedContent();
+    content.channels = { facebook: { ...content.channels.facebook, body } };
+    await assert.rejects(client.generateProductContent({
+      product: { sku: "TAHA-001", name: "Sneaker" }, targetProviders: ["facebook"],
+    }, async () => Response.json(responsesEnvelope(content))), (error) => error.code === "OPENAI_FACEBOOK_STRUCTURE_INCOMPLETE", body);
+  }
+});
+
+test("Facebook footer never invents product gifts, warranty, sizes or colors from the reference", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const generated = validGeneratedContent();
+  generated.channels = { facebook: generated.channels.facebook };
+  for (const description of [undefined, "Không bảo hành 12 tháng. Không có quà tặng khử mùi và vớ thể thao."]) {
+    const result = await client.generateProductContent({
+      product: { sku: "TAHA-001", name: "Sneaker TAHA", description }, targetProviders: ["facebook"],
+    }, async () => Response.json(responsesEnvelope(generated)));
+    const body = result.content.channels.facebook.body;
+    assert.doesNotMatch(body, /Quà tặng kèm:|Bảo hành \d|Màu:|Size hiện có:|PH0073|40–45|khử mùi|vớ thể thao/iu);
+    assert.match(body, /Đổi size miễn phí trong 7 ngày/);
+  }
+});
+
+test("Facebook-only structure and footer do not change other channel requirements", async () => {
+  const client = await loadOpenAiClient({ OPENAI_API_KEY: "sk-test-not-real" });
+  const generated = validGeneratedContent();
+  generated.channels = { website: { title: "Sneaker TAHA-001", body: "Mô tả sản phẩm TAHA-001.", hashtags: ["#TAHA001"] } };
+  const result = await client.generateProductContent({
+    product: { sku: "TAHA-001", name: "Sneaker TAHA" }, targetProviders: ["website"],
+  }, async () => Response.json(responsesEnvelope(generated)));
+  assert.match(result.content.channels.website.body, /VỆ SINH & BẢO QUẢN/);
+  assert.doesNotMatch(result.content.channels.website.body, /THÔNG TIN LIÊN HỆ/);
 });
 
 test("image generation accepts the four requested scenes and rejects retired layouts before API calls", async () => {
