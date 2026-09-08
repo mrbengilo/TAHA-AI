@@ -4,6 +4,7 @@ import {
   listFacebookPublishingPlans,
   saveFacebookPublishingPlan,
 } from "../../../../lib/facebook-publishing-plans";
+import { materializeFacebookPublishingPlan } from "../../../../lib/daily-automation";
 import { isOperatorRequest } from "../../../../lib/operator-auth";
 
 export const dynamic = "force-dynamic";
@@ -31,9 +32,10 @@ export async function PUT(request: Request) {
   }
   const body = await request.json().catch(() => null);
   try {
-    return ok(await saveFacebookPublishingPlan(body));
+    const saved = await saveFacebookPublishingPlan(body);
+    const preparation = await materializeFacebookPublishingPlan(saved.plan.date);
+    return ok({ ...saved, preparation });
   } catch (error) {
     return errorResponse(error);
   }
 }
-

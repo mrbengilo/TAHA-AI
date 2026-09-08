@@ -870,3 +870,227 @@
 .ui-panel-divider {
   border-top: 1px solid #edf0f5;
 }
+
+/* Publishing calendar and complete per-channel activity history */
+.publication-calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.55fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.publication-calendar,
+.publication-activity {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.publication-day {
+  overflow: hidden;
+  border: 1px solid #dfe5ef;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.publication-day-header {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 15px;
+  border-bottom: 1px solid #e8ecf3;
+  background: #f7f8ff;
+}
+
+.publication-day-header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.publication-day-header time {
+  color: #202a40;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.publication-day-header small {
+  color: #8791a4;
+  font-size: 10px;
+}
+
+.publication-day-header > span,
+.publication-channel-header > b {
+  min-width: 52px;
+  padding: 5px 9px;
+  color: #4338ca;
+  border: 1px solid #d8daf8;
+  border-radius: 999px;
+  background: #f0f1ff;
+  font-size: 10px;
+  font-weight: 850;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.publication-channel-group + .publication-channel-group {
+  border-top: 1px solid #e8ecf3;
+}
+
+.publication-channel-header {
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 15px;
+  background: #fbfcfe;
+}
+
+.publication-channel-header .ui-provider-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 9px;
+}
+
+.publication-channel-header > strong {
+  color: #313a4f;
+  font-size: 12px;
+}
+
+.publication-entry {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
+.publication-entry .publication-time {
+  color: #202a40;
+  font-size: 13px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.publication-entry strong,
+.activity-entry strong {
+  overflow: visible;
+  text-overflow: initial;
+  white-space: normal;
+}
+
+.publication-product-link {
+  color: #263149;
+  text-decoration: none;
+}
+
+.publication-product-link:hover {
+  color: #4338ca;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.activity-channel-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 9px;
+  padding: 16px 16px 0;
+  overflow-x: auto;
+}
+
+.activity-channel-tab {
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  color: #465066;
+  border: 1px solid #dfe4ed;
+  border-radius: 11px;
+  background: #fff;
+  text-decoration: none;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+}
+
+.activity-channel-tab:hover {
+  border-color: #aeb7ca;
+  box-shadow: 0 5px 14px rgba(28, 40, 67, .09);
+  transform: translateY(-1px);
+}
+
+.activity-channel-tab:active {
+  transform: translateY(1px);
+}
+
+.activity-channel-tab .ui-provider-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 8px;
+}
+
+.activity-channel-tab strong,
+.activity-channel-tab b {
+  font-size: 11px;
+}
+
+.activity-channel-tab b {
+  min-width: 22px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #f0f2f6;
+  text-align: center;
+}
+
+.activity-channel-tab.facebook.is-active { color: #fff; border-color: #1877f2; background: #1877f2; box-shadow: 0 7px 17px rgba(24, 119, 242, .2); }
+.activity-channel-tab.website.is-active { color: #fff; border-color: #4f46e5; background: linear-gradient(135deg, #4f46e5, #7656de); box-shadow: 0 7px 17px rgba(79, 70, 229, .2); }
+.activity-channel-tab.zalo_personal.is-active { color: #fff; border-color: #0068ff; background: #0068ff; box-shadow: 0 7px 17px rgba(0, 104, 255, .2); }
+.activity-channel-tab.shopee.is-active { color: #fff; border-color: #ee4d2d; background: #ee4d2d; box-shadow: 0 7px 17px rgba(238, 77, 45, .2); }
+.activity-channel-tab.tiktok_shop.is-active { color: #fff; border-color: #111; background: #111; box-shadow: -3px 0 #25f4ee, 3px 0 #fe2c55, 0 7px 17px rgba(17, 17, 17, .2); }
+.activity-channel-tab.is-active .ui-provider-badge,
+.activity-channel-tab.is-active b { color: #fff; background: rgba(255, 255, 255, .16); }
+
+.activity-log-heading {
+  margin-top: 16px;
+  border-top: 1px solid #edf0f5;
+}
+
+.activity-day .ui-list {
+  border-top: 0;
+}
+
+.activity-day {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+}
+
+.activity-entry {
+  min-height: 76px;
+}
+
+.activity-external-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  font-size: 10px;
+}
+
+@media (max-width: 1120px) {
+  .publication-calendar-layout { grid-template-columns: 1fr; }
+  .activity-channel-tabs { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .publication-calendar,
+  .publication-activity { padding: 10px; }
+  .activity-channel-tabs { grid-template-columns: repeat(2, minmax(130px, 1fr)); padding: 10px 10px 0; }
+}
+
+@media (max-width: 480px) {
+  .activity-channel-tabs { grid-template-columns: 1fr; }
+  .publication-entry { grid-template-columns: 48px minmax(0, 1fr); }
+  .publication-entry > .ui-status { grid-column: 2; justify-self: start; }
+}

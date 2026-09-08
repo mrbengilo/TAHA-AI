@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition, type MouseEvent } from "react";
 
 type Plan = { date: string; times: string[]; updatedAt: number };
 type RepostProduct = { id: string; sku: string; name: string; lastPublishedAt: number };
+type PlanPreparation = { requested?: number; queued?: number; complete?: boolean; reason?: string; message?: string };
 
 const suggestedTimes = ["08:00", "12:00", "18:00", "20:00", "09:30", "14:30", "16:30", "21:30"];
 
@@ -35,6 +36,14 @@ function nextSuggestedTime(current: string[]) {
     if (!current.includes(candidate)) return candidate;
   }
   return "23:59";
+}
+
+function openNativePicker(event: MouseEvent<HTMLInputElement>) {
+  try {
+    event.currentTarget.showPicker?.();
+  } catch {
+    // Some browsers open the native picker themselves before this click handler runs.
+  }
 }
 
 export default function FacebookSchedulingPanel() {
@@ -117,7 +126,18 @@ export default function FacebookSchedulingPanel() {
           body: JSON.stringify({ date: planDate, postCount, times }),
         });
         setPlans(Array.isArray(data.plans) ? data.plans as Plan[] : plans);
-        setNotice(`Đã lưu ${postCount} bài Facebook ngày ${planDate} vào ${times.join(", ")}.`);
+        const preparation = data.preparation && typeof data.preparation === "object"
+          ? data.preparation as PlanPreparation
+          : null;
+        setNotice(preparation?.complete
+          ? `Đã lưu đủ ${postCount} bài Facebook ngày ${planDate}; hệ thống đang chuẩn bị sản phẩm cho ${times.join(", ")}.`
+          : `Đã lưu ${postCount} khung giờ Facebook ngày ${planDate}: ${times.join(", ")}.`);
+        if (preparation && !preparation.complete) {
+          setError(preparation.message
+            || (preparation.reason === "no_ready_product"
+              ? "Chưa đủ sản phẩm có ảnh gốc sẵn sàng để gán hết các khung giờ. Hệ thống sẽ tự bổ sung khi Google Drive và Sheet có sản phẩm hợp lệ."
+              : "Một số khung giờ đang chờ hệ thống chuẩn bị sản phẩm; lịch đã được lưu và không bị mất."));
+        }
       } catch (saveError) {
         setError(saveError instanceof Error ? saveError.message : "Không thể lưu lịch Facebook.");
       } finally {
@@ -164,12 +184,12 @@ export default function FacebookSchedulingPanel() {
             <div><strong>Cài số bài theo ngày</strong><span>Mỗi bài tương ứng một khung giờ riêng</span></div>
           </div>
           <div className="facebook-plan-fields">
-            <label><span>Ngày đăng</span><input type="date" min={vietnamDate()} value={planDate} onChange={(event) => changePlanDate(event.target.value)} /></label>
+            <label><span>Ngày đăng</span><input className="facebook-picker-input" type="date" min={vietnamDate()} value={planDate} onClick={openNativePicker} onChange={(event) => changePlanDate(event.target.value)} /></label>
             <label><span>Số lượng bài</span><input type="number" min="1" max="24" value={postCount} onChange={(event) => changePostCount(event.target.value)} /></label>
           </div>
           <div className="facebook-time-grid">
             {times.map((time, index) => (
-              <label key={index}><span>Bài {index + 1}</span><input type="time" value={time} onChange={(event) => setTimes((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} /></label>
+              <label key={index}><span>Bài {index + 1}</span><input className="facebook-picker-input" type="time" value={time} onClick={openNativePicker} onChange={(event) => setTimes((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} /></label>
             ))}
           </div>
           <p className="facebook-repost-note">Nếu chọn hôm nay, mỗi giờ đăng cần cách hiện tại ít nhất 30 phút để hệ thống chuẩn bị nội dung và toàn bộ ảnh đúng SKU.</p>
@@ -192,8 +212,8 @@ export default function FacebookSchedulingPanel() {
             </select>
           </label>
           <div className="facebook-plan-fields">
-            <label><span>Ngày đăng lại</span><input type="date" min={vietnamDate()} value={repostDate} onChange={(event) => setRepostDate(event.target.value)} /></label>
-            <label><span>Giờ đăng lại</span><input type="time" value={repostTime} onChange={(event) => setRepostTime(event.target.value)} /></label>
+            <label><span>Ngày đăng lại</span><input className="facebook-picker-input" type="date" min={vietnamDate()} value={repostDate} onClick={openNativePicker} onChange={(event) => setRepostDate(event.target.value)} /></label>
+            <label><span>Giờ đăng lại</span><input className="facebook-picker-input" type="time" value={repostTime} onClick={openNativePicker} onChange={(event) => setRepostTime(event.target.value)} /></label>
           </div>
           {!loading && !products.length ? <div className="automation-empty"><strong>Chưa có bài đủ điều kiện đăng lại</strong><span>Nút vẫn hiển thị và sẽ tự mở khóa khi Facebook xác nhận một sản phẩm đã đăng thành công.</span></div> : null}
           <p className="facebook-repost-note">Dùng lại nội dung và toàn bộ ảnh của lần đăng Facebook thành công gần nhất; không tạo ảnh hoặc viết lại bài.</p>

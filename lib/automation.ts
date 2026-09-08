@@ -78,6 +78,11 @@ export type QueueAutomationInput = {
   scheduledFor?: unknown;
 };
 
+export type QueueAutomationOptions = {
+  /** A caller that just verified this exact Page may reuse that result for one bounded batch. */
+  verifiedFacebookConnectionId?: string;
+};
+
 export type AutomationWorkerResult = {
   checked: number;
   leased: number;
@@ -216,7 +221,11 @@ function automationAlreadyRunning() {
   );
 }
 
-export async function queueAutomationRun(input: QueueAutomationInput, actorId?: string | null) {
+export async function queueAutomationRun(
+  input: QueueAutomationInput,
+  actorId?: string | null,
+  options: QueueAutomationOptions = {},
+) {
   await ensureWorkspace();
   const db = database();
   const productId = requiredText(input.productId, "productId", 120);
@@ -258,7 +267,7 @@ export async function queueAutomationRun(input: QueueAutomationInput, actorId?: 
 
   if (await activeAutomationRun(db, productId)) throw automationAlreadyRunning();
 
-  if (!prepareOnly && targetConnections.facebook) {
+  if (!prepareOnly && targetConnections.facebook && options.verifiedFacebookConnectionId !== targetConnections.facebook) {
     const permissions = await verifyFacebookConnection(targetConnections.facebook);
     if (!permissions.ready) throw new AutomationError(permissions.code || "FACEBOOK_VERIFICATION_FAILED", permissions.message || "Facebook chưa có đủ quyền đăng bài. Hãy kiểm tra kết nối Page.", 409);
   }
