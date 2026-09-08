@@ -4,6 +4,7 @@ import { ensureDailyProductAutomation } from "../../../../../lib/daily-automatio
 import { runPublishDispatcher } from "../../../../../lib/dispatcher";
 import { getRuntimeEnv } from "../../../../../lib/integrations/env";
 import { runSchedulerTick } from "../../../../../lib/scheduler";
+import { ensureWebsiteReadyBackfill } from "../../../../../lib/website-backfill";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,11 @@ export async function POST(request: Request) {
   if (!provided || !(await constantTimeEqual(provided, secret))) return fail("UNAUTHORIZED", "Yêu cầu lịch chạy nền không hợp lệ.", 401);
 
   try {
+    // Website listings are not rate-limited to one per day: every newly ready
+    // product is made due now, then handled by the same idempotent scheduler.
+    let website: Awaited<ReturnType<typeof ensureWebsiteReadyBackfill>> | { errorCode: string };
+    try { website = await ensureWebsiteReadyBackfill(); }
+    catch { website = { errorCode: "WEBSITE_READY_BACKFILL_FAILED" }; }
     // Deadlines first: enqueue and dispatch content that is already due before doing AI content work.
     const scheduler = await runSchedulerTick();
     const dispatcher = await runPublishDispatcher();
@@ -46,7 +52,7 @@ export async function POST(request: Request) {
       automation = { errorCode: "AUTOMATION_TICK_FAILED" };
     }
 
-    return ok({ daily, automation, scheduler, dispatcher }, { headers: { "cache-control": "no-store" } });
+    return ok({ website, daily, automation, scheduler, dispatcher }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     const code = error instanceof Error ? error.message : "CRON_TICK_FAILED";
     if (code === "DATABASE_UNAVAILABLE") return fail(code, "Cơ sở dữ liệu lịch chạy nền chưa sẵn sàng.", 503);

@@ -46,6 +46,7 @@ export type RuntimeEnv = {
   WEBSITE_BASE_URL?: string;
   WEBSITE_PUBLISH_ENDPOINT?: string;
   WEBSITE_WEBHOOK_SECRET?: string;
+  WEBSITE_READY_BACKFILL_ENABLED?: string;
   OPENAI_API_KEY?: string;
   OPENAI_TEXT_MODEL?: string;
   OPENAI_IMAGE_MODEL?: string;
