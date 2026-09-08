@@ -349,7 +349,7 @@ export function sanitizeJobPayload(value: unknown) {
   return message || mediaIds.length ? { message, mediaIds } : null;
 }
 
-export async function getChannelLibrary(channelId: ChannelId, limit = 50) {
+export async function getChannelLibrary(channelId: ChannelId, limit = 50, focusedJobId?: string) {
   const db = database();
   const summariesPromise = listChannelSummaries();
   const definition = channelDefinitions[channelId];
@@ -388,9 +388,12 @@ export async function getChannelLibrary(channelId: ChannelId, limit = 50) {
        LEFT JOIN content_drafts d ON d.id = j.draft_id AND d.workspace_id = j.workspace_id
        WHERE j.workspace_id = ?
          AND (d.target_provider = ? OR (d.id IS NULL AND c.provider = ?))
-       ORDER BY j.updated_at DESC
+       ORDER BY
+         CASE WHEN j.id = ? THEN -1 ELSE 0 END,
+         CASE WHEN c.provider = 'zalo_personal' AND j.status = 'awaiting_confirmation' THEN 0 ELSE 1 END,
+         j.updated_at DESC
        LIMIT ?`,
-    ).bind(TAHA_WORKSPACE_ID, channelId, definition.connectionProvider, limit).all<Record<string, unknown>>(),
+    ).bind(TAHA_WORKSPACE_ID, channelId, definition.connectionProvider, focusedJobId ?? "", limit).all<Record<string, unknown>>(),
     db.prepare(
       `SELECT p.id, p.name, p.base_sku, p.status, p.updated_at,
               (SELECT pm.media_id

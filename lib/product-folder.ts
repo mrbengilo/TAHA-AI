@@ -36,10 +36,10 @@ export async function getProductFolder(id: string) {
     db.prepare(`SELECT id, target_provider, title, body, hashtags_json, status, version, platform_data_json FROM content_drafts
       WHERE product_id = ? AND workspace_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 100`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; target_provider: string; title: string; body: string; hashtags_json: string; status: string; version: number; platform_data_json: string }>(),
-    db.prepare(`SELECT s.id, s.draft_id, s.status, s.run_at, s.next_run_at, c.display_name AS destination FROM schedules s
+    db.prepare(`SELECT s.id, s.draft_id, s.connection_id, s.status, s.run_at, s.next_run_at, c.display_name AS destination FROM schedules s
       JOIN content_drafts d ON d.id = s.draft_id AND d.workspace_id = s.workspace_id JOIN channel_connections c ON c.id = s.connection_id
       WHERE d.product_id = ? AND s.workspace_id = ? ORDER BY s.created_at DESC LIMIT 100`).bind(id, TAHA_WORKSPACE_ID)
-      .all<{ id: string; draft_id: string; status: string; run_at: number; next_run_at: number | null; destination: string }>(),
+      .all<{ id: string; draft_id: string; connection_id: string; status: string; run_at: number; next_run_at: number | null; destination: string }>(),
     db.prepare(`SELECT id, draft_id, status, external_url, error_code, error_message FROM publish_jobs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 100`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; draft_id: string; status: string; external_url: string | null; error_code: string | null; error_message: string | null }>(),
     db.prepare(`SELECT id, status, error_code, error_message, requested_image_count, completed_image_count FROM automation_runs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)

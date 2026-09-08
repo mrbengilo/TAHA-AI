@@ -14,8 +14,11 @@ export async function GET(request: Request, context: { params: Promise<{ channel
   try {
     const { channel } = await context.params;
     const channelId = requireChannelId(channel);
-    const limit = normalizeListLimit(new URL(request.url).searchParams.get("limit"));
-    return ok(await getChannelLibrary(channelId, limit), { headers: { "cache-control": "private, no-store" } });
+    const search = new URL(request.url).searchParams;
+    const limit = normalizeListLimit(search.get("limit"));
+    const requestedJobId = search.get("job");
+    const focusedJobId = requestedJobId && requestedJobId.length <= 128 ? requestedJobId : undefined;
+    return ok(await getChannelLibrary(channelId, limit, focusedJobId), { headers: { "cache-control": "private, no-store" } });
   } catch (error) {
     if (error instanceof ChannelLibraryError) return fail(error.code, error.message, error.status);
     console.error("CHANNEL_LIBRARY_LOAD_FAILED", error);
