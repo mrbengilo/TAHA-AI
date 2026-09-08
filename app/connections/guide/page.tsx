@@ -136,7 +136,7 @@ const channels: ChannelGuide[] = [
     steps: [
       { title: "Hoàn tất developer onboarding", detail: "Đăng nhập Partner Center bằng tài khoản doanh nghiệp và hoàn tất hồ sơ nhà phát triển.", owner: true },
       { title: "Tạo Custom App", detail: "Chọn App & Service, market Vietnam và nhóm Catalog / Product Listing.", owner: true },
-      { title: "Bật API và callback", detail: "Enable API, nhập callback bên dưới và bật quyền authorization, product basic, product write." },
+      { title: "Bật API và callback", detail: "Enable API, nhập đúng callback production tahashoes.store bên dưới và bật quyền authorization, product basic, product write." },
       { title: "Publish app", detail: "Hoàn tất trạng thái publish/review để lấy App Key, App Secret và Service ID.", owner: true },
       { title: "Ủy quyền shop", detail: "Từ TAHA AI, đăng nhập đúng TikTok Shop Seller và tự bấm chấp thuận.", owner: true },
     ],
@@ -156,7 +156,7 @@ const channels: ChannelGuide[] = [
     steps: [
       { title: "Đăng ký đối tác", detail: "Tạo tài khoản Open Platform và hoàn tất hồ sơ doanh nghiệp, hồ sơ dịch vụ nếu Shopee yêu cầu.", owner: true },
       { title: "Tạo ứng dụng VN", detail: "Trong Developer Console, tạo app cho Việt Nam và chọn môi trường production.", owner: true },
-      { title: "Khai báo callback", detail: "Nhập callback bên dưới và request nhóm API shop authorization, product và media." },
+      { title: "Khai báo callback", detail: "Nhập đúng callback production tahashoes.store bên dưới và request nhóm API shop authorization, product và media." },
       { title: "Chờ duyệt app", detail: "Hoàn tất kiểm thử/review để Partner ID và Partner Key hoạt động ở production.", owner: true },
       { title: "Ủy quyền shop", detail: "Từ TAHA AI, chủ Shopee Seller đăng nhập đúng shop và tự bấm ủy quyền.", owner: true },
     ],

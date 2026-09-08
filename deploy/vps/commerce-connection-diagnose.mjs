@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 
 const W = '00000000-0000-4000-8000-000000000001';
-const providers = ['shopee', 'tiktok_shop'];
 function select(sql) {
   if (!/^SELECT\s/iu.test(sql) || sql.includes(';')) throw Error('COMMERCE_SELECT_ONLY');
   const data = JSON.parse(execFileSync('pnpm', ['exec', 'wrangler', 'd1', 'execute', 'DB', '--local',
