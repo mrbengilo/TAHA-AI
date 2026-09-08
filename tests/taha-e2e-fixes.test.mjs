@@ -33,7 +33,9 @@ test("daily automation uses Drive originals for Facebook while website delivery 
   assert.match(automation, /const selectedSourceMediaIds = originalMediaIds/);
   assert.match(automation, /publicationDayFromRequestKey/);
   assert.match(automation, /nextLocalSlot\(now, scheduleHour, current\.request_key\)/);
-  assert.match(automation, /provider === "website" \? now : nextLocalSlot/);
+  assert.match(automation, /const runAt = provider === "website" \? now/);
+  assert.match(automation, /provider === "facebook" && scheduledFor !== null/);
+  assert.match(automation, /\? scheduledFor/);
 });
 
 test("website publishing uses a versioned SKU upsert with every source image", () => {
