@@ -40,7 +40,7 @@ jobs:
           set -euo pipefail
           for route in shopee tiktok-shop; do
             code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://tahashoes.store/api/integrations/$route/callback")
-            test "$code" = 302 || test "$code" = 307
+            case "$code" in 302|303|307|308) ;; *) exit 1 ;; esac
           done
       - name: Remove runner SSH key
         if: always()
