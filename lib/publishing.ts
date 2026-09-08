@@ -6,6 +6,8 @@ import { TAHA_WORKSPACE_ID } from "./integrations/store";
 import { mediaBlob } from "./media";
 import { markJobBlocked, markJobFailed, markJobPublished, startPublishJob } from "./publish-jobs";
 import { customerCopyViolation } from "./ai/shoe-content";
+import { productSources } from "./product-integrity";
+import { buildWebsiteProductPayload, WEBSITE_PRODUCT_MAX_IMAGES } from "./website-product";
 
 type FacebookInput = { connectionId: string; message: string; mediaIds: string[]; idempotencyKey: string };
 type WebsiteInput = { connectionId: string; payload: Record<string, unknown>; idempotencyKey: string };
@@ -153,7 +155,7 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
   if (!secret || !endpoint) throw new PublishDeliveryError("WEBSITE_REAUTH_REQUIRED");
 
   const mediaIds = Array.isArray(input.payload.mediaIds)
-    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, 8)
+    ? input.payload.mediaIds.filter((value): value is string => typeof value === "string").slice(0, WEBSITE_PRODUCT_MAX_IMAGES)
     : [];
   const media: Array<{ filename: string; mimeType: string; dataBase64: string }> = [];
   for (const mediaId of mediaIds) {
@@ -170,7 +172,28 @@ export async function sendWebsitePayload(input: WebsiteRemoteInput) {
     }
   }
 
-  const body = JSON.stringify({ ...input.payload, media, tahaJobId: input.jobId });
+  const productId = typeof input.payload.productId === "string" ? input.payload.productId : "";
+  const draftId = typeof input.payload.draftId === "string" ? input.payload.draftId : "";
+  const draftVersion = typeof input.payload.draftVersion === "number" ? input.payload.draftVersion : 0;
+  if (!productId || !draftId || draftVersion < 1) throw new PublishDeliveryError("WEBSITE_PRODUCT_PAYLOAD_INVALID");
+  let sources: Awaited<ReturnType<typeof productSources>>;
+  try { sources = await productSources(productId); }
+  catch { throw new PublishDeliveryError("WEBSITE_PRODUCT_SOURCE_INVALID"); }
+  const contract = buildWebsiteProductPayload({
+    jobId: input.jobId,
+    idempotencyKey: input.idempotencyKey,
+    product: sources.product,
+    draft: {
+      id: draftId,
+      version: draftVersion,
+      title: input.payload.title,
+      body: input.payload.message,
+      hashtags: input.payload.hashtags,
+      platformData: input.payload.platformData,
+    },
+    media,
+  });
+  const body = JSON.stringify(contract);
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = await hmacHex(secret, `${timestamp}.${body}`);
   let response: Response;
