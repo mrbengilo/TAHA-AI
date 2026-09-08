@@ -1,5 +1,5 @@
 """Read-only progress report for the exact prepare-only catalog recovery."""
-# Probe generation 32: inspect website API auth and product fields.
+# Probe generation 33: inspect website product form request builder.
 import base64
 import json
 import re
@@ -30,7 +30,7 @@ def safe_marker(path, ids):
 
 
 def website_probe():
-    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'apiOrigins': [], 'productApiContext': [], 'contractContext': [], 'vhostOnAutomationVps': False}
+    result = {'status': None, 'allow': None, 'reachable': False, 'apiPaths': [], 'apiOrigins': [], 'productApiContext': [], 'contractContext': [], 'formBuilderContext': [], 'vhostOnAutomationVps': False}
     request = urllib.request.Request('https://tahashoes.vn/api/taha/publish', method='GET')
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -68,6 +68,18 @@ def website_probe():
                 sample = re.sub(r'[A-Za-z0-9_-]{32,}', '<redacted>', sample)
                 contract_contexts.append({'needle': needle, 'sample': sample})
             result['contractContext'] = contract_contexts
+            builder_contexts = []
+            for needle in ('L=async()=>', 'const ia=', 'interceptors.request.use', 'isSecondHand'):
+                start = 0
+                while len(builder_contexts) < 10:
+                    index = bundle.find(needle, start)
+                    if index < 0: break
+                    sample = bundle[max(0, index - 700):index + 2600]
+                    sample = re.sub(r'[A-Za-z0-9_-]{32,}', '<redacted>', sample)
+                    builder_contexts.append({'needle': needle, 'sample': sample})
+                    start = index + len(needle)
+                    if needle != 'isSecondHand': break
+            result['formBuilderContext'] = builder_contexts
     except Exception:
         pass
     try:
