@@ -36,6 +36,13 @@
       "when": 1788771600000,
       "tag": "0004_drive_only_automation",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788890854833,
+      "tag": "0005_template_content_cleanup",
+      "breakpoints": true
     }
   ]
 }

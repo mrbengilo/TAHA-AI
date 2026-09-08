@@ -1,4 +1,4 @@
-import { generateProductContent } from "./ai/openai";
+import { APPROVED_TEMPLATE_MODEL, generateProductContent } from "./ai/template";
 import { syncGoogleCatalog } from "./integrations/google-sync";
 import { getRuntimeEnv } from "./integrations/env";
 import { verifyFacebookConnection } from "./integrations/facebook-permissions";
@@ -17,7 +17,7 @@ export const AUTOMATION_TARGET_PROVIDERS = [
 type TargetProvider = (typeof AUTOMATION_TARGET_PROVIDERS)[number];
 type StepType = "content" | "optimize" | "image" | "finalize";
 const AUTOMATION_LEASE_MS = 15 * 60_000;
-const LEGACY_PROMPT_VERSION = "taha-drive-only-v2";
+const CONTENT_TEMPLATE_VERSION = "taha-approved-template-v1";
 
 type AutomationStatement = {
   bind(...values: unknown[]): AutomationStatement;
@@ -216,7 +216,7 @@ async function activeAutomationRun(db: AutomationDatabase, productId: string) {
 function automationAlreadyRunning() {
   return new AutomationError(
     "AUTOMATION_ALREADY_RUNNING",
-    "SKU này đang được AI xử lý. Hãy chờ công việc hiện tại hoàn tất.",
+    "SKU này đang được chuẩn bị nội dung. Hãy chờ công việc hiện tại hoàn tất.",
     409,
   );
 }
@@ -250,10 +250,9 @@ export async function queueAutomationRun(
   }
   const sources = await productSources(productId, db);
   const imageCount = 0;
-  const promptVersion = LEGACY_PROMPT_VERSION;
+  const promptVersion = CONTENT_TEMPLATE_VERSION;
   const mediaId = cleanText(input.sourceMediaId, 120) || sources.images[0].id;
   await assertProductMedia(productId, [mediaId], undefined, db);
-  if (!getRuntimeEnv().OPENAI_API_KEY?.trim()) throw new AutomationError("OPENAI_CONFIG_MISSING", "Máy chủ chưa cấu hình dịch vụ viết bài AI.", 503);
 
   const existing = await db.prepare(
     `SELECT * FROM automation_runs WHERE workspace_id = ? AND request_key = ? LIMIT 1`,
@@ -314,7 +313,7 @@ export async function queueAutomationRun(
     throw error;
   }
   const created = await db.prepare("SELECT * FROM automation_runs WHERE id = ? AND workspace_id = ?").bind(runId, TAHA_WORKSPACE_ID).first<RunRow>();
-  if (!created) throw new AutomationError("AUTOMATION_QUEUE_FAILED", "Không thể tạo công việc AI.", 500);
+  if (!created) throw new AutomationError("AUTOMATION_QUEUE_FAILED", "Không thể tạo công việc nội dung.", 500);
   return { run: publicRun(created), replayed: false };
 }
 
@@ -331,7 +330,7 @@ export async function getAutomationRun(id: string) {
   const db = database();
   const row = await db.prepare("SELECT * FROM automation_runs WHERE id = ? AND workspace_id = ? LIMIT 1")
     .bind(id, TAHA_WORKSPACE_ID).first<RunRow>();
-  if (!row) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc AI.", 404);
+  if (!row) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc tự động.", 404);
   const steps = await db.prepare(
     `SELECT id, step_type, ordinal, status, attempt_count, max_attempts, result_json, error_code,
             error_message, created_at, updated_at, started_at, completed_at
@@ -369,8 +368,8 @@ export async function cancelAutomationRun(id: string) {
   if (changes(results[0]) === 0) {
     const existing = await db.prepare("SELECT status FROM automation_runs WHERE id = ? AND workspace_id = ?")
       .bind(id, TAHA_WORKSPACE_ID).first<{ status: string }>();
-    if (!existing) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc AI.", 404);
-    throw new AutomationError("AUTOMATION_RUN_NOT_CANCELLABLE", "Công việc AI đã kết thúc.", 409);
+    if (!existing) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc tự động.", 404);
+    throw new AutomationError("AUTOMATION_RUN_NOT_CANCELLABLE", "Công việc tự động đã kết thúc.", 409);
   }
   return { id, status: "cancelled" as const };
 }
@@ -381,7 +380,7 @@ export async function retryAutomationRun(id: string) {
   const existing = await db.prepare(
     "SELECT status, product_id, source_media_id, requested_image_count, prompt_version, content_json FROM automation_runs WHERE id = ? AND workspace_id = ? LIMIT 1",
   ).bind(id, TAHA_WORKSPACE_ID).first<{ status: string; product_id: string; source_media_id: string; requested_image_count: number; prompt_version: string; content_json: string }>();
-  if (!existing) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc AI.", 404);
+  if (!existing) throw new AutomationError("AUTOMATION_RUN_NOT_FOUND", "Không tìm thấy công việc tự động.", 404);
   if (existing.status !== "failed" && existing.status !== "cancelled") {
     throw new AutomationError("AUTOMATION_RUN_NOT_RETRYABLE", "Chỉ có thể thử lại công việc đã lỗi hoặc đã hủy.", 409);
   }
@@ -397,7 +396,7 @@ export async function retryAutomationRun(id: string) {
   const priorContent = json<Record<string, unknown>>(existing.content_json, {});
   const sources = await productSources(existing.product_id, db);
   const imageCount = 0;
-  const promptVersion = LEGACY_PROMPT_VERSION;
+  const promptVersion = CONTENT_TEMPLATE_VERSION;
   const resetContent = JSON.stringify({
     targetConnections: record(priorContent.targetConnections),
     prepareOnly: priorContent.prepareOnly === true,
@@ -535,7 +534,7 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
         sourceMediaIds: sources.images.map((image) => image.id), allSourceMediaIds: sources.images.map((image) => image.id),
         sourceMediaSnapshot: sourceSnapshots }),
       generated.model,
-      LEGACY_PROMPT_VERSION,
+      CONTENT_TEMPLATE_VERSION,
       now,
       completedAt,
       run.id,
@@ -692,7 +691,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       automationRunId: run.id,
       sku: sources.sku,
       sourceFingerprint: content.sourceFingerprint,
-      imagePromptVersion: current.prompt_version,
+      contentTemplateVersion: current.prompt_version,
       productDescription: cleanText(content.productDescription, 20_000),
       sourceImageCount: selectedSourceMediaIds.length,
       availableSourceImageCount: originalMediaIds.length,
@@ -704,7 +703,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
        (id, workspace_id, product_id, target_provider, content_type, language, title, body,
         hashtags_json, platform_data_json, status, version, generator, model, prompt_version,
         generation_meta_json, approved_by, approved_at, created_at, updated_at)
-       SELECT ?, ?, ?, ?, ?, 'vi', ?, ?, ?, ?, ?, 1, 'openai', ?, ?, ?, ?, ?, ?, ?
+       SELECT ?, ?, ?, ?, ?, 'vi', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (
          SELECT 1 FROM automation_runs r JOIN automation_steps s
            ON s.run_id = r.id AND s.workspace_id = r.workspace_id
@@ -724,6 +723,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       JSON.stringify(generated.hashtags),
       JSON.stringify(platformData),
       prepareOnly ? "draft" : "approved",
+      current.text_model === APPROVED_TEMPLATE_MODEL ? "template" : "openai",
       current.text_model,
       current.prompt_version,
       JSON.stringify({ automationRunId: run.id, sourceMediaIds: selectedSourceMediaIds, outputMediaIds: mediaIds, allMediaIds: draftMediaIds }),
@@ -841,6 +841,55 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
   }
   statements.push(
     db.prepare(
+      `DELETE FROM automation_steps WHERE workspace_id = ? AND run_id IN (
+         SELECT old.id FROM automation_runs old
+         WHERE old.workspace_id = ? AND old.product_id = ? AND old.id != ?
+           AND old.status = 'failed'
+           AND NOT EXISTS (
+             SELECT 1 FROM json_each(old.target_providers_json) target
+             WHERE target.value NOT IN (SELECT value FROM json_each(?))
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM content_drafts d
+             WHERE d.workspace_id = old.workspace_id
+               AND json_extract(d.generation_meta_json, '$.automationRunId') = old.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM schedules s
+             WHERE s.workspace_id = old.workspace_id AND s.created_by = 'automation:' || old.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM publish_jobs j JOIN schedules s ON s.id = j.schedule_id
+             WHERE j.workspace_id = old.workspace_id AND s.created_by = 'automation:' || old.id
+           )
+       )`,
+    ).bind(TAHA_WORKSPACE_ID, TAHA_WORKSPACE_ID, run.product_id, run.id, current.target_providers_json),
+    db.prepare(
+      `DELETE FROM automation_runs
+       WHERE workspace_id = ? AND product_id = ? AND id != ?
+         AND status = 'failed'
+         AND NOT EXISTS (
+           SELECT 1 FROM json_each(automation_runs.target_providers_json) target
+           WHERE target.value NOT IN (SELECT value FROM json_each(?))
+         )
+         AND NOT EXISTS (SELECT 1 FROM automation_steps s WHERE s.run_id = automation_runs.id)
+         AND NOT EXISTS (
+           SELECT 1 FROM content_drafts d
+           WHERE d.workspace_id = automation_runs.workspace_id
+             AND json_extract(d.generation_meta_json, '$.automationRunId') = automation_runs.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM schedules s
+           WHERE s.workspace_id = automation_runs.workspace_id
+             AND s.created_by = 'automation:' || automation_runs.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM publish_jobs j JOIN schedules s ON s.id = j.schedule_id
+           WHERE j.workspace_id = automation_runs.workspace_id
+             AND s.created_by = 'automation:' || automation_runs.id
+         )`,
+    ).bind(TAHA_WORKSPACE_ID, run.product_id, run.id, current.target_providers_json),
+    db.prepare(
       `UPDATE automation_runs SET status = 'completed', completed_image_count = ?, output_media_ids_json = ?,
        completed_at = ?, updated_at = ?, error_code = NULL, error_message = NULL
        WHERE id = ? AND workspace_id = ? AND status IN ('queued', 'processing')
@@ -930,7 +979,7 @@ async function retryOrFail(
   const failed = await db.batch([
     db.prepare(
       `UPDATE automation_steps SET status = 'failed', error_code = ?,
-       error_message = 'Không thể hoàn thành bước AI sau số lần thử cho phép.',
+       error_message = 'Không thể hoàn thành bước chuẩn bị nội dung sau số lần thử cho phép.',
        completed_at = ?, updated_at = ?
        WHERE id = ? AND workspace_id = ? AND status = 'processing' AND lease_owner = ?
          AND lease_expires_at > ?
@@ -942,7 +991,7 @@ async function retryOrFail(
     ).bind(code, now, now, step.id, TAHA_WORKSPACE_ID, workerId, now),
     db.prepare(
       `UPDATE automation_runs SET status = 'failed', error_code = ?,
-       error_message = 'Quy trình AI chưa hoàn tất; có thể thử lại sau khi kiểm tra cấu hình.',
+       error_message = 'Quy trình chuẩn bị nội dung chưa hoàn tất; hệ thống sẽ giữ đúng SKU để xử lý lại.',
        completed_at = ?, updated_at = ?
        WHERE id = ? AND workspace_id = ? AND status IN ('queued', 'processing')
          AND EXISTS (
@@ -1008,7 +1057,7 @@ export async function runAutomationWorker(options: {
        output_media_ids_json = '[]', image_model = NULL, prompt_version = ?, updated_at = ?
        WHERE workspace_id = ? AND status IN ('queued', 'processing') AND requested_image_count != 0
        ${runIds ? `AND id IN (${runIds.map(() => "?").join(",")})` : ""}`,
-    ).bind(LEGACY_PROMPT_VERSION, now, TAHA_WORKSPACE_ID, ...(runIds ?? [])),
+    ).bind(CONTENT_TEMPLATE_VERSION, now, TAHA_WORKSPACE_ID, ...(runIds ?? [])),
   ]);
   await db.prepare(
     `UPDATE automation_steps SET status = 'retry_wait', available_at = ?, lease_owner = NULL,

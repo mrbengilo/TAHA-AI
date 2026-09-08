@@ -104,7 +104,7 @@ export async function saveTikTokListingConfiguration(
     version: number;
   }>();
   if (!draft) {
-    throw new CommercePublishError("COMMERCE_LISTING_DRAFT_REQUIRED", "Hãy chạy AI để tạo listing TikTok trước.", 409);
+    throw new CommercePublishError("COMMERCE_LISTING_DRAFT_REQUIRED", "Hãy chạy quy trình viết bài theo mẫu để tạo listing TikTok trước.", 409);
   }
   const salesAttributesBySku = object(input.salesAttributesBySku);
   const productAttributes = Array.isArray(input.productAttributes)

@@ -20,9 +20,13 @@ test("calendar groups every concrete product by date and channel", () => {
 
 test("activity has five channel tabs and uses the complete history source", () => {
   const page = readFileSync(path.join(ROOT, "app/activity/page.tsx"), "utf8");
-  assert.match(page, /PUBLISHING_PROVIDERS\.map/);
-  assert.match(page, /activity\?channel=/);
-  assert.match(page, /day\.entries\.length\} bài/);
+  const activityLog = readFileSync(path.join(ROOT, "app/activity/ActivityLog.tsx"), "utf8");
+  assert.match(page, /<ActivityLog activity=\{activity\}/);
+  assert.match(activityLog, /PUBLISHING_PROVIDERS\.map/);
+  assert.match(activityLog, /role="tab"/);
+  assert.match(activityLog, /window\.history\.replaceState/);
+  assert.doesNotMatch(activityLog, /href=\{`\/activity\?channel=/);
+  assert.match(activityLog, /day\.entries\.length\} bài/);
   const source = readFileSync(path.join(ROOT, "lib/publishing-history.ts"), "utf8");
   assert.doesNotMatch(source, /ORDER BY COALESCE\(j\.completed_at, j\.scheduled_for, j\.updated_at\)[\s\S]*LIMIT 5/);
 });

@@ -268,6 +268,56 @@ test("rollout migration cancels old image work and pauses its posts while retain
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM media_assets").get().n, 1);
 });
 
+test("template rollout resumes the newest OpenAI failure and removes the older duplicate after success", async () => {
+  const h = harness(); h.seedProduct();
+  const now = Date.now();
+  for (const [index, id] of ["failed-old", "failed-new"].entries()) {
+    h.sqlite.prepare(`INSERT INTO automation_runs
+      (id,workspace_id,product_id,source_media_id,request_key,status,requested_image_count,completed_image_count,
+       target_providers_json,content_json,output_media_ids_json,prompt_version,error_code,error_message,created_at,updated_at,completed_at)
+      VALUES (?,?,'product-1','image-product-1',?,'failed',0,0,'["facebook"]',?,'[]','taha-lifestyle-v3',
+       'OPENAI_RATE_LIMITED','rate limited',?,?,?)`)
+      .run(id, WORKSPACE, `old-openai-${index}`, JSON.stringify({ targetConnections: {}, prepareOnly: true }), now + index, now + index, now + index);
+    h.sqlite.prepare(`INSERT INTO automation_steps
+      (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,error_code,created_at,updated_at,completed_at)
+      VALUES (?,?,?,'content',0,'failed',?,3,3,'{}','OPENAI_RATE_LIMITED',?,?,?)`)
+      .run(`content-${id}`, WORKSPACE, id, now, now, now, now);
+    h.sqlite.prepare(`INSERT INTO automation_steps
+      (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at,completed_at)
+      VALUES (?,?,?,'finalize',0,'cancelled',?,0,3,'{}',?,?,?)`)
+      .run(`finalize-${id}`, WORKSPACE, id, now, now, now, now);
+  }
+
+  h.sqlite.exec(readFileSync(path.join(ROOT, "drizzle/0005_template_content_cleanup.sql"), "utf8"));
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='failed-new'").get().status, "queued");
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='failed-old'").get().status, "failed");
+  const automation = h.load("lib/automation.ts");
+  for (let tick = 0; tick < 3; tick += 1) {
+    const result = await automation.runAutomationWorker();
+    assert.equal(result.completed, 1, JSON.stringify(result));
+  }
+  assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='failed-new'").get().status, "completed");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs WHERE id='failed-old'").get().n, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_steps WHERE run_id='failed-old'").get().n, 0);
+  assert.equal(h.generated.length, 1);
+});
+
+test("template rollout deletes a failed duplicate only when every target already has usable content", async () => {
+  const h = await prepare();
+  const now = Date.now();
+  h.sqlite.prepare(`INSERT INTO automation_runs
+    (id,workspace_id,product_id,source_media_id,request_key,status,requested_image_count,completed_image_count,
+     target_providers_json,content_json,output_media_ids_json,prompt_version,error_code,created_at,updated_at,completed_at)
+    VALUES ('failed-duplicate',?,'product-1','image-product-1','failed-duplicate-key','failed',0,0,'["facebook"]','{}','[]',
+     'taha-lifestyle-v3','OPENAI_RATE_LIMITED',?,?,?)`).run(WORKSPACE, now, now, now);
+  h.sqlite.prepare(`INSERT INTO automation_steps
+    (id,workspace_id,run_id,step_type,ordinal,status,available_at,attempt_count,max_attempts,result_json,created_at,updated_at)
+    VALUES ('failed-duplicate-step',?,'failed-duplicate','content',0,'failed',?,3,3,'{}',?,?)`).run(WORKSPACE, now, now, now);
+  h.sqlite.exec(readFileSync(path.join(ROOT, "drizzle/0005_template_content_cleanup.sql"), "utf8"));
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs WHERE id='failed-duplicate'").get().n, 0);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM content_drafts WHERE product_id='product-1' AND target_provider='facebook'").get().n, 1);
+});
+
 test("transient Google source failure retries then publishes exactly once", async () => {
   const h = await prepare(); await enqueue(h);
   let requests = 0;

@@ -30,7 +30,7 @@ const providerOptions = [
 
 const statusLabels: Record<string, string> = {
   queued: "Đang chờ",
-  processing: "Đang tạo nội dung",
+  processing: "Đang viết bài theo mẫu",
   completed: "Đã hoàn tất",
   failed: "Cần kiểm tra",
   cancelled: "Đã hủy",
@@ -102,7 +102,7 @@ export default function AutomationCenter() {
       setSelectedProductId((current) => current || (normalizedProducts.some((p) => p.id === requested) ? requested! : normalizedProducts[0]?.id) || "");
       setError("");
     } catch (loadError) {
-      if (!quiet) setError(loadError instanceof Error ? loadError.message : "Không thể tải dữ liệu AI.");
+      if (!quiet) setError(loadError instanceof Error ? loadError.message : "Không thể tải dữ liệu tự động.");
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -146,14 +146,14 @@ export default function AutomationCenter() {
           body: JSON.stringify({
             productId: selectedProductId,
             targetProviders: targets,
-            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:source-only-v1`,
+            idempotencyKey: `product:${selectedProductId}:${selectedProduct?.updatedAt ?? "unknown"}:${[...targets].sort().join(",")}:approved-template-v1`,
           }),
         });
         const run = payload.data?.run as AutomationRun | undefined;
-        setNotice(run ? `Đã đưa SKU ${selectedProduct?.sku ?? ""} vào hàng đợi AI.` : "Đã tạo công việc AI.");
+        setNotice(run ? `Đã đưa SKU ${selectedProduct?.sku ?? ""} vào hàng đợi viết bài theo mẫu.` : "Đã tạo công việc tự động.");
         await refresh(true);
       } catch (queueError) {
-        setError(queueError instanceof Error ? queueError.message : "Không thể chạy AI.");
+        setError(queueError instanceof Error ? queueError.message : "Không thể chạy quy trình tự động.");
       }
     });
   }
@@ -164,7 +164,7 @@ export default function AutomationCenter() {
     startTransition(async () => {
       try {
         await loadJson(`/api/automation-runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
-        setNotice("Đã hủy công việc AI.");
+        setNotice("Đã hủy công việc tự động.");
         await refresh(true);
       } catch (cancelError) {
         setError(cancelError instanceof Error ? cancelError.message : "Không thể hủy công việc.");
@@ -178,7 +178,7 @@ export default function AutomationCenter() {
     startTransition(async () => {
       try {
         await loadJson(`/api/automation-runs/${encodeURIComponent(runId)}/retry`, { method: "POST" });
-        setNotice("Đã đưa các bước chưa hoàn tất trở lại hàng đợi AI.");
+        setNotice("Đã đưa các bước chưa hoàn tất trở lại hàng đợi viết bài theo mẫu.");
         await refresh(true);
       } catch (retryError) {
         setError(retryError instanceof Error ? retryError.message : "Không thể thử lại công việc.");
@@ -248,8 +248,8 @@ export default function AutomationCenter() {
       <div className="automation-heading">
         <div>
           <span className="automation-eyebrow">TRUNG TÂM NỘI DUNG TỰ ĐỘNG</span>
-          <h1 id="automation-title">Tạo bộ nội dung sản phẩm bằng AI</h1>
-          <p>Xác nhận một lần để dùng toàn bộ ảnh gốc đúng SKU, viết bài không giá và hashtag, rồi lên lịch đăng. Admin có thể sửa hoặc không cho đăng.</p>
+          <h1 id="automation-title">Tạo bộ nội dung sản phẩm tự động</h1>
+          <p>Dùng mẫu nội dung đã duyệt, không gọi AI và không tạo ảnh mới. Hệ thống lấy toàn bộ ảnh gốc đúng SKU rồi viết bài, hashtag và lên lịch đăng.</p>
         </div>
         <button className="automation-refresh" type="button" onClick={() => void refresh()} disabled={loading || isPending}>↻ Làm mới</button>
       </div>
@@ -275,7 +275,7 @@ export default function AutomationCenter() {
           ) : (
             <div className="automation-empty">
               <strong>Chưa có sản phẩm</strong>
-              <span>Hãy đồng bộ Google Sheets trước khi chạy AI.</span>
+              <span>Hãy đồng bộ Google Sheets trước khi chạy tự động.</span>
               <Link href="/channels/google_sheets">Mở Google Sheets →</Link>
             </div>
           )}
@@ -314,7 +314,7 @@ export default function AutomationCenter() {
                 ? "SKU này đang được xử lý"
                 : "Xác nhận · Tự viết bài và lên lịch"}
           </button>
-          <p className="automation-safety">Toàn bộ ảnh gốc được tối ưu dưới 300 KB/ảnh. Bài viết và bảng size được lưu đúng SKU. Zalo cá nhân cần xác nhận đăng.</p>
+          <p className="automation-safety">Không tạo ảnh và không gọi dịch vụ AI. Toàn bộ ảnh gốc trên Drive được tối ưu dưới 300 KB/ảnh; bài viết và bảng size luôn lưu đúng SKU.</p>
         </section>
 
         <aside className="automation-card automation-flow">
@@ -342,7 +342,7 @@ export default function AutomationCenter() {
           <label className="is-wide"><span>Thuộc tính biến thể theo SKU (JSON, chỉ cần khi có nhiều size/màu)</span><textarea value={tiktokSalesAttributes} onChange={(event) => setTikTokSalesAttributes(event.target.value)} placeholder={'{"SKU-38":[{"id":"...","value_id":"..."}]}'}/></label>
         </div>
         <div className="automation-config-actions">
-          <p>TikTok bắt buộc Category ID, Warehouse ID và thuộc tính biến thể do Seller Center cấp; AI không tự bịa các mã này.</p>
+          <p>TikTok bắt buộc Category ID, Warehouse ID và thuộc tính biến thể do Seller Center cấp; hệ thống không tự tạo các mã này.</p>
           <button type="button" onClick={saveTikTokConfiguration} disabled={!selectedProductId || !tiktokCategoryId.trim() || !tiktokWarehouseId.trim() || isPending}>Lưu cấu hình TikTok</button>
         </div>
       </section>
@@ -382,7 +382,7 @@ export default function AutomationCenter() {
               </article>
             );
           })}
-        </div> : <div className="automation-empty is-wide"><strong>Chưa có công việc AI</strong><span>Chọn một SKU ở trên để tạo bộ nội dung đầu tiên.</span></div>}
+        </div> : <div className="automation-empty is-wide"><strong>Chưa có công việc tự động</strong><span>Chọn một SKU ở trên để tạo bộ nội dung đầu tiên.</span></div>}
       </section>
     </section>
   );
