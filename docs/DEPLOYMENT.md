@@ -15,7 +15,7 @@ Docker: Vinext/Worker runtime qua Wrangler local :8787
         │
         ├── /data · D1 local bền vững
         ├── /data · R2 local bền vững
-        └── Google · OpenAI · Meta · TikTok · Shopee · tahashoes.vn
+        └── Google · Meta · TikTok · Shopee · tahashoes.vn
 
 systemd timer/cron root-only
         └── POST https://tahashoes.store/api/internal/cron/tick
@@ -30,7 +30,7 @@ systemd timer/cron root-only
 3. Build image từ commit cần phát hành; không copy `.env.local` hoặc file secret vào build context.
 4. Mount volume bền vững vào `/data`.
 5. Mount file môi trường root-only vào `/app/.dev.vars` ở chế độ chỉ đọc.
-6. Khởi động container; kiểm tra log migration `0000` → `0003` và health của trang chủ/API.
+6. Khởi động container; kiểm tra toàn bộ migration trong `drizzle/` và health của trang chủ/API.
 7. Cấu hình reverse proxy HTTPS cho `tahashoes.store` đến `127.0.0.1:8787`.
 8. Đăng ký callback production chính xác ở Google/Meta/TikTok/Shopee.
 9. Kết nối lại Google để nhận quyền Drive ghi, rồi đồng bộ một SKU thử.
@@ -41,6 +41,7 @@ systemd timer/cron root-only
 
 - D1 mới phải áp dụng **tất cả** file trong `drizzle/`, không chỉ migration mới nhất.
 - `0003_lazy_hellcat.sql` tạo `automation_runs` và `automation_steps`.
+- `0004_drive_only_automation.sql` loại bỏ công việc tạo ảnh cũ; `0005_template_content_cleanup.sql` chuyển lỗi OpenAI còn hợp lệ sang bộ viết theo mẫu và dọn bản ghi lỗi trùng an toàn.
 - `/data` chứa D1, R2 media và trạng thái Wrangler local; sao lưu nhất quán trước deploy/rollback.
 - Rollback image không được tự hạ schema. Nếu code cũ không tương thích migration mới, phục hồi cả image và bản sao `/data` tương ứng trong cửa sổ bảo trì.
 
@@ -75,14 +76,9 @@ SHOPEE_REDIRECT_URI=https://tahashoes.store/api/integrations/shopee/callback
 WEBSITE_BASE_URL=https://tahashoes.vn
 WEBSITE_PUBLISH_ENDPOINT=https://tahashoes.vn/api/taha/publish
 WEBSITE_WEBHOOK_SECRET=<RANDOM_SHARED_SECRET>
-
-OPENAI_API_KEY=<SERVER_SECRET>
-OPENAI_TEXT_MODEL=gpt-5.6-luna
-OPENAI_IMAGE_MODEL=gpt-image-2
-OPENAI_IMAGE_QUALITY=medium
 ```
 
-Điền App ID/secret/key còn lại theo `.env.example`. Không commit `OPENAI_API_KEY`, Google Client Secret, Meta App Secret, TikTok App Secret, Shopee Partner Key hay webhook secret. `OPENAI_API_KEY` chỉ cần ở runtime server; không đặt tiền tố public và không truyền vào HTML/JavaScript trình duyệt. Khi xoay key, cập nhật file root-only, restart container, chạy một job thử, rồi vô hiệu hóa key cũ.
+Điền App ID/secret/key còn lại theo `.env.example`. Không commit Google Client Secret, Meta App Secret, TikTok App Secret, Shopee Partner Key hay webhook secret. Luồng viết bài production dùng mẫu đã duyệt, không gọi OpenAI và không tạo ảnh.
 
 ## Google cho luồng dùng ảnh Drive
 
@@ -136,5 +132,7 @@ CI build image có nhãn SHA và chuyển image cùng Git bundle qua SSH. VPS ki
 Migration `0004` chỉ hủy run tạo ảnh cũ và tạm dừng lịch/jobs dùng ảnh generated; giữ nguyên sản phẩm, ảnh và lịch sử. Nếu health check thất bại sau cutover, khôi phục container cũ, giữ các hủy bỏ và để cron dừng để không chạy lại luồng ảnh cũ.
 
 Bài Facebook thử chỉ chạy khi commit merge chứa `[facebook-trial]` hoặc workflow dispatch bật tùy chọn tương ứng. Script `facebook-trial.py` gửi một yêu cầu idempotent rồi chỉ theo dõi; cron thực tế tự viết và đăng. Script chỉ thành công khi có đúng một job published kèm Post ID. Không bật thử cho các đợt phát hành khác nếu không có yêu cầu. Lập kế hoạch tự chọn SKU hằng ngày chỉ chạy cho connection đã bật `dailyAutomationEnabled` rõ ràng.
+
+Commit vận hành có `[catalog-auto-publish]` sẽ chạy quy trình idempotent: bật đồng bộ Google hằng ngày, giữ Facebook theo lịch, và đẩy ngay mọi sản phẩm website đủ điều kiện. Sản phẩm website đã có biên nhận thành công không bị tạo trùng.
 
 Sau phát hành, `facebook-verify.py` đối soát quyền của connection thuộc lượt thử hiện hữu bằng API quản trị; không tạo hoặc thử lại bài đăng. `ready=false` cùng mã thiếu quyền là kết quả kiểm tra kết nối, khác với lỗi triển khai ứng dụng. Workflow thủ công `TAHA Facebook trial diagnosis` chỉ gọi GET Meta và giữ token trong container VPS.
