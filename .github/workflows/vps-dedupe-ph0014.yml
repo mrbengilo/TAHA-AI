@@ -1,0 +1,48 @@
+name: Deduplicate PH0014 safely
+
+on:
+  push:
+    branches: [codex/vps-ph0014-dedupe]
+    paths: [deploy/vps/dedupe-ph0014.py, .github/workflows/vps-dedupe-ph0014.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  dedupe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify PH0014 dedupe safety contract
+        run: |
+          python3 -m py_compile deploy/vps/dedupe-ph0014.py
+          grep -Fq 'KEEP_EXTERNAL_POST_ID = "1015096011692783_122121496239193948"' deploy/vps/dedupe-ph0014.py
+          grep -Fq 'PH0014_DUPLICATE_SUPPRESSED' deploy/vps/dedupe-ph0014.py
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Keep one PH0014 post and remove duplicates
+        run: |
+          set -o pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -u - < deploy/vps/dedupe-ph0014.py 2>&1 | tee deploy/vps/dedupe-ph0014-output.txt
+      - name: Save dedupe receipt
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/vps/dedupe-ph0014-output.txt
+          git commit -m "ops: record PH0014 dedupe result" || exit 0
+          git push origin HEAD:codex/vps-ph0014-dedupe
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
