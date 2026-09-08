@@ -247,7 +247,7 @@ export async function materializeFacebookPublishingPlan(date: string, now = Date
   const slots = plan.times.map((time) => ({
     time,
     scheduledFor: vietnamTimestamp(plan.date, time),
-  }));
+  })).filter((slot) => slot.scheduledFor > now);
   const timestamps = slots.map((slot) => slot.scheduledFor);
   const placeholders = timestamps.map(() => "?").join(",");
   const [scheduleRows, runRows] = await Promise.all([
