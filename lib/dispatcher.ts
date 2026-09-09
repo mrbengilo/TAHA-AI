@@ -205,9 +205,6 @@ async function upgradeLegacyProductPayload(
   const templateVersion = cleanText(platformData.contentTemplateVersion, 120);
   const legacyTemplate = templateVersion === "taha-approved-template-v1"
     || templateVersion === "taha-approved-template-v2";
-  if (version || !legacyTemplate || !expected || expected !== await legacyProductFingerprint(sources.product)) {
-    throw new Error("PRODUCT_CONTENT_STALE");
-  }
 
   const articleId = await stableArticleId(job.workspace_id, job.product_id!);
   let article = await database.prepare(
@@ -218,6 +215,9 @@ async function upgradeLegacyProductPayload(
     CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
 
   if (!article) {
+    if (version || !legacyTemplate || !expected || expected !== await legacyProductFingerprint(sources.product)) {
+      throw new Error("PRODUCT_CONTENT_STALE");
+    }
     const title = cleanText(payload.title, 255) || cleanText(sources.product.name, 255);
     const body = cleanText(payload.message, 20_000);
     if (!title || !body) throw new Error("PRODUCT_CONTENT_STALE");
