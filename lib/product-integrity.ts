@@ -20,6 +20,9 @@ export type SourceImage = {
   mime_type: string | null; byte_size: number | null;
 };
 
+export const PRODUCT_FINGERPRINT_VERSION = "product-copy-v2";
+export const LEGACY_PRODUCT_FINGERPRINT_VERSION = "product-copy-v1";
+
 export function objectJson(value: string | null): Record<string, unknown> {
   try { const parsed = JSON.parse(value || "{}"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; }
   catch { return {}; }
@@ -90,6 +93,21 @@ export async function productFingerprint(product: SourceProduct) {
     Array.isArray(website.colors) ? website.colors : [],
     Array.isArray(website.gifts) ? website.gifts : [],
     Array.isArray(website.specifications) ? website.specifications : [],
+  ]));
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Fingerprint written by template v1/v2 schedules before product-copy-v2.
+ * Keep this immutable: it is used only to prove that a queued legacy job still
+ * matches every field protected when that job was approved.
+ */
+export async function legacyProductFingerprint(product: SourceProduct) {
+  const website = record(objectJson(product.metadata_json).website);
+  const bytes = new TextEncoder().encode(JSON.stringify([
+    product.base_sku, product.name, product.description, product.brand, product.category,
+    product.currency, product.price_minor, product.compare_at_price_minor,
+    Array.isArray(website.sizes) ? website.sizes : [],
   ]));
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (v) => v.toString(16).padStart(2, "0")).join("");
 }

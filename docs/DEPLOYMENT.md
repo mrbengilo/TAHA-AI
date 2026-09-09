@@ -43,6 +43,7 @@ systemd timer/cron root-only
 - `0003_lazy_hellcat.sql` tạo `automation_runs` và `automation_steps`.
 - `0004_drive_only_automation.sql` loại bỏ công việc tạo ảnh cũ; `0005_template_content_cleanup.sql` chuyển lỗi OpenAI còn hợp lệ sang bộ viết theo mẫu và dọn bản ghi lỗi trùng an toàn.
 - `0007_shared_sku_article.sql` tạo đúng một bài gốc trong `product_articles` cho mỗi SKU. Các bản ghi theo kênh chỉ là bản giao hàng/lịch/biên nhận và cùng tham chiếu bài gốc; dữ liệu Sheet không đổi thì hệ thống không viết lại.
+- Lịch v1/v2 chưa chạy mang dấu vân tay `product-copy-v1`. Dispatcher chỉ nâng cấp lịch này khi toàn bộ trường dữ liệu cũ vẫn khớp, đưa bài đã duyệt vào bài gốc duy nhất rồi ghi dấu vân tay `product-copy-v2`; dữ liệu thật sự thay đổi vẫn bị chặn.
 - `/data` chứa D1, R2 media và trạng thái Wrangler local; sao lưu nhất quán trước deploy/rollback.
 - Rollback image không được tự hạ schema. Nếu code cũ không tương thích migration mới, phục hồi cả image và bản sao `/data` tương ứng trong cửa sổ bảo trì.
 
@@ -133,6 +134,8 @@ CI build image có nhãn SHA và chuyển image cùng Git bundle qua SSH. VPS ki
 Migration `0004` chỉ hủy run tạo ảnh cũ và tạm dừng lịch/jobs dùng ảnh generated; giữ nguyên sản phẩm, ảnh và lịch sử. Nếu health check thất bại sau cutover, khôi phục container cũ, giữ các hủy bỏ và để cron dừng để không chạy lại luồng ảnh cũ.
 
 Bài Facebook thử chỉ chạy khi commit merge chứa `[facebook-trial]` hoặc workflow dispatch bật tùy chọn tương ứng. Script `facebook-trial.py` gửi một yêu cầu idempotent rồi chỉ theo dõi; cron thực tế tự viết và đăng. Script chỉ thành công khi có đúng một job published kèm Post ID. Không bật thử cho các đợt phát hành khác nếu không có yêu cầu. Lập kế hoạch tự chọn SKU hằng ngày chỉ chạy cho connection đã bật `dailyAutomationEnabled` rõ ràng.
+
+Marker `[facebook-stale-fingerprint-recovery]` chỉ phục hồi đúng job PH0015 bị `PRODUCT_CONTENT_STALE`, chưa có Post ID và chưa có phản hồi nhà cung cấp. Script gọi worker theo đúng job ID, yêu cầu trạng thái `published` cùng biên nhận Facebook rồi mới báo hoàn tất; chạy lại cùng marker không thể tạo bài thứ hai.
 
 Commit vận hành có `[catalog-auto-publish]` sẽ chạy quy trình idempotent: bật đồng bộ Google hằng ngày, giữ Facebook theo lịch, và đẩy ngay mọi sản phẩm website đủ điều kiện. Sản phẩm website đã có biên nhận thành công không bị tạo trùng.
 

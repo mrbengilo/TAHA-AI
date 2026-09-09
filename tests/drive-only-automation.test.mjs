@@ -85,6 +85,7 @@ test("one SKU article is stored once and reused unchanged by every channel", asy
   assert.equal(new Set(drafts.map((draft) => draft.hashtags_json)).size, 1);
   assert.equal(drafts[0].body, article.body);
   assert.ok(drafts.every((draft) => JSON.parse(draft.platform_data_json).canonicalArticleId === article.id));
+  assert.ok(drafts.every((draft) => JSON.parse(draft.platform_data_json).sourceFingerprintVersion === "product-copy-v2"));
   const firstContent = JSON.parse(h.sqlite.prepare("SELECT content_json FROM automation_runs WHERE id=?").get(first.run.id).content_json);
   assert.equal(firstContent.canonicalArticleId, article.id);
   assert.equal(firstContent.canonicalArticle, undefined);
@@ -117,6 +118,42 @@ test("different SKU media and stale product descriptions fail closed", async () 
   const sent = []; const outcome = await dispatch(h, sent);
   assert.equal(sent.length, 0);
   assert.equal(outcome.errors[0].code, "PRODUCT_CONTENT_STALE");
+});
+
+test("a v1/v2 scheduled job is upgraded to the single canonical article instead of being falsely blocked", async () => {
+  const h = await prepare();
+  const integrity = h.load("lib/product-integrity.ts");
+  const sources = await integrity.productSources("product-1");
+  const legacyFingerprint = await integrity.legacyProductFingerprint(sources.product);
+  const currentFingerprint = await integrity.productFingerprint(sources.product);
+  assert.notEqual(legacyFingerprint, currentFingerprint);
+
+  const platformData = JSON.parse(h.draft.platform_data_json);
+  platformData.sourceFingerprint = legacyFingerprint;
+  platformData.contentTemplateVersion = "taha-approved-template-v2";
+  delete platformData.sourceFingerprintVersion;
+  delete platformData.canonicalArticleId;
+  h.sqlite.prepare(`UPDATE content_drafts SET platform_data_json=?,prompt_version='taha-approved-template-v2'
+    WHERE id=?`).run(JSON.stringify(platformData), h.draft.id);
+  h.sqlite.prepare("DELETE FROM product_articles WHERE product_id='product-1'").run();
+
+  assert.equal((await enqueue(h)).enqueued, 1);
+  const sent = [];
+  const result = await dispatch(h, sent);
+  assert.equal(result.published, 1, JSON.stringify(result));
+  assert.equal(sent.length, 1);
+
+  const job = h.sqlite.prepare("SELECT payload_snapshot_json,external_post_id FROM publish_jobs").get();
+  const payload = JSON.parse(job.payload_snapshot_json);
+  assert.equal(job.external_post_id, "page_post");
+  assert.equal(payload.platformData.sourceFingerprint, currentFingerprint);
+  assert.equal(payload.platformData.sourceFingerprintVersion, "product-copy-v2");
+  assert.equal(payload.platformData.contentTemplateVersion, "taha-approved-template-v3");
+  const article = h.sqlite.prepare("SELECT * FROM product_articles WHERE product_id='product-1'").get();
+  assert.ok(article);
+  assert.equal(payload.platformData.canonicalArticleId, article.id);
+  assert.equal(payload.message, article.body);
+  assert.equal(h.sqlite.prepare("SELECT body FROM content_drafts WHERE id=?").get(h.draft.id).body, article.body);
 });
 
 test("an existing Facebook schedule picks up every current original and publishes its 27-photo album once", async () => {
