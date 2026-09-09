@@ -6,6 +6,7 @@ on:
     paths-ignore:
       # Diagnostic-only commits do not change the shipped application image.
       - .github/workflows/vps-release.yml
+      - .github/workflows/vps-deploy-preflight.yml
       - .github/workflows/vps-website-diagnose.yml
       - deploy/vps/website-runtime-diagnose.py
       - deploy/vps/website-state-diagnose.mjs

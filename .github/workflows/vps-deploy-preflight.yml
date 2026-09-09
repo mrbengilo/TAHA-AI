@@ -58,6 +58,13 @@ jobs:
           echo '-- repo --'
           echo "head=$(git -C /var/www/taha-ai rev-parse HEAD 2>/dev/null || true)"
           echo "dirty=$(git -C /var/www/taha-ai status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+          echo 'dirty_paths_begin'
+          git -C /var/www/taha-ai status --short --untracked-files=all 2>/dev/null || true
+          echo 'dirty_paths_end'
+          echo 'dirty_diff_stat_begin'
+          git -C /var/www/taha-ai diff --stat 2>/dev/null || true
+          git -C /var/www/taha-ai diff --cached --stat 2>/dev/null || true
+          echo 'dirty_diff_stat_end'
           echo '-- probes --'
           for path in / /connections /automation /api/integrations; do
             code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8787$path" 2>/dev/null || true)
