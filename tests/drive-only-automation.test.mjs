@@ -190,6 +190,41 @@ test("an old schedule reuses the current canonical article after Sheet correctio
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) AS total FROM product_articles WHERE product_id='product-1'").get().total, 1);
 });
 
+test("a v1/v2 schedule deterministically repairs its one canonical article after Sheet data was corrected", async () => {
+  const h = await prepare();
+  const integrity = h.load("lib/product-integrity.ts");
+  const sources = await integrity.productSources("product-1");
+  const oldFingerprint = await integrity.legacyProductFingerprint(sources.product);
+  const oldArticle = h.sqlite.prepare("SELECT * FROM product_articles WHERE product_id='product-1'").get();
+
+  const platformData = JSON.parse(h.draft.platform_data_json);
+  platformData.sourceFingerprint = oldFingerprint;
+  platformData.contentTemplateVersion = "taha-approved-template-v2";
+  delete platformData.sourceFingerprintVersion;
+  delete platformData.canonicalArticleId;
+  h.sqlite.prepare(`UPDATE content_drafts SET body='Bài cũ trước khi thông tin sản phẩm được cập nhật',platform_data_json=?,
+    prompt_version='taha-approved-template-v2' WHERE id=?`).run(JSON.stringify(platformData), h.draft.id);
+  h.sqlite.prepare("UPDATE products SET description='Mô tả Sheet đã được sửa đúng cho PH0001' WHERE id='product-1'").run();
+
+  assert.equal((await enqueue(h)).enqueued, 1);
+  const sent = [];
+  const result = await dispatch(h, sent);
+  assert.equal(result.published, 1, JSON.stringify(result));
+  assert.equal(sent.length, 1);
+
+  const updatedSources = await integrity.productSources("product-1");
+  const currentFingerprint = await integrity.productFingerprint(updatedSources.product);
+  const article = h.sqlite.prepare("SELECT * FROM product_articles WHERE product_id='product-1'").get();
+  const payload = JSON.parse(h.sqlite.prepare("SELECT payload_snapshot_json FROM publish_jobs").get().payload_snapshot_json);
+  assert.equal(article.id, oldArticle.id);
+  assert.equal(article.source_fingerprint, currentFingerprint);
+  assert.notEqual(article.body, "Bài cũ trước khi thông tin sản phẩm được cập nhật");
+  assert.equal(payload.message, article.body);
+  assert.equal(payload.platformData.canonicalArticleId, article.id);
+  assert.equal(payload.platformData.sourceFingerprint, currentFingerprint);
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) AS total FROM product_articles WHERE product_id='product-1'").get().total, 1);
+});
+
 test("an existing Facebook schedule picks up every current original and publishes its 27-photo album once", async () => {
   const h = await prepare();
   for (let i = 1; i < 27; i++) {
