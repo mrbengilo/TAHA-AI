@@ -1,0 +1,50 @@
+name: Publish blocked PH0023 Facebook post
+
+on:
+  push:
+    branches: [codex/facebook-ph0023-emergency-20260909]
+    paths:
+      - deploy/vps/facebook-ph0023-stale-recovery.py
+      - .github/workflows/vps-ph0023-facebook-recovery.yml
+      - .github/taha-ph0023-publish-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-ph0023-facebook-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+      EXPECTED_RELEASE_SHA: f3018003e4b091a39abdad14a13e7a5e0c449a59
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate exact recovery script
+        run: python3 -m py_compile deploy/vps/facebook-ph0023-stale-recovery.py
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Repair and publish only PH0023 scheduled at 12:00
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=12 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "python3 - --expected-release-sha '$EXPECTED_RELEASE_SHA'" \
+            < deploy/vps/facebook-ph0023-stale-recovery.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
