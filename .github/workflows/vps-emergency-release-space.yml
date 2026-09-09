@@ -1,0 +1,48 @@
+name: TAHA emergency release space
+
+on:
+  push:
+    branches: [codex/facebook-ph0023-emergency-20260909]
+    paths:
+      - deploy/vps/emergency-release-space.py
+      - .github/workflows/vps-emergency-release-space.yml
+      - .github/taha-ph0023-space-trigger
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-emergency-release-space
+  cancel-in-progress: false
+
+jobs:
+  reclaim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate cleanup script
+        run: python3 -m py_compile deploy/vps/emergency-release-space.py
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Reclaim only guarded TAHA release artifacts
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            'python3 -' < deploy/vps/emergency-release-space.py
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
