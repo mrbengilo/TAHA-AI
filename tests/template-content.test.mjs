@@ -9,7 +9,7 @@ function loadTemplate() {
   return { h, template: h.load("lib/ai/template.ts") };
 }
 
-test("approved template writes every channel without OpenAI, image generation or price disclosure", async () => {
+test("approved template writes one canonical SKU article without OpenAI, image generation or price disclosure", async () => {
   const { h, template } = loadTemplate();
   let externalRequests = 0;
   h.runtime.TEST_FETCH = async () => { externalRequests += 1; throw new Error("No external request is allowed"); };
@@ -29,18 +29,21 @@ test("approved template writes every channel without OpenAI, image generation or
     targetProviders: ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"],
   });
 
-  assert.equal(result.model, "taha-approved-template-v2");
-  assert.equal(JSON.stringify(result.usage), JSON.stringify({ source: "approved-template", externalRequests: 0, sourceCorrections: [] }));
+  assert.equal(result.model, "taha-approved-template-v3");
+  assert.equal(JSON.stringify(result.usage), JSON.stringify({
+    source: "approved-template", externalRequests: 0, articleWrites: 1,
+    sharedAcrossChannels: ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"], sourceCorrections: [],
+  }));
   assert.equal(externalRequests, 0);
   assert.equal(result.content.sku, "PH0018");
-  assert.deepEqual(Object.keys(result.content.channels), ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"]);
-  for (const channel of Object.values(result.content.channels)) {
-    assert.match(channel.body, /PH0018/);
-    assert.doesNotMatch(`${channel.title}\n${channel.body}\n${channel.hashtags.join(" ")}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
-  }
-  assert.match(result.content.channels.facebook.body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
-  assert.match(result.content.channels.facebook.body, /THÔNG TIN LIÊN HỆ/);
-  assert.match(result.content.channels.facebook.body, /Size hiện có: 36, 37, 38, 39, 40/);
+  assert.equal(result.content.channels, undefined);
+  assert.equal(result.content.productDescription, undefined);
+  assert.equal(result.content.canonicalArticle.version, "sku-canonical-v1");
+  assert.match(result.content.canonicalArticle.body, /PH0018/);
+  assert.doesNotMatch(`${result.content.canonicalArticle.title}\n${result.content.canonicalArticle.body}\n${result.content.canonicalArticle.hashtags.join(" ")}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
+  assert.match(result.content.canonicalArticle.body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
+  assert.match(result.content.canonicalArticle.body, /THÔNG TIN LIÊN HỆ/);
+  assert.match(result.content.canonicalArticle.body, /Size hiện có: 36, 37, 38, 39, 40/);
 });
 
 test("approved template is deterministic for the same exact SKU", async () => {
@@ -67,17 +70,17 @@ test("approved Facebook template accepts production SEO names with store-policy 
     targetProviders: ["facebook"],
   });
 
-  const body = result.content.channels.facebook.body;
+  const body = result.content.canonicalArticle.body;
   const productSections = body.split("MUA SẮM CÙNG TAHA SHOES")[0];
   assert.match(productSections, /PH0022/);
   assert.match(productSections, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.doesNotMatch(productSections, /bảo\s*hành|quà\s*tặng/iu);
   assert.match(body, /Bảo hành 12 tháng/u);
   assert.match(body, /Quà tặng kèm: khử mùi \+ vớ thể thao/u);
-  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify(["facebook_editorial_name_normalized"]));
+  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify(["sku_editorial_name_normalized"]));
 });
 
-test("approved Facebook template repairs malformed Sheet display text without a manual retry", async () => {
+test("canonical SKU template repairs malformed Sheet display text for any channel without a manual retry", async () => {
   const { template } = loadTemplate();
   const result = await template.generateProductContent({
     product: {
@@ -87,14 +90,14 @@ test("approved Facebook template repairs malformed Sheet display text without a 
       category: "",
       sizes: ["39", "40"],
     },
-    targetProviders: ["facebook"],
+    targetProviders: ["shopee"],
   });
 
-  const body = result.content.channels.facebook.body;
+  const body = result.content.canonicalArticle.body;
   assert.match(body, /Mẫu giày PH0099/u);
   assert.match(body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
-    "facebook_editorial_name_normalized",
-    "facebook_structure_fallback",
+    "sku_editorial_name_normalized",
+    "canonical_structure_fallback",
   ]));
 });

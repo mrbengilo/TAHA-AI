@@ -82,10 +82,14 @@ export function harness() {
   });
   const generated = [];
   overrides.set(path.join(ROOT, "lib/ai/template.ts"), {
-    APPROVED_TEMPLATE_MODEL: "taha-approved-template-v2",
+    APPROVED_TEMPLATE_MODEL: "taha-approved-template-v3",
+    CANONICAL_ARTICLE_VERSION: "sku-canonical-v1",
     async generateProductContent(input) {
       generated.push(input);
-      return { model: "taha-approved-template-v2", content: { productDescription: `Mô tả theo mẫu ${input.product.sku}`, hashtags: ["#TAHA"], channels: Object.fromEntries(input.targetProviders.map((provider) => [provider, { title: `Giày ${input.product.sku}`, body: `Bài viết ${input.product.sku}`, hashtags: ["#TAHA", `#${input.product.sku}`] }])) } };
+      return { model: "taha-approved-template-v3", content: { sku: input.product.sku, canonicalArticle: {
+        version: "sku-canonical-v1", title: `Giày ${input.product.sku}`, body: `Bài viết ${input.product.sku}`,
+        hashtags: ["#TAHA", `#${input.product.sku}`],
+      }, sourceCorrections: [] } };
     },
   });
   return { sqlite, db, runtime, hooks, load, seedProduct, generated, overrides };

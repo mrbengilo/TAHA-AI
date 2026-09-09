@@ -42,3 +42,7 @@ yarn-error.log*
 /outputs/
 /work/
 /.tmp/
+
+# Python diagnostic scripts may leave disposable bytecode on the VPS checkout.
+__pycache__/
+*.py[cod]

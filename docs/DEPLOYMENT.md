@@ -42,6 +42,7 @@ systemd timer/cron root-only
 - D1 mới phải áp dụng **tất cả** file trong `drizzle/`, không chỉ migration mới nhất.
 - `0003_lazy_hellcat.sql` tạo `automation_runs` và `automation_steps`.
 - `0004_drive_only_automation.sql` loại bỏ công việc tạo ảnh cũ; `0005_template_content_cleanup.sql` chuyển lỗi OpenAI còn hợp lệ sang bộ viết theo mẫu và dọn bản ghi lỗi trùng an toàn.
+- `0007_shared_sku_article.sql` tạo đúng một bài gốc trong `product_articles` cho mỗi SKU. Các bản ghi theo kênh chỉ là bản giao hàng/lịch/biên nhận và cùng tham chiếu bài gốc; dữ liệu Sheet không đổi thì hệ thống không viết lại.
 - `/data` chứa D1, R2 media và trạng thái Wrangler local; sao lưu nhất quán trước deploy/rollback.
 - Rollback image không được tự hạ schema. Nếu code cũ không tương thích migration mới, phục hồi cả image và bản sao `/data` tương ứng trong cửa sổ bảo trì.
 

@@ -81,6 +81,28 @@ export const products = sqliteTable("products", {
   index("idx_products_workspace_status_updated").on(table.workspaceId, table.status, table.updatedAt),
 ]);
 
+export const productArticles = sqliteTable("product_articles", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  productId: text("product_id").notNull().references(() => products.id),
+  sku: text("sku").notNull(),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  hashtags: jsonText<string[]>("hashtags_json").notNull().default([]),
+  articleVersion: text("article_version").notNull(),
+  sourceFingerprint: text("source_fingerprint").notNull(),
+  sourceCorrections: jsonText<string[]>("source_corrections_json").notNull().default([]),
+  generator: text("generator").notNull(),
+  model: text("model").notNull(),
+  promptVersion: text("prompt_version").notNull(),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("uq_product_articles_workspace_product").on(table.workspaceId, table.productId),
+  uniqueIndex("uq_product_articles_workspace_sku").on(table.workspaceId, table.sku),
+  index("idx_product_articles_workspace_updated").on(table.workspaceId, table.updatedAt),
+]);
+
 export const productVariants = sqliteTable("product_variants", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),

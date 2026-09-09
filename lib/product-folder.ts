@@ -36,6 +36,10 @@ export async function getProductFolder(id: string) {
     db.prepare(`SELECT id, status, error_code, error_message, requested_image_count, completed_image_count FROM automation_runs WHERE product_id = ? AND workspace_id = ? ORDER BY created_at DESC LIMIT 10`).bind(id, TAHA_WORKSPACE_ID)
       .all<{ id: string; status: string; error_code: string | null; error_message: string | null; requested_image_count: number; completed_image_count: number }>(),
   ]);
-  const drafts = draftRows.results.map((draft) => ({ ...draft, hashtags: JSON.parse(draft.hashtags_json) as string[], productDescription: String(objectJson(draft.platform_data_json).productDescription || "") }));
+  const drafts = draftRows.results.map((draft) => {
+    const description = String(objectJson(draft.platform_data_json).productDescription || "").trim();
+    return { ...draft, hashtags: JSON.parse(draft.hashtags_json) as string[],
+      productDescription: description && description !== draft.body.trim() ? description : "" };
+  });
   return { product, images, validationError, drafts, schedules: scheduleRows.results, jobs: jobRows.results, runs: runRows.results };
 }
