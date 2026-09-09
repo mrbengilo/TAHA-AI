@@ -199,8 +199,9 @@ test("a v1/v2 schedule deterministically repairs its one canonical article after
 
   const platformData = JSON.parse(h.draft.platform_data_json);
   platformData.sourceFingerprint = oldFingerprint;
-  platformData.contentTemplateVersion = "taha-approved-template-v2";
-  delete platformData.sourceFingerprintVersion;
+  platformData.sourceFingerprintVersion = "product-copy-v1";
+  platformData.contentTemplateVersion = "taha-approved-template-v3";
+  platformData.fingerprintRecovery = "product-copy-v2-compat-20260909";
   delete platformData.canonicalArticleId;
   h.sqlite.prepare(`UPDATE content_drafts SET body='Bài cũ trước khi thông tin sản phẩm được cập nhật',platform_data_json=?,
     prompt_version='taha-approved-template-v2' WHERE id=?`).run(JSON.stringify(platformData), h.draft.id);

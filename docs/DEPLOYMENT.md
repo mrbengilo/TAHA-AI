@@ -43,7 +43,7 @@ systemd timer/cron root-only
 - `0003_lazy_hellcat.sql` tạo `automation_runs` và `automation_steps`.
 - `0004_drive_only_automation.sql` loại bỏ công việc tạo ảnh cũ; `0005_template_content_cleanup.sql` chuyển lỗi OpenAI còn hợp lệ sang bộ viết theo mẫu và dọn bản ghi lỗi trùng an toàn.
 - `0007_shared_sku_article.sql` tạo đúng một bài gốc trong `product_articles` cho mỗi SKU. Các bản ghi theo kênh chỉ là bản giao hàng/lịch/biên nhận và cùng tham chiếu bài gốc; dữ liệu Sheet không đổi thì hệ thống không viết lại.
-- Lịch cũ trước tiên được gắn lại vào bài gốc hiện hành nếu bài gốc của SKU đã khớp dữ liệu mới nhất. Nếu Sheet đã được quy trình đồng bộ sửa sau khi tạo lịch v1/v2, dispatcher dùng mẫu nội bộ hiện tại (không gọi AI) để cập nhật đúng một bài gốc theo dữ liệu mới rồi ghi dấu vân tay `product-copy-v2`; lịch v3 bị thay đổi ngoài quy trình vẫn bị chặn.
+- Lịch cũ trước tiên được gắn lại vào bài gốc hiện hành của workspace + SKU nếu bài đó đã khớp dữ liệu mới nhất, không phụ thuộc ID cũ. Nếu Sheet đã được quy trình đồng bộ sửa sau khi tạo lịch v1/v2, dispatcher dùng mẫu nội bộ hiện tại (không gọi AI) để cập nhật đúng một bài gốc theo dữ liệu mới rồi ghi dấu vân tay `product-copy-v2`; marker phục hồi chỉ áp dụng cho đúng job PH0015 đã qua chốt không có receipt, còn lịch khác bị thay đổi ngoài quy trình vẫn bị chặn.
 - `/data` chứa D1, R2 media và trạng thái Wrangler local; sao lưu nhất quán trước deploy/rollback.
 - Rollback image không được tự hạ schema. Nếu code cũ không tương thích migration mới, phục hồi cả image và bản sao `/data` tương ứng trong cửa sổ bảo trì.
 

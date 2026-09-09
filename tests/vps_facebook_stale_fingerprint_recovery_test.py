@@ -59,6 +59,9 @@ class FacebookStaleFingerprintRecoveryTests(unittest.TestCase):
         self.assertIn('j.external_post_id IS NULL', sql)
         self.assertIn("COALESCE(j.provider_response_json,'{}')='{}'", sql)
         self.assertIn(recovery.MARKER, sql)
+        self.assertIn('sourceFingerprintVersion', sql)
+        self.assertIn('contentTemplateVersion', sql)
+        self.assertIn('product_articles', sql)
 
     def test_requeue_preserves_fail_closed_receipt_guards(self):
         with patch.object(recovery, 'query', return_value=[{'id': 'job-1', 'status': 'queued'}]) as query:
