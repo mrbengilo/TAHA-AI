@@ -61,6 +61,53 @@ test("one confirmation, one Drive image -> caption/hashtags -> schedule -> exact
   assert.equal(result.jobs[0].external_post_id, "page_post");
 });
 
+test("one SKU article is stored once and reused unchanged by every channel", async () => {
+  const h = harness(); h.seedProduct();
+  const automation = h.load("lib/automation.ts");
+  const targets = ["facebook", "website", "zalo_personal", "shopee", "tiktok_shop"];
+  const first = await automation.queueAutomationRun({
+    productId: "product-1", idempotencyKey: "shared-article-all-channels",
+    targetProviders: targets, imageCount: 0, prepareOnly: true,
+  });
+  for (let tick = 0; tick < 3; tick += 1) {
+    const result = await automation.runAutomationWorker();
+    assert.equal(result.completed, 1, JSON.stringify(result));
+  }
+
+  const article = h.sqlite.prepare("SELECT * FROM product_articles WHERE product_id='product-1'").get();
+  assert.ok(article);
+  assert.equal(article.prompt_version, "taha-approved-template-v3");
+  assert.equal(article.article_version, "sku-canonical-v1");
+  const drafts = h.sqlite.prepare("SELECT target_provider,title,body,hashtags_json,platform_data_json FROM content_drafts ORDER BY target_provider").all();
+  assert.equal(drafts.length, 5);
+  assert.equal(new Set(drafts.map((draft) => draft.title)).size, 1);
+  assert.equal(new Set(drafts.map((draft) => draft.body)).size, 1);
+  assert.equal(new Set(drafts.map((draft) => draft.hashtags_json)).size, 1);
+  assert.equal(drafts[0].body, article.body);
+  assert.ok(drafts.every((draft) => JSON.parse(draft.platform_data_json).canonicalArticleId === article.id));
+  const firstContent = JSON.parse(h.sqlite.prepare("SELECT content_json FROM automation_runs WHERE id=?").get(first.run.id).content_json);
+  assert.equal(firstContent.canonicalArticleId, article.id);
+  assert.equal(firstContent.canonicalArticle, undefined);
+  assert.equal(firstContent.channels, undefined);
+  assert.equal(firstContent.productDescription, undefined);
+  assert.equal(h.generated.length, 1);
+
+  const second = await automation.queueAutomationRun({
+    productId: "product-1", idempotencyKey: "reuse-shared-article-on-another-run",
+    targetProviders: ["shopee"], imageCount: 0, prepareOnly: true,
+  });
+  for (let tick = 0; tick < 3; tick += 1) {
+    const result = await automation.runAutomationWorker();
+    assert.equal(result.completed, 1, JSON.stringify(result));
+  }
+  assert.equal(h.generated.length, 1, "the second run must not write the SKU article again");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) AS total FROM product_articles WHERE product_id='product-1'").get().total, 1);
+  assert.equal(h.sqlite.prepare("SELECT updated_at FROM product_articles WHERE product_id='product-1'").get().updated_at,
+    article.updated_at, "reusing another channel must not update the stored article");
+  const contentStep = h.sqlite.prepare("SELECT result_json FROM automation_steps WHERE run_id=? AND step_type='content'").get(second.run.id);
+  assert.equal(JSON.parse(contentStep.result_json).usage.source, "stored-canonical-article");
+});
+
 test("different SKU media and stale product descriptions fail closed", async () => {
   const h = await prepare(); h.seedProduct("product-2", "PH0002");
   const integrity = h.load("lib/product-integrity.ts");
@@ -214,7 +261,7 @@ test("folder returns only this SKU's photos and articles with receipt", async ()
   assert.equal(folder.product.base_sku, "PH0001");
   assert.deepEqual(Array.from(folder.images, (i) => i.id), ["image-product-1"]);
   assert.equal(folder.drafts.length, 1); assert.equal(folder.schedules.length, 1);
-  assert.match(folder.drafts[0].productDescription, /PH0001/);
+  assert.equal(folder.drafts[0].productDescription, "", "canonical copy must not be rendered twice");
   assert.equal(h.sqlite.prepare("SELECT workspace_id FROM products LIMIT 1").get().workspace_id, WORKSPACE);
 });
 
@@ -354,6 +401,8 @@ test("Facebook template v2 resumes the newest structure failure and removes its 
     assert.equal(result.completed, 1, JSON.stringify(result));
   }
   assert.equal(h.sqlite.prepare("SELECT status FROM automation_runs WHERE id='structure-new'").get().status, "completed");
+  assert.equal(h.sqlite.prepare("SELECT prompt_version FROM automation_runs WHERE id='structure-new'").get().prompt_version, "taha-approved-template-v3");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM product_articles WHERE product_id='product-1'").get().n, 1);
   assert.equal(h.sqlite.prepare("SELECT COUNT(*) n FROM automation_runs WHERE id='structure-old'").get().n, 0);
 });
 

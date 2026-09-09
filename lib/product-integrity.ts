@@ -81,12 +81,15 @@ export async function productSources(productId: string, override?: ProductDataba
 }
 
 export async function productFingerprint(product: SourceProduct) {
-  // Exclude timestamps/inventory: an unchanged sync or stock movement must not invalidate a caption.
+  // Exclude timestamps, inventory and prices: public copy contains no price, so
+  // operational commerce changes must not cause the SKU article to be rewritten.
   const website = record(objectJson(product.metadata_json).website);
   const bytes = new TextEncoder().encode(JSON.stringify([
     product.base_sku, product.name, product.description, product.brand, product.category,
-    product.currency, product.price_minor, product.compare_at_price_minor,
     Array.isArray(website.sizes) ? website.sizes : [],
+    Array.isArray(website.colors) ? website.colors : [],
+    Array.isArray(website.gifts) ? website.gifts : [],
+    Array.isArray(website.specifications) ? website.specifications : [],
   ]));
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (v) => v.toString(16).padStart(2, "0")).join("");
 }

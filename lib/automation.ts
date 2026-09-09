@@ -1,4 +1,8 @@
-import { APPROVED_TEMPLATE_MODEL, generateProductContent } from "./ai/template";
+import {
+  APPROVED_TEMPLATE_MODEL,
+  CANONICAL_ARTICLE_VERSION,
+  generateProductContent,
+} from "./ai/template";
 import { syncGoogleCatalog } from "./integrations/google-sync";
 import { getRuntimeEnv } from "./integrations/env";
 import { verifyFacebookConnection } from "./integrations/facebook-permissions";
@@ -17,7 +21,7 @@ export const AUTOMATION_TARGET_PROVIDERS = [
 type TargetProvider = (typeof AUTOMATION_TARGET_PROVIDERS)[number];
 type StepType = "content" | "optimize" | "image" | "finalize";
 const AUTOMATION_LEASE_MS = 15 * 60_000;
-const CONTENT_TEMPLATE_VERSION = "taha-approved-template-v2";
+const CONTENT_TEMPLATE_VERSION = APPROVED_TEMPLATE_MODEL;
 
 type AutomationStatement = {
   bind(...values: unknown[]): AutomationStatement;
@@ -65,6 +69,18 @@ type StepRow = {
   attempt_count: number;
   max_attempts: number;
   result_json: string;
+};
+
+type ProductArticleRow = {
+  id: string;
+  title: string;
+  body: string;
+  hashtags_json: string;
+  article_version: string;
+  source_fingerprint: string;
+  source_corrections_json: string;
+  model: string;
+  prompt_version: string;
 };
 
 export type QueueAutomationInput = {
@@ -126,6 +142,32 @@ function json<T>(value: string | null | undefined, fallback: T): T {
 
 function cleanText(value: unknown, max = 20_000) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function normalizedHashtags(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => cleanText(item, 80).replace(/^#+/, "")).filter(Boolean))].slice(0, 20)
+    : [];
+}
+
+function canonicalArticle(value: unknown) {
+  const item = record(value);
+  const version = cleanText(item.version, 80);
+  const title = cleanText(item.title ?? item.productTitle, 255);
+  const body = cleanText(item.body ?? item.message ?? item.description, 20_000);
+  if (!title || !body || version !== CANONICAL_ARTICLE_VERSION) return null;
+  return { version, title, body, hashtags: normalizedHashtags(item.hashtags) };
+}
+
+function requestMetadata(content: Record<string, unknown>) {
+  const retained = { ...content };
+  for (const key of [
+    "canonicalArticle", "canonicalArticleId", "canonicalArticleVersion", "channels",
+    "facebook", "website", "zalo", "zalo_personal", "shopee", "tiktokShop", "tiktok_shop",
+    "productTitle", "productDescription", "hashtags", "sourceCorrections", "sourceFingerprint",
+    "sourceMediaIds", "allSourceMediaIds", "sourceMediaSnapshot",
+  ]) delete retained[key];
+  return retained;
 }
 
 function normalizeTargets(value: unknown): TargetProvider[] {
@@ -493,24 +535,59 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
     ? [...new Set(websiteMetadata.specifications.map((value) => cleanText(value, 160)).filter(Boolean))].slice(0, 80)
     : [];
   const fingerprint = await productFingerprint(product);
-  const generated = await generateProductContent({
-    product: {
-      sku: product.base_sku,
-      name: product.name,
-      description: product.description,
-      brand: product.brand,
-      category: product.category,
-      currency: product.currency,
-      priceMinor: product.price_minor,
-      compareAtPriceMinor: product.compare_at_price_minor,
-      inventoryQuantity: product.inventory_quantity,
-      sizes,
-      colors,
-      gifts,
-      specifications,
-    },
-    targetProviders: json<string[]>(run.target_providers_json, []),
-  });
+  const articleId = await stableId("article", `${TAHA_WORKSPACE_ID}:${run.product_id}`);
+  const stored = await db.prepare(
+    `SELECT id,title,body,hashtags_json,article_version,source_fingerprint,source_corrections_json,model,prompt_version
+     FROM product_articles WHERE id=? AND workspace_id=? AND product_id=?
+       AND source_fingerprint=? AND article_version=? AND prompt_version=? LIMIT 1`,
+  ).bind(articleId, TAHA_WORKSPACE_ID, run.product_id, fingerprint, CANONICAL_ARTICLE_VERSION, CONTENT_TEMPLATE_VERSION)
+    .first<ProductArticleRow>();
+  const storedArticle = stored ? canonicalArticle({
+    version: stored.article_version,
+    title: stored.title,
+    body: stored.body,
+    hashtags: json<string[]>(stored.hashtags_json, []),
+  }) : null;
+  const targetProviders = json<string[]>(run.target_providers_json, []);
+  const generated = stored && storedArticle
+    ? {
+      model: stored.model,
+      content: {
+        sku: product.base_sku,
+        canonicalArticle: storedArticle,
+        sourceCorrections: json<string[]>(stored.source_corrections_json, []),
+      },
+      usage: {
+        source: "stored-canonical-article",
+        externalRequests: 0,
+        articleWrites: 0,
+        sharedAcrossChannels: targetProviders,
+      },
+    }
+    : await generateProductContent({
+      product: {
+        sku: product.base_sku,
+        name: product.name,
+        description: product.description,
+        brand: product.brand,
+        category: product.category,
+        currency: product.currency,
+        priceMinor: product.price_minor,
+        compareAtPriceMinor: product.compare_at_price_minor,
+        inventoryQuantity: product.inventory_quantity,
+        sizes,
+        colors,
+        gifts,
+        specifications,
+      },
+      targetProviders,
+    });
+  const article = canonicalArticle(record(generated.content).canonicalArticle);
+  if (!article) throw new Error("AUTOMATION_CONTENT_INVALID");
+  const sourceCorrections = Array.isArray(record(generated.content).sourceCorrections)
+    ? [...new Set((record(generated.content).sourceCorrections as unknown[])
+      .map((value) => cleanText(value, 120)).filter(Boolean))]
+    : [];
   const completedAt = Date.now();
   const sourceSnapshots = sources.images.map((image) => {
     const metadata = json<Record<string, unknown>>(image.metadata_json, {});
@@ -519,6 +596,43 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
     return { mediaId: image.id, externalId: image.external_id, sourceVersion };
   });
   const statements: AutomationStatement[] = [
+    db.prepare(
+      `INSERT INTO product_articles
+       (id,workspace_id,product_id,sku,title,body,hashtags_json,article_version,source_fingerprint,
+        source_corrections_json,generator,model,prompt_version,created_at,updated_at)
+       SELECT ?,?,?,?,?,?,?,?,?,?,'template',?,?,?,?
+       WHERE EXISTS (
+         SELECT 1 FROM automation_steps s JOIN automation_runs r
+           ON r.id=s.run_id AND r.workspace_id=s.workspace_id
+         WHERE s.id=? AND s.run_id=? AND s.workspace_id=? AND s.status='processing'
+           AND s.lease_owner=? AND s.lease_expires_at>? AND r.status IN ('queued','processing')
+       )
+       ON CONFLICT(workspace_id,product_id) DO UPDATE SET
+         sku=excluded.sku,title=excluded.title,body=excluded.body,hashtags_json=excluded.hashtags_json,
+         article_version=excluded.article_version,source_fingerprint=excluded.source_fingerprint,
+         source_corrections_json=excluded.source_corrections_json,generator=excluded.generator,
+         model=excluded.model,prompt_version=excluded.prompt_version,updated_at=excluded.updated_at`,
+    ).bind(
+      articleId,
+      TAHA_WORKSPACE_ID,
+      run.product_id,
+      product.base_sku,
+      article.title,
+      article.body,
+      JSON.stringify(article.hashtags),
+      article.version,
+      fingerprint,
+      JSON.stringify(sourceCorrections),
+      generated.model,
+      CONTENT_TEMPLATE_VERSION,
+      completedAt,
+      completedAt,
+      step.id,
+      run.id,
+      TAHA_WORKSPACE_ID,
+      workerId,
+      completedAt,
+    ),
     db.prepare(
       `UPDATE automation_runs SET content_json = ?, text_model = ?, image_model = NULL,
        requested_image_count = 0, completed_image_count = 0, prompt_version = ?, status = 'processing',
@@ -530,7 +644,9 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
              AND s.status = 'processing' AND s.lease_owner = ? AND s.lease_expires_at > ?
          )`,
     ).bind(
-      JSON.stringify({ ...currentContent, ...generated.content, sourceFingerprint: fingerprint,
+      JSON.stringify({ ...requestMetadata(currentContent), sku: product.base_sku,
+        canonicalArticleId: articleId, canonicalArticleVersion: article.version, sourceCorrections,
+        sourceFingerprint: fingerprint,
         sourceMediaIds: sources.images.map((image) => image.id), allSourceMediaIds: sources.images.map((image) => image.id),
         sourceMediaSnapshot: sourceSnapshots }),
       generated.model,
@@ -569,6 +685,10 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
       completedAt,
     ),
   ];
+  const runUpdateIndex = storedArticle ? 0 : 1;
+  // A matching canonical article is immutable and must not receive a redundant
+  // UPDATE merely because another channel or schedule reuses it.
+  if (storedArticle) statements.shift();
   const completeContent = statements.pop();
   if (!completeContent) throw new Error("AUTOMATION_STEP_FAILED");
   for (const [ordinal, snapshot] of sourceSnapshots.entries()) {
@@ -584,7 +704,7 @@ async function processContent(db: AutomationDatabase, run: RunRow, step: StepRow
   }
   statements.push(completeContent);
   const saved = await db.batch(statements);
-  if (changes(saved[0]) === 0 || changes(saved[saved.length - 1]) === 0) throw new Error("AUTOMATION_LEASE_LOST");
+  if (changes(saved[runUpdateIndex]) === 0 || changes(saved[saved.length - 1]) === 0) throw new Error("AUTOMATION_LEASE_LOST");
 }
 
 async function processOptimize(db: AutomationDatabase, run: RunRow, step: StepRow, workerId: string) {
@@ -616,13 +736,18 @@ async function processOptimize(db: AutomationDatabase, run: RunRow, step: StepRo
 }
 
 function channelContent(content: Record<string, unknown>, provider: TargetProvider) {
+  const canonical = canonicalArticle(content.canonicalArticle);
+  if (canonical) {
+    return { title: canonical.title, body: canonical.body, hashtags: canonical.hashtags, platformData: {} };
+  }
+  // Legacy runs stored separate channel payloads. Keep them readable while all
+  // v3 runs use the single product_articles record above.
   const channels = record(content.channels);
   const item = record(channels[provider] ?? content[provider]);
   const title = cleanText(item.title ?? item.productTitle ?? content.productTitle, 255);
   const body = cleanText(item.body ?? item.message ?? item.description ?? content.productDescription, 20_000);
-  const hashtags = Array.isArray(item.hashtags)
-    ? [...new Set(item.hashtags.map((value) => cleanText(value, 80).replace(/^#+/, "")).filter(Boolean))].slice(0, 20)
-    : [];
+  const hashtags = normalizedHashtags(item.hashtags);
+  if (!body) throw new Error("AUTOMATION_CONTENT_INVALID");
   return { title, body, hashtags, platformData: record(item.platformData) };
 }
 
@@ -672,6 +797,22 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
   if (typeof content.sourceFingerprint !== "string") throw new Error("PRODUCT_CONTENT_STALE");
   const sources = await assertProductMedia(run.product_id, originalMediaIds, content.sourceFingerprint, db);
   assertSourceSnapshot(sources, content);
+  const articleId = cleanText(content.canonicalArticleId, 120);
+  let deliveryContent = content;
+  if (articleId) {
+    const shared = await db.prepare(
+      `SELECT id,title,body,hashtags_json,article_version,source_fingerprint,source_corrections_json,model,prompt_version
+       FROM product_articles WHERE id=? AND workspace_id=? AND product_id=? AND source_fingerprint=? LIMIT 1`,
+    ).bind(articleId, TAHA_WORKSPACE_ID, run.product_id, content.sourceFingerprint).first<ProductArticleRow>();
+    const article = shared ? canonicalArticle({
+      version: shared.article_version,
+      title: shared.title,
+      body: shared.body,
+      hashtags: json<string[]>(shared.hashtags_json, []),
+    }) : null;
+    if (!article || article.version !== content.canonicalArticleVersion) throw new Error("PRODUCT_CONTENT_STALE");
+    deliveryContent = { ...content, canonicalArticle: article };
+  }
   const mediaIds: string[] = [];
   const selectedSourceMediaIds = originalMediaIds;
   const draftMediaIds = selectedSourceMediaIds;
@@ -685,14 +826,15 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
   for (const provider of json<TargetProvider[]>(current.target_providers_json, [])) {
     const draftId = await stableId("draft", `${run.id}:${provider}`);
     draftIds.push(draftId);
-    const generated = channelContent(content, provider);
+    const generated = channelContent(deliveryContent, provider);
     const platformData = {
       ...generated.platformData,
       automationRunId: run.id,
+      ...(articleId ? { canonicalArticleId: articleId } : {}),
       sku: sources.sku,
       sourceFingerprint: content.sourceFingerprint,
       contentTemplateVersion: current.prompt_version,
-      productDescription: cleanText(content.productDescription, 20_000),
+      productDescription: generated.body,
       sourceImageCount: selectedSourceMediaIds.length,
       availableSourceImageCount: originalMediaIds.length,
       generatedImageCount: mediaIds.length,
@@ -726,7 +868,8 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       current.text_model === APPROVED_TEMPLATE_MODEL ? "template" : "openai",
       current.text_model,
       current.prompt_version,
-      JSON.stringify({ automationRunId: run.id, sourceMediaIds: selectedSourceMediaIds, outputMediaIds: mediaIds, allMediaIds: draftMediaIds }),
+      JSON.stringify({ automationRunId: run.id, ...(articleId ? { canonicalArticleId: articleId } : {}),
+        sourceMediaIds: selectedSourceMediaIds, outputMediaIds: mediaIds, allMediaIds: draftMediaIds }),
       prepareOnly ? null : `automation:${run.id}`,
       prepareOnly ? null : finalizedAt,
       finalizedAt,

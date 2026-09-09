@@ -73,6 +73,12 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
+      - name: Preserve verified generated Python cache outside the checkout
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -B -u - --apply < deploy/vps/preserve-generated-python-cache.py
       - name: Reclaim obsolete release images for the authorized website recovery
         if: ${{ contains(github.event.head_commit.message, '[website-trial-PH0015]') }}
         run: |

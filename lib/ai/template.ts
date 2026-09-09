@@ -7,9 +7,10 @@ import {
   facebookStoreReferenceText,
   hasCompleteFacebookStructure,
 } from "./facebook-content";
-import type { ChannelContent, ProductContentInput, ProductContentProduct } from "./openai";
+import type { ProductContentInput, ProductContentProduct } from "./openai";
 
-export const APPROVED_TEMPLATE_MODEL = "taha-approved-template-v2";
+export const APPROVED_TEMPLATE_MODEL = "taha-approved-template-v3";
+export const CANONICAL_ARTICLE_VERSION = "sku-canonical-v1";
 
 const PROVIDERS = new Set([
   "facebook",
@@ -130,52 +131,9 @@ function fallbackFacebookSections(product: ReturnType<typeof normalizedProduct>)
   ].join("\n\n");
 }
 
-function websiteDescription(product: ReturnType<typeof normalizedProduct>, sections: string) {
-  const sourceFacts = facts(product);
-  return [
-    `✨ ${product.name}`,
-    `Một mẫu ${product.category || "giày thể thao"} dành cho phong cách hằng ngày, được trình bày theo đúng thông tin của mã ${product.sku}.`,
-    "◆ THIẾT KẾ",
-    sections.match(/🎨 Thiết kế:\s*([\s\S]*?)(?=\n\n✨ Ưu điểm:)/u)?.[1]?.trim() || `Kiểu dáng của mẫu ${product.sku} dễ nhận diện và thuận tiện khi phối đồ.`,
-    "◆ ĐIỂM NỔI BẬT",
-    sourceFacts.length
-      ? sourceFacts.map((item) => `• ${sentence(item)}`).join("\n")
-      : `• Thông tin, hình ảnh và mã sản phẩm được giữ đồng nhất cho mẫu ${product.sku}.`,
-    "◆ GỢI Ý SỬ DỤNG",
-    `Phối cùng quần jeans, quần thể thao hoặc trang phục casual để tạo tổng thể năng động, gọn gàng trong các hoạt động thường ngày.`,
-  ].join("\n\n");
-}
-
-function channelTitle(product: ReturnType<typeof normalizedProduct>, provider: string) {
-  if (provider === "website" || provider === "tiktok_shop" || provider === "tiktokShop" || provider === "shopee") {
-    return clippedTitle(product.name.includes(product.sku) ? product.name : `${product.name} – ${product.sku}`);
-  }
-  const prefix = product.brand || product.category || "TAHA SHOES";
-  return clippedTitle(`✨ ${prefix} ${product.sku} – ${product.name}`);
-}
-
-function channelBody(
-  provider: string,
-  product: ReturnType<typeof normalizedProduct>,
-  sections: string,
-  description: string,
-) {
-  if (provider === "facebook") {
-    return `${appendShoeCustomerReference(sections, product)}\n\n${facebookStoreReferenceText(product)}`;
-  }
-  if (provider === "website") return appendShoeCustomerReference(description, product);
-  if (provider === "zalo" || provider === "zalo_personal") {
-    return appendShoeCustomerReference([
-      sections,
-      "💬 Nhắn TAHA SHOES để được hỗ trợ thêm về sản phẩm và chọn size phù hợp.",
-    ].join("\n\n"), product);
-  }
-  return appendShoeCustomerReference(description, product);
-}
-
 /**
- * Writes every channel from the approved 28/08 store structure without any
- * external AI request. Product facts remain scoped to the current Sheet SKU.
+ * Writes one canonical article for the SKU without any external AI request.
+ * Every delivery channel reuses this exact saved title, body and hashtag set.
  */
 export async function generateProductContent(
   input: ProductContentInput,
@@ -186,18 +144,16 @@ export async function generateProductContent(
     throw new Error("TEMPLATE_TARGET_PROVIDERS_INVALID");
   }
   const sections = baseSections(product);
-  const needsFacebook = targetProviders.includes("facebook");
-  const facebookSections = needsFacebook && !hasCompleteFacebookStructure(sections)
+  const canonicalSections = !hasCompleteFacebookStructure(sections)
     ? fallbackFacebookSections(product)
     : sections;
-  if (needsFacebook && !hasCompleteFacebookStructure(facebookSections)) {
+  if (!hasCompleteFacebookStructure(canonicalSections)) {
     throw new Error("TEMPLATE_FACEBOOK_STRUCTURE_INVALID");
   }
   const sourceCorrections = [
-    ...(needsFacebook && editorialProductName(product) !== product.name ? ["facebook_editorial_name_normalized"] : []),
-    ...(needsFacebook && facebookSections !== sections ? ["facebook_structure_fallback"] : []),
+    ...(editorialProductName(product) !== product.name ? ["sku_editorial_name_normalized"] : []),
+    ...(canonicalSections !== sections ? ["canonical_structure_fallback"] : []),
   ];
-  const description = websiteDescription(product, sections);
   const hashtags = [...new Set([
     "#TAHAShoes",
     hashtag(product.sku),
@@ -206,21 +162,22 @@ export async function generateProductContent(
     "#GiayTheThao",
     "#PhongCachHangNgay",
   ].filter(Boolean))];
-  const channels: Record<string, ChannelContent> = {};
-  for (const provider of targetProviders) {
-    const channel = {
-      title: channelTitle(product, provider),
-      body: channelBody(provider, product, provider === "facebook" ? facebookSections : sections, description),
-      hashtags,
-    };
-    assertCustomerCopyAllowed(channel);
-    channels[provider] = channel;
-  }
-  const productDescription = appendShoeCustomerReference(description, product);
-  assertCustomerCopyAllowed({ body: productDescription, hashtags });
+  const canonicalArticle = {
+    version: CANONICAL_ARTICLE_VERSION,
+    title: clippedTitle(product.name.includes(product.sku) ? product.name : `${product.name} – ${product.sku}`),
+    body: `${appendShoeCustomerReference(canonicalSections, product)}\n\n${facebookStoreReferenceText(product)}`,
+    hashtags,
+  };
+  assertCustomerCopyAllowed(canonicalArticle);
   return {
     model: APPROVED_TEMPLATE_MODEL,
-    content: { sku: product.sku, productDescription, hashtags, channels, sourceCorrections },
-    usage: { source: "approved-template", externalRequests: 0, sourceCorrections },
+    content: { sku: product.sku, canonicalArticle, sourceCorrections },
+    usage: {
+      source: "approved-template",
+      externalRequests: 0,
+      articleWrites: 1,
+      sharedAcrossChannels: targetProviders,
+      sourceCorrections,
+    },
   };
 }
