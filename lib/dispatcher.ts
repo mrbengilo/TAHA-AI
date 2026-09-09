@@ -1,5 +1,11 @@
 import { syncGoogleCatalog } from "./integrations/google-sync";
-import { productFingerprint, productSourceConnection, productSources } from "./product-integrity";
+import {
+  legacyProductFingerprint,
+  PRODUCT_FINGERPRINT_VERSION,
+  productFingerprint,
+  productSourceConnection,
+  productSources,
+} from "./product-integrity";
 import { assertPublishProductMedia } from "./publish-media-integrity";
 import { getRuntimeEnv } from "./integrations/env";
 import {
@@ -10,6 +16,7 @@ import {
 } from "./publishing";
 import { recordTikTokShopMappings, sendTikTokShopListing } from "./tiktok-shop-publishing";
 import { customerCopyViolation } from "./ai/shoe-content";
+import { APPROVED_TEMPLATE_MODEL, CANONICAL_ARTICLE_VERSION } from "./ai/template";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -53,6 +60,13 @@ type TikTokMappingCandidate = {
   provider_response_json: string;
   external_post_id: string;
   external_url: string | null;
+};
+
+type ProductArticleRow = {
+  id: string;
+  title: string;
+  body: string;
+  hashtags_json: string;
 };
 
 type D1WriteResult = { meta?: { changes?: number } };
@@ -159,6 +173,97 @@ function parsePayload(value: string) {
   } catch {
     throw new PublishDeliveryError("INVALID_JOB_PAYLOAD");
   }
+}
+
+function cleanText(value: unknown, max: number) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+
+function normalizedHashtags(value: unknown) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => cleanText(item, 80).replace(/^#+/, "")).filter(Boolean))].slice(0, 20)
+    : [];
+}
+
+async function stableArticleId(workspaceId: string, productId: string) {
+  const bytes = new TextEncoder().encode(`${workspaceId}:${productId}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const hex = [...digest].map((item) => item.toString(16).padStart(2, "0")).join("");
+  return `article_${hex.slice(0, 40)}`;
+}
+
+async function upgradeLegacyProductPayload(
+  database: DispatcherDatabase,
+  job: CandidateJob,
+  payload: Record<string, unknown>,
+  platformData: Record<string, unknown>,
+  sources: Awaited<ReturnType<typeof productSources>>,
+  currentFingerprint: string,
+) {
+  const expected = cleanText(platformData.sourceFingerprint, 128);
+  const version = cleanText(platformData.sourceFingerprintVersion, 80);
+  const templateVersion = cleanText(platformData.contentTemplateVersion, 120);
+  const legacyTemplate = templateVersion === "taha-approved-template-v1"
+    || templateVersion === "taha-approved-template-v2";
+  if (version || !legacyTemplate || !expected || expected !== await legacyProductFingerprint(sources.product)) {
+    throw new Error("PRODUCT_CONTENT_STALE");
+  }
+
+  const articleId = await stableArticleId(job.workspace_id, job.product_id!);
+  let article = await database.prepare(
+    `SELECT id,title,body,hashtags_json FROM product_articles
+     WHERE id=? AND workspace_id=? AND product_id=? AND source_fingerprint=?
+       AND article_version=? AND prompt_version=? LIMIT 1`,
+  ).bind(articleId, job.workspace_id, job.product_id, currentFingerprint,
+    CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
+
+  if (!article) {
+    const title = cleanText(payload.title, 255) || cleanText(sources.product.name, 255);
+    const body = cleanText(payload.message, 20_000);
+    if (!title || !body) throw new Error("PRODUCT_CONTENT_STALE");
+    const hashtags = normalizedHashtags(payload.hashtags);
+    const now = Date.now();
+    await database.prepare(
+      `INSERT INTO product_articles
+       (id,workspace_id,product_id,sku,title,body,hashtags_json,article_version,source_fingerprint,
+        source_corrections_json,generator,model,prompt_version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,'["legacy_fingerprint_upgraded"]','template',?,?,?,?)
+       ON CONFLICT(workspace_id,product_id) DO NOTHING`,
+    ).bind(articleId, job.workspace_id, job.product_id, sources.sku, title, body, JSON.stringify(hashtags),
+      CANONICAL_ARTICLE_VERSION, currentFingerprint, APPROVED_TEMPLATE_MODEL,
+      APPROVED_TEMPLATE_MODEL, now, now).run();
+    article = await database.prepare(
+      `SELECT id,title,body,hashtags_json FROM product_articles
+       WHERE id=? AND workspace_id=? AND product_id=? AND source_fingerprint=?
+         AND article_version=? AND prompt_version=? LIMIT 1`,
+    ).bind(articleId, job.workspace_id, job.product_id, currentFingerprint,
+      CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
+  }
+  if (!article) throw new Error("PRODUCT_CONTENT_STALE");
+
+  const hashtags = normalizedHashtags(JSON.parse(article.hashtags_json));
+  const upgradedData = {
+    ...platformData,
+    canonicalArticleId: article.id,
+    sourceFingerprint: currentFingerprint,
+    sourceFingerprintVersion: PRODUCT_FINGERPRINT_VERSION,
+    contentTemplateVersion: APPROVED_TEMPLATE_MODEL,
+  };
+  payload.title = article.title;
+  payload.message = article.body;
+  payload.hashtags = hashtags;
+  payload.platformData = upgradedData;
+
+  if (job.draft_id) {
+    await database.prepare(
+      `UPDATE content_drafts SET title=?,body=?,hashtags_json=?,platform_data_json=?,
+       generation_meta_json=json_set(CASE WHEN json_valid(generation_meta_json) THEN generation_meta_json ELSE '{}' END,
+         '$.canonicalArticleId',?),generator='template',model=?,prompt_version=?,version=version+1,updated_at=?
+       WHERE id=? AND workspace_id=? AND product_id=?`,
+    ).bind(article.title, article.body, JSON.stringify(hashtags), JSON.stringify(upgradedData), article.id,
+      APPROVED_TEMPLATE_MODEL, APPROVED_TEMPLATE_MODEL, Date.now(), job.draft_id, job.workspace_id, job.product_id).run();
+  }
+  return upgradedData;
 }
 
 function facebookPayload(payload: Record<string, unknown>) {
@@ -545,18 +650,29 @@ async function publishLeasedJob(
         await syncGoogleCatalog(sourceConnectionId);
         synchronizedConnections.add(sourceConnectionId);
       }
+      const sources = await productSources(job.product_id, database);
+      const currentFingerprint = await productFingerprint(sources.product);
+      let payloadChanged = false;
+      if (data?.sourceFingerprint && data.sourceFingerprint !== currentFingerprint) {
+        data = await upgradeLegacyProductPayload(database, job, payload, data, sources, currentFingerprint);
+        payloadChanged = true;
+      } else if (data?.sourceFingerprint === currentFingerprint
+        && data.sourceFingerprintVersion !== PRODUCT_FINGERPRINT_VERSION) {
+        data = { ...data, sourceFingerprintVersion: PRODUCT_FINGERPRINT_VERSION };
+        payload.platformData = data;
+        payloadChanged = true;
+      }
       if (job.provider === "facebook") {
         // Existing daily schedules also adopt the owner's all-originals policy.
         // Refresh only before an external feed request, while this job owns its lease.
-        const sources = await productSources(job.product_id, database);
-        if (data?.sourceFingerprint && data.sourceFingerprint !== await productFingerprint(sources.product)) {
-          throw new Error("PRODUCT_CONTENT_STALE");
-        }
         mediaIds = sources.images.map((image) => image.id);
         data = { ...data, sourceImageCount: mediaIds.length, availableSourceImageCount: mediaIds.length,
           generatedImageCount: 0, totalImageCount: mediaIds.length };
         payload.mediaIds = mediaIds;
         payload.platformData = data;
+        payloadChanged = true;
+      }
+      if (payloadChanged) {
         const saved = await database.prepare(`UPDATE publish_jobs SET payload_snapshot_json=?
           WHERE id=? AND workspace_id=? AND status='publishing' AND lease_owner=? AND payload_snapshot_json=? RETURNING id`)
           .bind(JSON.stringify(payload), job.id, job.workspace_id, workerId, job.payload_snapshot_json).first<{ id: string }>();
@@ -568,6 +684,17 @@ async function publishLeasedJob(
   }
   if (job.connection_status !== "connected") throw new PublishDeliveryError("CONNECTION_NOT_CONNECTED");
   if (job.publish_mode !== "api") throw new PublishDeliveryError("CONNECTION_NOT_AUTOMATIC");
+
+  if (job.job_kind === "social_post") {
+    const finalCopyViolation = customerCopyViolation({
+      title: typeof payload.title === "string" ? payload.title : "",
+      body: typeof payload.message === "string" ? payload.message : "",
+      hashtags: Array.isArray(payload.hashtags)
+        ? payload.hashtags.filter((value): value is string => typeof value === "string")
+        : [],
+    });
+    if (finalCopyViolation) throw new PublishDeliveryError(finalCopyViolation);
+  }
 
   if (job.provider === "facebook") {
     if (job.job_kind !== "social_post") throw new PublishDeliveryError("FACEBOOK_JOB_KIND_UNSUPPORTED");

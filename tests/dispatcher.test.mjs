@@ -340,6 +340,10 @@ async function loadDispatcher() {
     console,
     require(specifier) {
       if (specifier === "./ai/shoe-content") return policyModule.exports;
+      if (specifier === "./ai/template") return {
+        APPROVED_TEMPLATE_MODEL: "taha-approved-template-v3",
+        CANONICAL_ARTICLE_VERSION: "sku-canonical-v1",
+      };
       if (specifier === "./integrations/google-sync") return { syncGoogleCatalog: async () => {} };
       if (specifier === "./product-integrity") return { productSourceConnection: async () => "google-test", assertProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };
       if (specifier === "./publish-media-integrity") return { assertPublishProductMedia: async () => ({ product: { source_connection_id: "google-test" } }) };

@@ -146,6 +146,17 @@ jobs:
             -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
             -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "python3 -B -u /var/www/taha-ai/deploy/vps/facebook-template-recovery.py --expected-release-sha $TARGET_SHA"
+      - name: Upgrade and immediately publish the blocked PH0015 Facebook job
+        if: ${{ contains(github.event.head_commit.message, '[facebook-stale-fingerprint-recovery]') }}
+        timeout-minutes: 14
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "python3 -B -u /var/www/taha-ai/deploy/vps/facebook-stale-fingerprint-recovery.py --expected-release-sha $TARGET_SHA"
       - name: Complete all-photo website catalog publishing
         if: ${{ contains(github.event.head_commit.message, '[catalog-complete]') }}
         timeout-minutes: 30

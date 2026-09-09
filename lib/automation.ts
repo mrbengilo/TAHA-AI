@@ -7,7 +7,13 @@ import { syncGoogleCatalog } from "./integrations/google-sync";
 import { getRuntimeEnv } from "./integrations/env";
 import { verifyFacebookConnection } from "./integrations/facebook-permissions";
 import { ensureWorkspace, TAHA_WORKSPACE_ID } from "./integrations/store";
-import { assertProductMedia, productFingerprint, productSourceConnection, productSources } from "./product-integrity";
+import {
+  assertProductMedia,
+  PRODUCT_FINGERPRINT_VERSION,
+  productFingerprint,
+  productSourceConnection,
+  productSources,
+} from "./product-integrity";
 import { normalizeProductSourceImages } from "./product-image-processing";
 
 export const AUTOMATION_TARGET_PROVIDERS = [
@@ -833,6 +839,7 @@ async function processFinalize(db: AutomationDatabase, run: RunRow, step: StepRo
       ...(articleId ? { canonicalArticleId: articleId } : {}),
       sku: sources.sku,
       sourceFingerprint: content.sourceFingerprint,
+      sourceFingerprintVersion: PRODUCT_FINGERPRINT_VERSION,
       contentTemplateVersion: current.prompt_version,
       productDescription: generated.body,
       sourceImageCount: selectedSourceMediaIds.length,
