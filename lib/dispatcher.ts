@@ -1,6 +1,7 @@
 import { syncGoogleCatalog } from "./integrations/google-sync";
 import {
   legacyProductFingerprint,
+  objectJson,
   PRODUCT_FINGERPRINT_VERSION,
   productFingerprint,
   productSourceConnection,
@@ -16,7 +17,7 @@ import {
 } from "./publishing";
 import { recordTikTokShopMappings, sendTikTokShopListing } from "./tiktok-shop-publishing";
 import { customerCopyViolation } from "./ai/shoe-content";
-import { APPROVED_TEMPLATE_MODEL, CANONICAL_ARTICLE_VERSION } from "./ai/template";
+import { APPROVED_TEMPLATE_MODEL, CANONICAL_ARTICLE_VERSION, generateProductContent } from "./ai/template";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -179,9 +180,21 @@ function cleanText(value: unknown, max: number) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function normalizedHashtags(value: unknown) {
   return Array.isArray(value)
     ? [...new Set(value.map((item) => cleanText(item, 80).replace(/^#+/, "")).filter(Boolean))].slice(0, 20)
+    : [];
+}
+
+function normalizedProductList(value: unknown, maxItems: number, maxLength: number) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => cleanText(item, maxLength)).filter(Boolean))].slice(0, maxItems)
     : [];
 }
 
@@ -215,22 +228,59 @@ async function upgradeLegacyProductPayload(
     CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
 
   if (!article) {
-    if (version || !legacyTemplate || !expected || expected !== await legacyProductFingerprint(sources.product)) {
+    if (version || !legacyTemplate || !expected) {
       throw new Error("PRODUCT_CONTENT_STALE");
     }
-    const title = cleanText(payload.title, 255) || cleanText(sources.product.name, 255);
-    const body = cleanText(payload.message, 20_000);
+    let title = cleanText(payload.title, 255) || cleanText(sources.product.name, 255);
+    let body = cleanText(payload.message, 20_000);
+    let hashtags = normalizedHashtags(payload.hashtags);
+    let sourceCorrections = ["legacy_fingerprint_upgraded"];
+    if (expected !== await legacyProductFingerprint(sources.product)) {
+      const metadata = record(objectJson(sources.product.metadata_json).website);
+      const sizes = normalizedProductList(metadata.sizes, 30, 40);
+      if (!sizes.length) throw new Error("PRODUCT_SIZES_REQUIRED");
+      const generated = await generateProductContent({
+        product: {
+          sku: sources.product.base_sku,
+          name: sources.product.name,
+          description: sources.product.description,
+          brand: sources.product.brand,
+          category: sources.product.category,
+          currency: sources.product.currency,
+          priceMinor: sources.product.price_minor,
+          compareAtPriceMinor: sources.product.compare_at_price_minor,
+          inventoryQuantity: sources.product.inventory_quantity,
+          sizes,
+          colors: normalizedProductList(metadata.colors, 30, 160),
+          gifts: normalizedProductList(metadata.gifts, 20, 160),
+          specifications: normalizedProductList(metadata.specifications, 80, 160),
+        },
+        targetProviders: ["facebook"],
+      });
+      const generatedContent = record(generated.content);
+      const generatedArticle = record(generatedContent.canonicalArticle);
+      if (cleanText(generatedArticle.version, 80) !== CANONICAL_ARTICLE_VERSION) {
+        throw new Error("PRODUCT_CONTENT_STALE");
+      }
+      title = cleanText(generatedArticle.title, 255);
+      body = cleanText(generatedArticle.body, 20_000);
+      hashtags = normalizedHashtags(generatedArticle.hashtags);
+      sourceCorrections = normalizedProductList(generatedContent.sourceCorrections, 30, 120);
+    }
     if (!title || !body) throw new Error("PRODUCT_CONTENT_STALE");
-    const hashtags = normalizedHashtags(payload.hashtags);
     const now = Date.now();
     await database.prepare(
       `INSERT INTO product_articles
        (id,workspace_id,product_id,sku,title,body,hashtags_json,article_version,source_fingerprint,
         source_corrections_json,generator,model,prompt_version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,'["legacy_fingerprint_upgraded"]','template',?,?,?,?)
-       ON CONFLICT(workspace_id,product_id) DO NOTHING`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,'template',?,?,?,?)
+       ON CONFLICT(workspace_id,product_id) DO UPDATE SET
+         sku=excluded.sku,title=excluded.title,body=excluded.body,hashtags_json=excluded.hashtags_json,
+         article_version=excluded.article_version,source_fingerprint=excluded.source_fingerprint,
+         source_corrections_json=excluded.source_corrections_json,generator=excluded.generator,
+         model=excluded.model,prompt_version=excluded.prompt_version,updated_at=excluded.updated_at`,
     ).bind(articleId, job.workspace_id, job.product_id, sources.sku, title, body, JSON.stringify(hashtags),
-      CANONICAL_ARTICLE_VERSION, currentFingerprint, APPROVED_TEMPLATE_MODEL,
+      CANONICAL_ARTICLE_VERSION, currentFingerprint, JSON.stringify(sourceCorrections), APPROVED_TEMPLATE_MODEL,
       APPROVED_TEMPLATE_MODEL, now, now).run();
     article = await database.prepare(
       `SELECT id,title,body,hashtags_json FROM product_articles
