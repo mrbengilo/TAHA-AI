@@ -156,6 +156,40 @@ test("a v1/v2 scheduled job is upgraded to the single canonical article instead 
   assert.equal(h.sqlite.prepare("SELECT body FROM content_drafts WHERE id=?").get(h.draft.id).body, article.body);
 });
 
+test("an old schedule reuses the current canonical article after Sheet corrections changed its fingerprint", async () => {
+  const h = await prepare();
+  const integrity = h.load("lib/product-integrity.ts");
+  const sources = await integrity.productSources("product-1");
+  const currentFingerprint = await integrity.productFingerprint(sources.product);
+  const article = h.sqlite.prepare("SELECT * FROM product_articles WHERE product_id='product-1'").get();
+  assert.ok(article);
+  assert.equal(article.source_fingerprint, currentFingerprint);
+
+  const platformData = JSON.parse(h.draft.platform_data_json);
+  platformData.sourceFingerprint = "fingerprint-before-sheet-correction";
+  platformData.contentTemplateVersion = "taha-approved-template-v2";
+  delete platformData.sourceFingerprintVersion;
+  delete platformData.canonicalArticleId;
+  h.sqlite.prepare(`UPDATE content_drafts SET body='Bài cũ không còn dùng',platform_data_json=?,prompt_version='taha-approved-template-v2'
+    WHERE id=?`).run(JSON.stringify(platformData), h.draft.id);
+
+  assert.equal((await enqueue(h)).enqueued, 1);
+  const sent = [];
+  const result = await dispatch(h, sent);
+  assert.equal(result.published, 1, JSON.stringify(result));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].message, `${article.body}\n\n${JSON.parse(article.hashtags_json).map((tag) => `#${tag}`).join(" ")}`);
+
+  const job = h.sqlite.prepare("SELECT payload_snapshot_json,external_post_id FROM publish_jobs").get();
+  const payload = JSON.parse(job.payload_snapshot_json);
+  assert.equal(job.external_post_id, "page_post");
+  assert.equal(payload.message, article.body);
+  assert.equal(payload.platformData.canonicalArticleId, article.id);
+  assert.equal(payload.platformData.sourceFingerprint, currentFingerprint);
+  assert.equal(payload.platformData.sourceFingerprintVersion, "product-copy-v2");
+  assert.equal(h.sqlite.prepare("SELECT COUNT(*) AS total FROM product_articles WHERE product_id='product-1'").get().total, 1);
+});
+
 test("an existing Facebook schedule picks up every current original and publishes its 27-photo album once", async () => {
   const h = await prepare();
   for (let i = 1; i < 27; i++) {
