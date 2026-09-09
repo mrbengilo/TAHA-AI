@@ -23,6 +23,7 @@ const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 const DEFAULT_LEASE_MS = 10 * 60 * 1_000;
 const MAX_BACKOFF_MS = 15 * 60 * 1_000;
+const FACEBOOK_STALE_FINGERPRINT_RECOVERY = "product-copy-v2-compat-20260909";
 
 type Provider = "google" | "facebook" | "zalo_personal" | "shopee" | "tiktok_shop" | "website";
 type JobKind = "social_post" | "listing_upsert" | "listing_unpublish" | "inventory_sync";
@@ -218,24 +219,26 @@ async function upgradeLegacyProductPayload(
   const templateVersion = cleanText(platformData.contentTemplateVersion, 120);
   const legacyTemplate = templateVersion === "taha-approved-template-v1"
     || templateVersion === "taha-approved-template-v2";
+  const explicitRecovery = cleanText(platformData.fingerprintRecovery, 120)
+    === FACEBOOK_STALE_FINGERPRINT_RECOVERY;
 
   const articleId = await stableArticleId(job.workspace_id, job.product_id!);
   let article = await database.prepare(
     `SELECT id,title,body,hashtags_json FROM product_articles
-     WHERE id=? AND workspace_id=? AND product_id=? AND source_fingerprint=?
+     WHERE workspace_id=? AND product_id=? AND source_fingerprint=?
        AND article_version=? AND prompt_version=? LIMIT 1`,
-  ).bind(articleId, job.workspace_id, job.product_id, currentFingerprint,
+  ).bind(job.workspace_id, job.product_id, currentFingerprint,
     CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
 
   if (!article) {
-    if (version || !legacyTemplate || !expected) {
+    if (!explicitRecovery && (version || !legacyTemplate || !expected)) {
       throw new Error("PRODUCT_CONTENT_STALE");
     }
     let title = cleanText(payload.title, 255) || cleanText(sources.product.name, 255);
     let body = cleanText(payload.message, 20_000);
     let hashtags = normalizedHashtags(payload.hashtags);
     let sourceCorrections = ["legacy_fingerprint_upgraded"];
-    if (expected !== await legacyProductFingerprint(sources.product)) {
+    if (explicitRecovery || expected !== await legacyProductFingerprint(sources.product)) {
       const metadata = record(objectJson(sources.product.metadata_json).website);
       const sizes = normalizedProductList(metadata.sizes, 30, 40);
       if (!sizes.length) throw new Error("PRODUCT_SIZES_REQUIRED");
@@ -284,9 +287,9 @@ async function upgradeLegacyProductPayload(
       APPROVED_TEMPLATE_MODEL, now, now).run();
     article = await database.prepare(
       `SELECT id,title,body,hashtags_json FROM product_articles
-       WHERE id=? AND workspace_id=? AND product_id=? AND source_fingerprint=?
+       WHERE workspace_id=? AND product_id=? AND source_fingerprint=?
          AND article_version=? AND prompt_version=? LIMIT 1`,
-    ).bind(articleId, job.workspace_id, job.product_id, currentFingerprint,
+    ).bind(job.workspace_id, job.product_id, currentFingerprint,
       CANONICAL_ARTICLE_VERSION, APPROVED_TEMPLATE_MODEL).first<ProductArticleRow>();
   }
   if (!article) throw new Error("PRODUCT_CONTENT_STALE");

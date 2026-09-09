@@ -47,7 +47,11 @@ def target_rows():
     return query(f"""SELECT j.id,j.status,COALESCE(j.error_code,'') AS errorCode,
       COALESCE(j.external_post_id,'') AS externalPostId,COALESCE(j.external_url,'') AS externalUrl,
       j.available_at AS availableAt,
-      COALESCE(json_extract(j.payload_snapshot_json,'$.platformData.fingerprintRecovery'),'') AS marker
+      COALESCE(json_extract(j.payload_snapshot_json,'$.platformData.fingerprintRecovery'),'') AS marker,
+      COALESCE(json_extract(j.payload_snapshot_json,'$.platformData.sourceFingerprintVersion'),'') AS fingerprintVersion,
+      COALESCE(json_extract(j.payload_snapshot_json,'$.platformData.contentTemplateVersion'),'') AS templateVersion,
+      (SELECT COUNT(*) FROM product_articles a
+       WHERE a.workspace_id=j.workspace_id AND a.product_id=j.product_id) AS articleCount
     FROM publish_jobs j
     JOIN products p ON p.id=j.product_id AND p.workspace_id=j.workspace_id
     JOIN channel_connections c ON c.id=j.connection_id AND c.workspace_id=j.workspace_id
@@ -150,7 +154,9 @@ def main(args):
             require(len(rows) == 1, 'FACEBOOK_STALE_TARGET_COUNT_INVALID')
             row = rows[0]
             print('FACEBOOK_STALE_TARGET=' + json.dumps(
-                {'sku': SKU, 'jobId': row['id'], 'status': row['status'], 'marker': row['marker']},
+                {'sku': SKU, 'jobId': row['id'], 'status': row['status'], 'marker': row['marker'],
+                 'fingerprintVersion': row['fingerprintVersion'], 'templateVersion': row['templateVersion'],
+                 'articleCount': row['articleCount']},
                 separators=(',', ':'),
             ), flush=True)
             if row['status'] == 'published':
