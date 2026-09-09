@@ -71,6 +71,11 @@ class FacebookStaleFingerprintRecoveryTests(unittest.TestCase):
         self.assertIn("COALESCE(provider_response_json,'{}')='{}'", sql)
         self.assertIn(recovery.MARKER, sql)
 
+    def test_a_marked_but_still_blocked_job_is_requeued_on_the_next_release(self):
+        source = (ROOT / 'deploy/vps/facebook-stale-fingerprint-recovery.py').read_text()
+        self.assertIn("if row['status'] == 'blocked':\n                    requeue(row['id'])", source)
+        self.assertNotIn("if row['marker'] != MARKER:\n                    requeue(row['id'])", source)
+
 
 if __name__ == '__main__':
     unittest.main()

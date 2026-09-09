@@ -156,7 +156,7 @@ def main(args):
             if row['status'] == 'published':
                 require(row['marker'] == MARKER and row['externalPostId'], 'FACEBOOK_STALE_RECEIPT_MISSING')
             else:
-                if row['marker'] != MARKER:
+                if row['status'] == 'blocked':
                     requeue(row['id'])
                 deadline = time.monotonic() + 10 * 60
                 previous = None
