@@ -1,3 +1,4 @@
+-- Store one workspace-scoped, versioned article template for all future product posts.
 CREATE TABLE `post_templates` (
   `id` text PRIMARY KEY NOT NULL,
   `workspace_id` text NOT NULL,
