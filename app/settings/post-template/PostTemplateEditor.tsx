@@ -479,13 +479,18 @@ export default function PostTemplateEditor() {
       </div>
 
       {confirming ? (
-        <div className="post-template-dialog-backdrop" role="presentation" onMouseDown={() => !saving && setConfirming(false)}>
+        <div
+        className="post-template-dialog-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !saving) setConfirming(false);
+        }}
+      >
           <section
             className="post-template-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="post-template-confirm-title"
-            onMouseDown={(event) => event.stopPropagation()}
           >
             <span className="post-template-dialog-icon" aria-hidden="true">✓</span>
             <div>
@@ -501,7 +506,7 @@ export default function PostTemplateEditor() {
             </div>
             <footer>
               <button className="post-template-secondary-button" type="button" onClick={() => setConfirming(false)} disabled={saving}>Kiểm tra lại</button>
-              <button className="post-template-primary-button" type="button" onClick={() => void save()} disabled={saving} autoFocus>
+              <button className="post-template-primary-button" type="button" onClick={() => void save()} disabled={saving}>
                 {saving ? "Đang cập nhật…" : "Xác nhận và áp dụng"}
               </button>
             </footer>

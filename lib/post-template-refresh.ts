@@ -13,7 +13,6 @@ import {
   normalizePostTemplateConfig,
   previewPostTemplate,
   requirePostTemplateDatabase,
-  type PostTemplateConfig,
   type PostTemplateDatabase,
   type PostTemplateRefreshResult,
   type PostTemplateSnapshot,
