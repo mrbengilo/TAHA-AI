@@ -1,4 +1,5 @@
 name: Dispatch TAHA VPS production deploy
+# Release trigger: admin post template feature merged in PR #36.
 
 on:
   push:
