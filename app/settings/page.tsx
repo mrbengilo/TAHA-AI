@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Cài đặt | TAHA AI",
-  description: "Cấu hình nguồn dữ liệu, kênh đích và nguyên tắc vận hành TAHA AI.",
+  description: "Cấu hình bài viết mẫu, nguồn dữ liệu, kênh đích và nguyên tắc vận hành TAHA AI.",
 };
 
 export default async function SettingsPage() {
@@ -26,21 +26,39 @@ export default async function SettingsPage() {
       active="settings"
       contextTitle="Cài đặt"
       noticeCount={channels.filter((item) => item.status === "error" || item.status === "expired").length}
-      headerActions={<Link className="ui-button is-primary" href="/connections"><AppIcon name="connections" size={17} /> Quản lý kết nối</Link>}
+      headerActions={<Link className="ui-button is-primary" href="/settings/post-template"><AppIcon name="content" size={17} /> Bài viết mẫu</Link>}
     >
       <section className="ui-page-header">
         <div className="ui-page-header-copy">
           <span className="ui-eyebrow">SYSTEM SETTINGS</span>
           <h1>Cài đặt theo luồng vận hành, không theo thuật ngữ kỹ thuật</h1>
-          <p>Google là nguồn dữ liệu; Facebook và Zalo là social; Website, Shopee và TikTok Shop là kênh bán hàng.</p>
+          <p>Quản trị cấu trúc bài viết, nguồn dữ liệu và các kênh phân phối trong một khu vực thống nhất.</p>
         </div>
         <div className="ui-page-actions">
           <Link className="ui-button" href="/connections/guide"><AppIcon name="help" size={17} /> Hướng dẫn</Link>
-          <Link className="ui-button is-primary" href="/connections"><AppIcon name="settings" size={17} /> Kết nối kênh</Link>
+          <Link className="ui-button is-primary" href="/settings/post-template"><AppIcon name="content" size={17} /> Sửa bài viết mẫu</Link>
         </div>
       </section>
 
       <section className="ui-grid-2">
+        <article className="ui-panel">
+          <header className="ui-panel-header">
+            <div><h2>Bài viết mẫu</h2><p>Cấu trúc nội dung dùng chung cho các bài sản phẩm về sau.</p></div>
+            <Link href="/settings/post-template">Thiết lập <AppIcon name="arrow-right" size={15} /></Link>
+          </header>
+          <div className="ui-list">
+            <div className="ui-list-row">
+              <span className="ui-list-icon"><AppIcon name="content" size={19} /></span>
+              <div><strong>8 phần nội dung có thể bật hoặc ẩn</strong><p>Tên sản phẩm, SKU, size, mô tả, quà tặng, bảo hành, liên hệ và hashtag.</p></div>
+              <Link href="/settings/post-template">Mở</Link>
+            </div>
+            <div className="ui-list-row">
+              <span className="ui-list-icon"><AppIcon name="check" size={19} /></span>
+              <div><strong>Cập nhật các bài chưa xuất bản</strong><p>Mẫu mới được áp dụng cho bài chuẩn, bản nháp và tác vụ đang chờ; bài đã đăng được giữ nguyên.</p></div>
+            </div>
+          </div>
+        </article>
+
         <article className="ui-panel">
           <header className="ui-panel-header"><div><h2>Nguồn dữ liệu</h2><p>Quy tắc chuẩn cho Product Master.</p></div></header>
           <div className="ui-list">
@@ -48,7 +66,9 @@ export default async function SettingsPage() {
             <div className="ui-list-row"><span className="ui-list-icon"><AppIcon name="image" size={19} /></span><div><strong>Google Drive</strong><p>SKU PH0006 được ánh xạ chính xác tới thư mục “SKU PH0006”.</p></div><Link href="/channels/google_drive">Mở</Link></div>
           </div>
         </article>
+      </section>
 
+      <section className="ui-section-gap">
         <article className="ui-panel">
           <header className="ui-panel-header"><div><h2>Tình trạng kênh</h2><p>{readyCount}/{channels.length || 7} kênh đang sẵn sàng.</p></div><Link href="/connections">Chi tiết <AppIcon name="arrow-right" size={15} /></Link></header>
           {error ? <div className="ui-error"><span className="ui-error-icon"><AppIcon name="alert" size={22} /></span><strong>Chưa đọc được trạng thái</strong><p>{error}</p></div> : <div className="ui-list">{channels.map((channel) => (
