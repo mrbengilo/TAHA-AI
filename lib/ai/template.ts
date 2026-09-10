@@ -158,12 +158,16 @@ function extractedWarranty(product: ReturnType<typeof normalizedProduct>) {
 }
 
 function cleanGiftValue(value: string) {
-  return clean(value, 240)
+  const normalized = clean(value, 240)
     .replace(/\s*(?:&|\bvà\b)\s*/giu, " + ")
     .replace(/\s*\+\s*/gu, " + ")
     .replace(/[\s.,;:!?-]+$/u, "")
     .toLocaleLowerCase("vi-VN")
     .trim();
+  // A bare policy heading is not a customer gift. This also prevents
+  // malformed SEO text such as "Quà tặng - Bảo hành" from becoming
+  // the false public claim "Quà tặng kèm: bảo hành".
+  return /^(?:bảo\s*hành|quà\s*tặng|tặng\s*kèm)$/iu.test(normalized) ? "" : normalized;
 }
 
 function extractedGifts(product: ReturnType<typeof normalizedProduct>) {

@@ -8,7 +8,7 @@ on:
       - "codex/**"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: quality-${{ github.ref }}
@@ -24,72 +24,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Apply final merge-gate fixes
-        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/admin-post-template'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          template = Path("lib/ai/template.ts")
-          text = template.read_text()
-          old = '''function cleanGiftValue(value: string) {
-            return clean(value, 240)
-              .replace(/\\s*(?:&|\\bvà\\b)\\s*/giu, " + ")
-              .replace(/\\s*\\+\\s*/gu, " + ")
-              .replace(/[\\s.,;:!?-]+$/u, "")
-              .toLocaleLowerCase("vi-VN")
-              .trim();
-          }'''
-          new = '''function cleanGiftValue(value: string) {
-            const normalized = clean(value, 240)
-              .replace(/\\s*(?:&|\\bvà\\b)\\s*/giu, " + ")
-              .replace(/\\s*\\+\\s*/gu, " + ")
-              .replace(/[\\s.,;:!?-]+$/u, "")
-              .toLocaleLowerCase("vi-VN")
-              .trim();
-            // A bare policy heading is not a customer gift. This also prevents
-            // malformed SEO text such as "Quà tặng - Bảo hành" from becoming
-            // the false public claim "Quà tặng kèm: bảo hành".
-            return /^(?:bảo\\s*hành|quà\\s*tặng|tặng\\s*kèm)$/iu.test(normalized) ? "" : normalized;
-          }'''
-          if old not in text:
-              raise SystemExit("cleanGiftValue source no longer matches")
-          template.write_text(text.replace(old, new, 1))
-
-          tests = Path("tests/template-content.test.mjs")
-          text = tests.read_text()
-          old = '  assert.deepEqual(result.content.canonicalArticle.hashtags, []);'
-          new = '  assert.equal(result.content.canonicalArticle.hashtags.length, 0);'
-          if old not in text:
-              raise SystemExit("cross-realm hashtag assertion no longer matches")
-          text = text.replace(old, new, 1)
-          old = '  assert.match(body, /Mẫu giày PH0099/u);'
-          new = '''  assert.match(body, /mẫu PH0099/iu);
-            assert.doesNotMatch(body, /Quà tặng kèm: bảo hành/iu);'''
-          if old not in text:
-              raise SystemExit("malformed product assertion no longer matches")
-          text = text.replace(old, new, 1)
-          old = '''  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
-              "sku_editorial_name_normalized",
-              "canonical_structure_fallback",
-            ]));'''
-          new = '''  assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
-              "sku_editorial_name_normalized",
-            ]));'''
-          if old not in text:
-              raise SystemExit("source correction expectation no longer matches")
-          tests.write_text(text.replace(old, new, 1))
-          PY
-
-          git fetch origin main --depth=1
-          git show origin/main:.github/workflows/quality.yml > .github/workflows/quality.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/ai/template.ts tests/template-content.test.mjs .github/workflows/quality.yml
-          if ! git diff --cached --quiet; then
-            git commit -m "fix(content): validate malformed gift labels"
-            git push origin HEAD:codex/admin-post-template
-          fi
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

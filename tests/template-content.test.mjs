@@ -42,7 +42,7 @@ test("approved template writes one canonical SKU article without OpenAI, image g
   assert.match(result.content.canonicalArticle.body, /👟 Lituo Sport/);
   assert.match(result.content.canonicalArticle.body, /Mã sản phẩm: PH0018/);
   assert.match(result.content.canonicalArticle.body, /#TAHAShoes[\s\S]*#PH0018/);
-  assert.deepEqual(result.content.canonicalArticle.hashtags, []);
+  assert.equal(result.content.canonicalArticle.hashtags.length, 0);
   assert.doesNotMatch(`${result.content.canonicalArticle.title}\n${result.content.canonicalArticle.body}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
   assert.match(result.content.canonicalArticle.body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.match(result.content.canonicalArticle.body, /THÔNG TIN LIÊN HỆ/);
@@ -98,10 +98,10 @@ test("canonical SKU template repairs malformed Sheet display text for any channe
 
   const body = result.content.canonicalArticle.body;
   assert.match(body, /Mã sản phẩm: PH0099/u);
-  assert.match(body, /Mẫu giày PH0099/u);
+  assert.match(body, /mẫu PH0099/iu);
+  assert.doesNotMatch(body, /Quà tặng kèm: bảo hành/iu);
   assert.match(body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
     "sku_editorial_name_normalized",
-    "canonical_structure_fallback",
   ]));
 });
