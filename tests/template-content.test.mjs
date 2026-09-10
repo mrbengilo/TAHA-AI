@@ -39,8 +39,11 @@ test("approved template writes one canonical SKU article without OpenAI, image g
   assert.equal(result.content.channels, undefined);
   assert.equal(result.content.productDescription, undefined);
   assert.equal(result.content.canonicalArticle.version, "sku-canonical-v1");
-  assert.match(result.content.canonicalArticle.body, /PH0018/);
-  assert.doesNotMatch(`${result.content.canonicalArticle.title}\n${result.content.canonicalArticle.body}\n${result.content.canonicalArticle.hashtags.join(" ")}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
+  assert.match(result.content.canonicalArticle.body, /👟 Lituo Sport/);
+  assert.match(result.content.canonicalArticle.body, /Mã sản phẩm: PH0018/);
+  assert.match(result.content.canonicalArticle.body, /#TAHAShoes[\s\S]*#PH0018/);
+  assert.equal(result.content.canonicalArticle.hashtags.length, 0);
+  assert.doesNotMatch(`${result.content.canonicalArticle.title}\n${result.content.canonicalArticle.body}`, /490[. ]?000|590[. ]?000|₫|\bVND\b/iu);
   assert.match(result.content.canonicalArticle.body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.match(result.content.canonicalArticle.body, /THÔNG TIN LIÊN HỆ/);
   assert.match(result.content.canonicalArticle.body, /Size hiện có: 36, 37, 38, 39, 40/);
@@ -57,7 +60,7 @@ test("approved template is deterministic for the same exact SKU", async () => {
   assert.deepEqual(first, second);
 });
 
-test("approved Facebook template accepts production SEO names with store-policy suffixes", async () => {
+test("approved template separates the product name, warranty and gift blocks from production SEO names", async () => {
   const { template } = loadTemplate();
   const result = await template.generateProductContent({
     product: {
@@ -71,12 +74,12 @@ test("approved Facebook template accepts production SEO names with store-policy 
   });
 
   const body = result.content.canonicalArticle.body;
-  const productSections = body.split("MUA SẮM CÙNG TAHA SHOES")[0];
-  assert.match(productSections, /PH0022/);
-  assert.match(productSections, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
-  assert.doesNotMatch(productSections, /bảo\s*hành|quà\s*tặng/iu);
+  assert.match(body, /Mã sản phẩm: PH0022/u);
+  assert.match(body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.match(body, /Bảo hành 12 tháng/u);
   assert.match(body, /Quà tặng kèm: khử mùi \+ vớ thể thao/u);
+  assert.equal((body.match(/Bảo hành 12 tháng/gu) ?? []).length, 1);
+  assert.equal((body.match(/Quà tặng kèm:/gu) ?? []).length, 1);
   assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify(["sku_editorial_name_normalized"]));
 });
 
@@ -94,10 +97,11 @@ test("canonical SKU template repairs malformed Sheet display text for any channe
   });
 
   const body = result.content.canonicalArticle.body;
-  assert.match(body, /Mẫu giày PH0099/u);
+  assert.match(body, /Mã sản phẩm: PH0099/u);
+  assert.match(body, /mẫu PH0099/iu);
+  assert.doesNotMatch(body, /Quà tặng kèm: bảo hành/iu);
   assert.match(body, /Thiết kế:[\s\S]*Ưu điểm:[\s\S]*Ứng dụng:/u);
   assert.equal(JSON.stringify(result.content.sourceCorrections), JSON.stringify([
     "sku_editorial_name_normalized",
-    "canonical_structure_fallback",
   ]));
 });
