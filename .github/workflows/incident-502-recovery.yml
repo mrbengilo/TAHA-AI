@@ -1,0 +1,52 @@
+name: TAHA confirmed 502 runtime recovery
+
+on:
+  push:
+    branches: [ops/taha-502-recovery-20260911]
+    paths: [.github/workflows/incident-502-recovery.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate recovery script
+        run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('deploy/vps/incident-502-recovery.py').read_text())"
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Preserve evidence and recover the same container once
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -B -u - < deploy/vps/incident-502-recovery.py
+      - name: Verify public authentication boundary from outside VPS
+        run: |
+          set -euo pipefail
+          for path in / /settings/post-template; do
+            code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "https://tahashoes.store$path")
+            echo "PUBLIC_UNAUTHENTICATED path=$path http=$code"
+            test "$code" = 401
+          done
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
