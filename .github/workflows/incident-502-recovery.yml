@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  recover:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
@@ -22,9 +22,6 @@ jobs:
       VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
       VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate recovery script
-        run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('deploy/vps/incident-502-recovery.py').read_text())"
       - name: Configure SSH
         run: |
           set -euo pipefail
@@ -32,13 +29,102 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Preserve evidence and recover the same container once
+      - name: Verify recovered runtime and restore the previously active timer
         run: |
           set -euo pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
-            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
-            python3 -B -u - < deploy/vps/incident-502-recovery.py
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" python3 -B -u - <<'PY'
+          import datetime
+          import fcntl
+          import json
+          from pathlib import Path
+          import re
+          import sqlite3
+          import subprocess
+          import time
+
+          def run(args, timeout=20):
+              p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+              return p.returncode, p.stdout, p.stderr
+
+          def emit(key, value):
+              print(key + '=' + json.dumps(value, ensure_ascii=False, separators=(',', ':')), flush=True)
+
+          def inspect():
+              rc, out, _ = run(['docker', 'inspect', 'taha-ai'])
+              if rc:
+                  raise SystemExit('TARGET_CONTAINER_MISSING')
+              item = json.loads(out)[0]
+              if not item['Id'].startswith('9eb00e54202e') or item['Config']['Image'] != 'tahashoes-taha-ai:2a7f08279db22c5d2966d8ff39559815ce811819':
+                  raise SystemExit('TARGET_CONTAINER_CHANGED')
+              if not item['State']['Running'] or item['State']['OOMKilled']:
+                  raise SystemExit('RUNTIME_NOT_RECOVERED')
+              return item
+
+          with open('/var/lock/taha-ai-release.lock', 'a') as lock:
+              fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              initial = inspect()
+              secret = ''
+              for line in Path('/etc/taha-ai/.dev.vars').read_text().splitlines():
+                  key, sep, value = line.partition('=')
+                  if sep and key.strip() == 'INTERNAL_API_SECRET':
+                      secret = value.strip().strip('\"\'')
+                      break
+              if not secret:
+                  raise SystemExit('INTERNAL_API_SECRET_MISSING')
+
+              def http(path):
+                  rc, out, _ = run(['curl', '-sS', '--max-time', '12', '-o', '/dev/null', '-w', '%{http_code}', '-H', 'Authorization: Bearer ' + secret, 'http://127.0.0.1:8787' + path], timeout=16)
+                  return out.strip() if rc == 0 else '000'
+
+              results = {path: http(path) for path in ['/', '/products', '/content', '/connections', '/settings/post-template', '/api/post-template', '/api/integrations']}
+              emit('AUTHENTICATED_APP_HTTP', results)
+              if any(value != '200' for value in results.values()):
+                  raise SystemExit('APP_ROUTE_CHECK_FAILED')
+              # Unauthenticated UI deliberately returns 404. Use the existing
+              # internal bearer credential for the upstream health probe instead.
+              rc, out, err = run(['docker', 'exec', 'tahashoes-nginx', 'wget', '-S', '-O', '/dev/null', '-T', '10', '--header=Host: tahashoes.store', '--header=Authorization: Bearer ' + secret, 'http://taha-ai:8787/settings/post-template'], timeout=15)
+              status = re.findall(r'HTTP/\S+\s+(\d{3})', out + err)
+              emit('NGINX_AUTHENTICATED_UPSTREAM_HTTP', {'exit': rc, 'statuses': status})
+              if rc or not status or status[-1] != '200':
+                  raise SystemExit('AUTHENTICATED_UPSTREAM_CHECK_FAILED')
+              db_checked = 0
+              for database in Path('/var/lib/taha-ai').rglob('*.sqlite'):
+                  with sqlite3.connect(f'file:{database}?mode=ro', uri=True, timeout=3) as db:
+                      tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                      if 'publish_jobs' not in tables or 'products' not in tables:
+                          continue
+                      quick = [row[0] for row in db.execute('PRAGMA quick_check')]
+                      emit('DATABASE_QUICK_CHECK', quick)
+                      emit('DATABASE_COUNTS', {table: db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0] for table in ['products', 'product_articles', 'content_drafts', 'publish_jobs', 'post_templates'] if table in tables})
+                      if quick != ['ok']:
+                          raise SystemExit('DATABASE_CHECK_FAILED')
+                      db_checked += 1
+              if not db_checked:
+                  raise SystemExit('APPLICATION_DATABASE_NOT_FOUND')
+              # Preflight recorded this timer as active; the first recovery left
+              # it paused after an unauthenticated UI probe. Restore only that timer.
+              if not Path('/var/backups/taha-ai/incident-502-20260911T154837Z/container.json').is_file():
+                  raise SystemExit('INCIDENT_EVIDENCE_MISSING')
+              inspect()
+              rc, _, _ = run(['systemctl', 'start', 'taha-ai-cron.timer'])
+              if rc:
+                  raise SystemExit('CRON_TIMER_RESUME_FAILED')
+              emit('CRON_TIMER_RESTORED', True)
+              for i in range(3):
+                  time.sleep(20)
+                  current = inspect()
+                  status = http('/api/integrations')
+                  rc, out, _ = run(['docker', 'stats', '--no-stream', '--format', '{{.MemUsage}}', 'taha-ai'], timeout=15)
+                  emit('STABILITY_SAMPLE', {'sample': i + 1, 'http': status, 'memory': out.strip(), 'sameStartedAt': current['State']['StartedAt'] == initial['State']['StartedAt']})
+                  if status != '200' or current['State']['StartedAt'] != initial['State']['StartedAt']:
+                      raise SystemExit('RUNTIME_STABILITY_FAILED')
+              rc, out, _ = run(['systemctl', 'show', 'taha-ai-cron.timer', 'taha-ai-cron.service', '-p', 'Id', '-p', 'ActiveState', '-p', 'SubState', '-p', 'Result', '-p', 'ExecMainStatus', '--no-pager'])
+              emit('CRON_AFTER_RECOVERY', out.strip())
+              emit('VERIFIED_AT_UTC', datetime.datetime.now(datetime.timezone.utc).isoformat())
+              emit('RESULT', 'application recovered; authenticated upstream and database verified; no second restart; no publish-job or schedule writes')
+          PY
       - name: Verify public authentication boundary from outside VPS
         run: |
           set -euo pipefail
