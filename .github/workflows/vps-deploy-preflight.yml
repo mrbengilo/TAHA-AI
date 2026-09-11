@@ -4,9 +4,14 @@ on:
   push:
     branches: [main]
     paths: [.github/workflows/vps-deploy-preflight.yml]
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: taha-vps-readonly-preflight
+  cancel-in-progress: false
 
 jobs:
   preflight:
@@ -18,56 +23,115 @@ jobs:
       VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
       VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
     steps:
-      - name: Verify deploy secrets
+      - name: Configure diagnostic SSH
         run: |
           set -euo pipefail
           test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
-      - name: Configure SSH
-        run: |
-          set -euo pipefail
           install -m 700 -d ~/.ssh
           printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
           chmod 600 ~/.ssh/id_taha_vps
-      - name: Inspect deploy capacity and runtime
+      - name: Read-only application and public reverse-proxy diagnosis
         run: |
           set -euo pipefail
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" 'sh -s' <<'REMOTE'
-          set -eu
-          echo 'VPS_CONNECTED=yes'
-          df -h /
-          echo '-- docker system df --'
-          timeout 20 docker system df || true
-          echo '-- docker images --'
-          docker images --format 'repo={{.Repository}}|tag={{.Tag}}|id={{.ID}}|size={{.Size}}' | head -50 || true
-          echo '-- exited containers --'
-          docker ps -a --filter status=exited --format 'name={{.Names}}|image={{.Image}}|status={{.Status}}' || true
-          echo '-- taha-ai container --'
-          docker inspect taha-ai -f 'image={{.Config.Image}}|restart={{.HostConfig.RestartPolicy.Name}}|network={{.HostConfig.NetworkMode}}|ports={{json .HostConfig.PortBindings}}|entrypoint={{json .Config.Entrypoint}}|cmd={{json .Config.Cmd}}' 2>/dev/null || true
-          docker inspect taha-ai -f '{{range .Mounts}}{{.Source}}=>{{.Destination}}|mode={{.Mode}}|rw={{.RW}}{{println}}{{end}}' 2>/dev/null || true
-          echo '-- env metadata --'
-          if [ -f /etc/taha-ai/.dev.vars ]; then
-            stat -c 'env=/etc/taha-ai/.dev.vars|owner=%U:%G|mode=%a|size=%s' /etc/taha-ai/.dev.vars
-            echo 'env_keys_begin'
-            sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' /etc/taha-ai/.dev.vars | sort -u
-            echo 'env_keys_end'
-          else echo 'env_missing=yes'; fi
-          echo '-- cron --'
-          systemctl show taha-ai-cron.service -p FragmentPath -p ActiveState -p SubState --no-pager 2>/dev/null || true
-          systemctl show taha-ai-cron.timer -p FragmentPath -p ActiveState -p SubState --no-pager 2>/dev/null || true
-          echo '-- repo --'
-          echo "head=$(git -C /var/www/taha-ai rev-parse HEAD 2>/dev/null || true)"
-          echo "dirty=$(git -C /var/www/taha-ai status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-          echo 'dirty_paths_begin'
-          git -C /var/www/taha-ai status --short --untracked-files=all 2>/dev/null || true
-          echo 'dirty_paths_end'
-          echo 'dirty_diff_stat_begin'
-          git -C /var/www/taha-ai diff --stat 2>/dev/null || true
-          git -C /var/www/taha-ai diff --cached --stat 2>/dev/null || true
-          echo 'dirty_diff_stat_end'
-          echo '-- probes --'
-          for path in / /connections /automation /api/integrations; do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:8787$path" 2>/dev/null || true)
-            echo "path=$path|code=${code:-none}"
-          done
-          REMOTE
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" python3 -B -u - <<'PY'
+          import collections
+          import datetime
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def run(args, timeout=20):
+              try:
+                  p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+                  return p.returncode, p.stdout, p.stderr
+              except (subprocess.TimeoutExpired, OSError) as exc:
+                  return 124, '', type(exc).__name__
+
+          def emit(key, value):
+              print(key + '=' + json.dumps(value, ensure_ascii=False, separators=(',', ':')), flush=True)
+
+          def probe(label, url, extra=None, headers=None):
+              args = ['curl', '-sS', '--connect-timeout', '4', '--max-time', '12', '-o', '/dev/null', '-w', '%{http_code}']
+              args.extend(extra or [])
+              for header in headers or []:
+                  args.extend(['-H', header])
+              code, out, _ = run(args + [url], timeout=16)
+              emit(label, {'http': out.strip(), 'curlExit': code})
+
+          emit('UTC', datetime.datetime.now(datetime.timezone.utc).isoformat())
+          for key, args in [
+              ('DISK', ['df', '-h', '/']),
+              ('MEMORY', ['free', '-m']),
+              ('DOCKER_SPACE', ['docker', 'system', 'df']),
+              ('REPO_HEAD', ['git', '-C', '/var/www/taha-ai', 'rev-parse', 'HEAD']),
+              ('CRON', ['systemctl', 'show', 'taha-ai-cron.timer', 'taha-ai-cron.service', '-p', 'Id', '-p', 'ActiveState', '-p', 'SubState', '--no-pager']),
+          ]:
+              code, out, _ = run(args)
+              emit(key, {'exit': code, 'output': out.strip()})
+          code, out, _ = run(['docker', 'ps', '-a', '--format', '{{.Names}}'])
+          names = [name for name in out.splitlines() if name == 'taha-ai' or ('nginx' in name.lower() and 'rollback' not in name)]
+          for name in names:
+              code, out, _ = run(['docker', 'inspect', name])
+              if code:
+                  emit('INSPECT_FAILED', name)
+                  continue
+              item = json.loads(out)[0]
+              state = item.get('State', {})
+              emit('CONTAINER', {
+                  'name': name, 'id': item['Id'][:12], 'image': item['Config']['Image'],
+                  'status': state.get('Status'), 'running': state.get('Running'),
+                  'oomKilled': state.get('OOMKilled'), 'exitCode': state.get('ExitCode'),
+                  'startedAt': state.get('StartedAt'), 'restartCount': item.get('RestartCount'),
+                  'networks': {key: {'ip': value.get('IPAddress'), 'aliases': value.get('Aliases')} for key, value in item.get('NetworkSettings', {}).get('Networks', {}).items()},
+                  'ports': item.get('NetworkSettings', {}).get('Ports'),
+              })
+              if 'nginx' not in name.lower() or not state.get('Running'):
+                  continue
+              code, out, err = run(['docker', 'exec', name, 'nginx', '-T'])
+              safe = []
+              for line in (out + err).splitlines():
+                  if re.match(r'^# configuration file|^\s*(server_name|listen|proxy_pass|resolver|upstream)\b', line):
+                      line = re.sub(r'(https?://)[^\s/]+@', r'\1[REDACTED]@', line)
+                      safe.append(line.split('?')[0][:220])
+              emit('NGINX_ROUTES', {'container': name, 'configExit': code, 'lines': safe[:100]})
+              emit('NGINX_MOUNTS', [{'source': mount['Source'], 'destination': mount['Destination'], 'rw': mount['RW']} for mount in item.get('Mounts', []) if 'nginx' in mount.get('Destination', '')])
+              code, out, _ = run(['docker', 'exec', name, 'getent', 'hosts', 'taha-ai'])
+              emit('NGINX_DOCKER_DNS', {'container': name, 'exit': code, 'result': out.strip()})
+              code, out, err = run(['docker', 'exec', name, 'sh', '-c', 'wget -S -O /dev/null -T 8 http://taha-ai:8787/ 2>&1'], timeout=12)
+              safe = [line.strip() for line in (out + err).splitlines() if re.search(r'HTTP/|Connecting to|Connection refused|timed out|bad address', line)]
+              emit('NGINX_DIRECT_APP', {'container': name, 'exit': code, 'result': safe[:8]})
+              code, out, err = run(['docker', 'logs', '--since', '30m', '--tail', '200', name])
+              errors = collections.Counter()
+              for line in (out + err).splitlines():
+                  if 'tahashoes.store' not in line:
+                      continue
+                  target = re.search(r'upstream: "([^"?]+)', line)
+                  reason = re.search(r'connect\(\) failed[^,]*|upstream timed out[^,]*|no live upstreams|host not found[^,]*|upstream prematurely closed[^,]*|recv\(\) failed[^,]*', line)
+                  if reason:
+                      errors[(reason.group(0)[:160], target.group(1)[:160] if target else '')] += 1
+              emit('NGINX_TARGET_ERRORS', [{'reason': key[0], 'upstream': key[1], 'count': count} for key, count in errors.items()][:20])
+
+          for path in ['/', '/settings/post-template', '/api/integrations', '/api/post-template']:
+              probe('LOCAL_APP ' + path, 'http://127.0.0.1:8787' + path)
+          for path in ['/', '/settings/post-template', '/api/integrations']:
+              probe('HTTPS_ORIGIN ' + path, 'https://tahashoes.store' + path, ['--resolve', 'tahashoes.store:443:127.0.0.1'])
+          probe('HTTPS_PUBLIC', 'https://tahashoes.store/')
+          secret = ''
+          for line in Path('/etc/taha-ai/.dev.vars').read_text().splitlines():
+              key, sep, value = line.partition('=')
+              if sep and key.strip() == 'INTERNAL_API_SECRET':
+                  secret = value.strip().strip('\"\'')
+                  break
+          if secret:
+              for path in ['/api/integrations', '/api/post-template', '/settings/post-template']:
+                  probe('AUTH_LOCAL ' + path, 'http://127.0.0.1:8787' + path, headers=['Authorization: Bearer ' + secret])
+          else:
+              emit('AUTH_LOCAL', 'secret-not-configured')
+          emit('MUTATIONS', 'none; read-only diagnostics')
+          PY
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
