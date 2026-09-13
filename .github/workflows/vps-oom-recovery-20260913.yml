@@ -1,0 +1,140 @@
+name: TAHA recurrent OOM emergency recovery
+on:
+  push:
+    branches: [ops/taha-oom-guard-20260913]
+    paths: [.github/workflows/vps-oom-recovery-20260913.yml]
+permissions:
+  contents: read
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Preserve current evidence, recover once and verify authenticated routes
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" python3 -B -u - <<'PY'
+          import datetime, fcntl, json, os, re, sqlite3, subprocess, time
+          from pathlib import Path
+          os.umask(0o077)
+          def run(args, timeout=20):
+              p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+              return p.returncode, p.stdout, p.stderr
+          def emit(key, value):
+              print(key+'='+json.dumps(value, ensure_ascii=False, separators=(',',':')), flush=True)
+          def inspect():
+              rc,out,_=run(['docker','inspect','taha-ai'])
+              if rc: raise SystemExit('CONTAINER_NOT_FOUND')
+              value=json.loads(out)[0]
+              if not value['Id'].startswith('9eb00e54202e') or value['Config']['Image']!='tahashoes-taha-ai:2a7f08279db22c5d2966d8ff39559815ce811819':
+                  raise SystemExit('CONTAINER_CHANGED; refusal')
+              return value
+          def busy():
+              rc,out,_=run(['systemctl','show','taha-ai-cron.service','-p','ActiveState','--value'])
+              if rc: raise SystemExit('CRON_STATE_UNAVAILABLE')
+              return out.strip() in ('active','activating','deactivating')
+          secret=''
+          for line in Path('/etc/taha-ai/.dev.vars').read_text().splitlines():
+              k,sep,v=line.partition('=')
+              if sep and k.strip()=='INTERNAL_API_SECRET': secret=v.strip().strip('\"\''); break
+          if not secret: raise SystemExit('AUTH_SECRET_UNAVAILABLE')
+          def http(path):
+              rc,out,_=run(['curl','-sS','--max-time','8','-o','/dev/null','-w','%{http_code}','-H','Authorization: Bearer '+secret,'http://127.0.0.1:8787'+path],12)
+              return out.strip() if rc==0 else '000'
+          with open('/var/lock/taha-ai-release.lock','a') as lock:
+              fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+              before=inspect()
+              checks=[http('/api/integrations') for _ in range(3)]
+              emit('BEFORE',{'http':checks,'oomKilled':before['State']['OOMKilled'],'startedAt':before['State']['StartedAt']})
+              if checks!=['000']*3 or not before['State']['OOMKilled']:
+                  raise SystemExit('CONFIRMED_OUTAGE_CHANGED; no restart')
+              stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+              backup=Path('/var/backups/taha-ai')/('recurrent-oom-'+stamp)
+              backup.mkdir(parents=True,mode=0o700)
+              (backup/'container.json').write_text(json.dumps(before))
+              for file,args in [
+                  ('runtime.log',['docker','logs','--tail','400','taha-ai']),
+                  ('kernel.log',['journalctl','-k','--since','2026-09-11 15:48:38 UTC','--no-pager','-o','short-iso']),
+                  ('processes.txt',['docker','top','taha-ai','-eo','pid,ppid,comm,rss']),
+                  ('memory.txt',['free','-m'])]:
+                  rc,out,err=run(args,25)
+                  if file=='kernel.log':
+                      out='\n'.join(s for s in (out+err).splitlines() if re.search('oom-kill|Out of memory|Killed process',s))[-12000:]; err=''
+                      emit('KERNEL_OOM',out.splitlines()[-12:])
+                  if file=='processes.txt': emit('BEFORE_PROCESSES',out)
+                  (backup/file).write_text(out+err)
+              emit('EVIDENCE_BACKUP',str(backup))
+              rc,_,_=run(['systemctl','is-active','--quiet','taha-ai-cron.timer'])
+              was_active=(rc==0)
+              rc,_,_=run(['systemctl','stop','taha-ai-cron.timer'])
+              if rc: raise SystemExit('TIMER_PAUSE_FAILED')
+              attempted=False
+              healthy=False
+              try:
+                  for i in range(30):
+                      if not busy(): break
+                      time.sleep(2)
+                  if busy(): raise SystemExit('CRON_IN_FLIGHT; no restart')
+                  current=inspect()
+                  if current['State']['StartedAt']!=before['State']['StartedAt'] or http('/api/integrations')!='000':
+                      raise SystemExit('RUNTIME_CHANGED; no restart')
+                  attempted=True
+                  rc,_,_=run(['docker','restart','--time','30','taha-ai'],50)
+                  if rc: raise SystemExit('RESTART_FAILED')
+                  for i in range(25):
+                      if http('/api/integrations')=='200': break
+                      time.sleep(2)
+                  paths=['/','/products','/content','/calendar','/connections','/settings/post-template','/api/post-template','/api/integrations']
+                  results={p:http(p) for p in paths}
+                  emit('AUTHENTICATED_HTTP',results)
+                  if any(v!='200' for v in results.values()): raise SystemExit('ROUTE_CHECK_FAILED')
+                  rc,out,err=run(['docker','exec','tahashoes-nginx','wget','-S','-O','/dev/null','-T','10','--header=Host: tahashoes.store','--header=Authorization: Bearer '+secret,'http://taha-ai:8787/settings/post-template'],15)
+                  statuses=re.findall(r'HTTP/\S+\s+(\d{3})',out+err)
+                  emit('AUTHENTICATED_NGINX_UPSTREAM',{'exit':rc,'status':statuses})
+                  if rc or not statuses or statuses[-1]!='200': raise SystemExit('UPSTREAM_CHECK_FAILED')
+                  count=0
+                  for dbfile in Path('/var/lib/taha-ai').rglob('*.sqlite'):
+                      with sqlite3.connect(f'file:{dbfile}?mode=ro',uri=True,timeout=3) as db:
+                          tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                          if 'post_templates' not in tables or 'publish_jobs' not in tables: continue
+                          count+=1
+                          quick=[r[0] for r in db.execute('PRAGMA quick_check')]
+                          emit('DATABASE_QUICK_CHECK',quick)
+                          if quick!=['ok']: raise SystemExit('DB_CHECK_FAILED')
+                          emit('PUBLISH_COUNTS',dict(db.execute('SELECT status,COUNT(*) FROM publish_jobs GROUP BY status')))
+                  if not count: raise SystemExit('DATABASE_NOT_FOUND')
+                  healthy=True
+                  emit('RECOVERY',{'restarts':1,'image':inspect()['Config']['Image'],'queueWrites':0,'scheduleWrites':0,'verifiedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+              finally:
+                  if was_active and (healthy or not attempted):
+                      rc,_,_=run(['systemctl','start','taha-ai-cron.timer'])
+                      emit('CRON_TIMER_RESTORED',rc==0)
+                  else: emit('CRON_TIMER_LEFT_STOPPED',True)
+          PY
+      - name: Verify public login boundary
+        run: |
+          set -euo pipefail
+          for path in / /products /settings/post-template; do
+            code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "https://tahashoes.store$path")
+            echo "PUBLIC_UNAUTHENTICATED path=$path http=$code"
+            test "$code" = 401
+          done
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
