@@ -154,12 +154,17 @@ def write_state(value):
 
 def metrics(item):
     # Process names and RSS only; no credentials or request contents in journald.
-    output = run(['docker', 'top', 'taha-ai', '-eo', 'comm,rss'])
+    try:
+        # Docker needs PID in ps output to map processes to this container.
+        output = run(['docker', 'top', 'taha-ai', '-eo', 'pid,ppid,comm,rss'])
+    except RuntimeError:
+        emit('METRICS_UNAVAILABLE', healthUnaffected=True)
+        return
     rss = {}
     for line in output.splitlines()[1:]:
         cols = line.split()
-        if len(cols) == 2 and cols[1].isdigit():
-            rss[cols[0]] = rss.get(cols[0], 0) + int(cols[1])
+        if len(cols) == 4 and cols[3].isdigit():
+            rss[cols[2]] = rss.get(cols[2], 0) + int(cols[3])
     mem = dict(re.findall(r'^(MemAvailable|SwapFree|SwapTotal):\s+(\d+)', Path('/proc/meminfo').read_text(), re.M))
     emit('RUNTIME_METRICS', image=item['Config']['Image'], rssKiB=rss, hostKiB=mem)
 
