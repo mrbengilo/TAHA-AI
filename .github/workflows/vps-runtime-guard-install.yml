@@ -1,0 +1,138 @@
+name: TAHA install bounded runtime health guard
+on:
+  push:
+    branches: [ops/taha-oom-guard-20260913]
+    paths: [.github/workflows/vps-runtime-guard-install.yml]
+permissions:
+  contents: read
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test safety behavior before installation
+        run: PYTHONWARNINGS=error::ResourceWarning python3 -B -m unittest discover -s tests -p test_runtime_guard.py -v
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Transfer exact tested guard
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            "umask 077; cat > /var/tmp/taha-runtime-guard-$GITHUB_SHA.py" < deploy/vps/runtime-guard.py
+      - name: Install and verify systemd guard without application restart
+        run: |
+          set -euo pipefail
+          DIGEST=$(sha256sum deploy/vps/runtime-guard.py | cut -d' ' -f1)
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+            python3 -B -u - "$GITHUB_SHA" "$DIGEST" <<'PY'
+          import ast, datetime, fcntl, hashlib, json, os, re, shutil, subprocess, sys, time
+          from pathlib import Path
+          os.umask(0o077)
+          sha,digest=sys.argv[1:]
+          assert re.fullmatch('[0-9a-f]{40}',sha) and re.fullmatch('[0-9a-f]{64}',digest)
+          source=Path('/var/tmp')/('taha-runtime-guard-'+sha+'.py')
+          assert source.is_file() and not source.is_symlink()
+          content=source.read_bytes()
+          assert hashlib.sha256(content).hexdigest()==digest
+          ast.parse(content)
+          def run(args, timeout=25):
+              p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
+              if p.returncode: raise SystemExit('INSTALL_COMMAND_FAILED: '+args[0])
+              return p.stdout.strip()
+          def emit(key,value): print(key+'='+json.dumps(value,separators=(',',':')),flush=True)
+          original=json.loads(run(['docker','inspect','taha-ai']))[0]
+          assert original['Id'].startswith('9eb00e54202e')
+          assert original['Config']['Image']=='tahashoes-taha-ai:2a7f08279db22c5d2966d8ff39559815ce811819'
+          assert original['State']['Running'] and not original['State']['OOMKilled']
+          # Check-only is incapable of recovery; use it before installing anything.
+          emit('BEFORE_INSTALL_CHECK',run(['python3','-B',str(source),'--check-only'],50))
+          marker='# Managed by TAHA runtime guard v1'
+          service=marker+'''\n[Unit]
+          Description=TAHA authenticated health and bounded OOM recovery
+          After=docker.service network-online.target
+          Requires=docker.service
+          [Service]
+          Type=oneshot
+          User=root
+          ExecStart=/usr/bin/python3 -B /usr/local/lib/taha-ai/runtime-guard.py
+          TimeoutStartSec=240
+          UMask=0077
+          Nice=10
+          NoNewPrivileges=true
+          ProtectSystem=full
+          ProtectHome=true
+          PrivateTmp=true
+          '''
+          timer=marker+'''\n[Unit]
+          Description=Check TAHA application health once per minute
+          [Timer]
+          OnBootSec=120s
+          OnUnitActiveSec=60s
+          AccuracySec=5s
+          Unit=taha-ai-runtime-guard.service
+          [Install]
+          WantedBy=timers.target
+          '''
+          unitdir=Path('/etc/systemd/system')
+          target=Path('/usr/local/lib/taha-ai/runtime-guard.py')
+          files={target:content,unitdir/'taha-ai-runtime-guard.service':service.encode(),unitdir/'taha-ai-runtime-guard.timer':timer.encode()}
+          for p in files:
+              if p.exists(): raise SystemExit('GUARD_PATH_ALREADY_EXISTS; refusing overwrite')
+          assert not Path('/etc/taha-ai/runtime-guard.disabled').exists()
+          with open('/var/lock/taha-ai-release.lock','a') as lock:
+              fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+              current=json.loads(run(['docker','inspect','taha-ai']))[0]
+              assert current['Id']==original['Id'] and current['State']['StartedAt']==original['State']['StartedAt']
+              installed=[]
+              try:
+                  target.parent.mkdir(parents=True,mode=0o755,exist_ok=True)
+                  for p,b in files.items():
+                      p.write_bytes(b); os.chmod(p,0o700 if p==target else 0o644); installed.append(p)
+                  run(['systemd-analyze','verify',str(unitdir/'taha-ai-runtime-guard.service'),str(unitdir/'taha-ai-runtime-guard.timer')])
+                  run(['systemctl','daemon-reload'])
+                  run(['systemctl','enable','--now','taha-ai-runtime-guard.timer'])
+              except BaseException:
+                  subprocess.run(['systemctl','disable','--now','taha-ai-runtime-guard.timer'],capture_output=True)
+                  for p in installed: p.unlink(missing_ok=True)
+                  subprocess.run(['systemctl','daemon-reload'],capture_output=True)
+                  raise
+          # Outside the release lock: the guard itself owns that same lock.
+          run(['systemctl','start','taha-ai-runtime-guard.service'],60)
+          emit('GUARD_UNIT',run(['systemctl','show','taha-ai-runtime-guard.timer','taha-ai-runtime-guard.service','-p','Id','-p','ActiveState','-p','Result','-p','ExecMainStatus']))
+          emit('INSTALLED_SHA256',hashlib.sha256(target.read_bytes()).hexdigest())
+          emit('APPLICATION_RESTARTED_BY_INSTALL',False)
+          source.unlink()
+          # Observe several real timer invocations, without inducing an OOM on production.
+          for i in range(3):
+              time.sleep(65)
+              current=json.loads(run(['docker','inspect','taha-ai']))[0]
+              assert current['Id']==original['Id'] and current['State']['StartedAt']==original['State']['StartedAt']
+              assert not current['State']['OOMKilled']
+              emit('STABILITY_CHECK',{'sample':i+1,'result':run(['python3','-B',str(target),'--check-only'],50),'sameStartedAt':True})
+          log=run(['journalctl','-u','taha-ai-runtime-guard.service','--since','6 minutes ago','--no-pager','-o','cat'])
+          events=[json.loads(line) for line in log.splitlines() if line.startswith('{')]
+          emit('GUARD_LOG',events[-12:])
+          assert sum(e.get('event')=='HEALTHY' for e in events)>=3
+          assert not any(e.get('event') in ('GUARD_ERROR','RECOVERY_FAILED','RECOVERY_SUCCEEDED') for e in events)
+          emit('FINAL_CRON',run(['systemctl','show','taha-ai-cron.timer','taha-ai-cron.service','-p','Id','-p','ActiveState','-p','Result','-p','ExecMainStatus']))
+          emit('VERIFIED_AT',datetime.datetime.now(datetime.timezone.utc).isoformat())
+          PY
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
