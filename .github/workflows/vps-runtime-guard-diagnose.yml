@@ -1,0 +1,54 @@
+name: TAHA guard pre-install diagnosis
+on:
+  push:
+    branches: [ops/taha-oom-guard-20260913]
+    paths: [.github/workflows/vps-runtime-guard-diagnose.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Read validation stages
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" python3 -B -u - <<'PY'
+          import importlib.util,json,re,subprocess
+          path='/var/tmp/taha-runtime-guard-1e273d96c66bbdd65aeaa9e5324630e0f6d67f26.py'
+          spec=importlib.util.spec_from_file_location('guard_diagnose',path)
+          g=importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+          def safe_error(error):
+              msg=str(error)
+              return msg if re.fullmatch('[A-Za-z_]{1,80}',msg) else type(error).__name__
+          try:
+              item=g.inspect()
+              print('IDENTITY_OK',True)
+          except Exception as error:
+              print('IDENTITY_ERROR',safe_error(error))
+              item=json.loads(subprocess.run(['docker','inspect','taha-ai'],capture_output=True,text=True).stdout)[0]
+              print('MOUNT_PATHS',json.dumps({m['Destination']:m['Source'] for m in item['Mounts']}))
+              print('REPO_HEAD',subprocess.run(['git','-C','/var/www/taha-ai','rev-parse','HEAD'],capture_output=True,text=True).stdout.strip())
+          try:
+              token=g.secret()
+              print('SECRET_PRESENT',bool(token))
+              print('AUTH_HTTP',g.probe(token))
+          except Exception as error: print('PROBE_ERROR',safe_error(error))
+          try: print('LISTENER',g.has_listener(item))
+          except Exception as error: print('LISTENER_ERROR',safe_error(error))
+          try: g.metrics(item)
+          except Exception as error: print('METRICS_ERROR',safe_error(error))
+          print('MUTATIONS',0)
+          PY
+      - name: Clean SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
