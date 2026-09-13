@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test safety behavior before installation
-        run: PYTHONWARNINGS=error::ResourceWarning python3 -B -m unittest discover -s tests -p test_runtime_guard.py -v
+        run: PYTHONWARNINGS=error::ResourceWarning python3 -B -m unittest discover -s tests -p 'test_runtime_guard*.py' -v
       - name: Configure SSH
         run: |
           set -euo pipefail
@@ -41,7 +41,7 @@ jobs:
           ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
             -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             python3 -B -u - "$GITHUB_SHA" "$DIGEST" <<'PY'
-          import ast, datetime, fcntl, hashlib, json, os, re, shutil, subprocess, sys, time
+          import ast, datetime, fcntl, hashlib, json, os, re, subprocess, sys, time
           from pathlib import Path
           os.umask(0o077)
           sha,digest=sys.argv[1:]
@@ -53,14 +53,16 @@ jobs:
           ast.parse(content)
           def run(args, timeout=25):
               p=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
-              if p.returncode: raise SystemExit('INSTALL_COMMAND_FAILED: '+args[0])
+              if p.returncode:
+                  if args[0]=='python3':
+                      print('GUARD_SAFE_OUTPUT='+p.stdout[-2000:],flush=True)
+                  raise SystemExit('INSTALL_COMMAND_FAILED: '+args[0])
               return p.stdout.strip()
           def emit(key,value): print(key+'='+json.dumps(value,separators=(',',':')),flush=True)
           original=json.loads(run(['docker','inspect','taha-ai']))[0]
           assert original['Id'].startswith('9eb00e54202e')
           assert original['Config']['Image']=='tahashoes-taha-ai:2a7f08279db22c5d2966d8ff39559815ce811819'
           assert original['State']['Running'] and not original['State']['OOMKilled']
-          # Check-only is incapable of recovery; use it before installing anything.
           emit('BEFORE_INSTALL_CHECK',run(['python3','-B',str(source),'--check-only'],50))
           marker='# Managed by TAHA runtime guard v1'
           service=marker+'''\n[Unit]
@@ -112,13 +114,11 @@ jobs:
                   for p in installed: p.unlink(missing_ok=True)
                   subprocess.run(['systemctl','daemon-reload'],capture_output=True)
                   raise
-          # Outside the release lock: the guard itself owns that same lock.
           run(['systemctl','start','taha-ai-runtime-guard.service'],60)
           emit('GUARD_UNIT',run(['systemctl','show','taha-ai-runtime-guard.timer','taha-ai-runtime-guard.service','-p','Id','-p','ActiveState','-p','Result','-p','ExecMainStatus']))
           emit('INSTALLED_SHA256',hashlib.sha256(target.read_bytes()).hexdigest())
           emit('APPLICATION_RESTARTED_BY_INSTALL',False)
           source.unlink()
-          # Observe several real timer invocations, without inducing an OOM on production.
           for i in range(3):
               time.sleep(65)
               current=json.loads(run(['docker','inspect','taha-ai']))[0]
