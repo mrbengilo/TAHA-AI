@@ -1,0 +1,243 @@
+name: TAHA exact runtime recovery 2026-09-17
+
+on:
+  push:
+    branches: [ops/taha-runtime-recovery-20260917]
+    paths: [.github/workflows/vps-runtime-recovery-20260917.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: taha-vps-production
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: github.repository == 'mrbengilo/TAHA-AI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VPS_HOST: ${{ secrets.TAHA_VPS_HOST }}
+      VPS_USER: ${{ secrets.TAHA_VPS_USER }}
+      VPS_PORT: ${{ secrets.TAHA_VPS_PORT }}
+      VPS_KEY: ${{ secrets.TAHA_VPS_SSH_PRIVATE_KEY }}
+    steps:
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" && test -n "$VPS_USER" && test -n "$VPS_PORT" && test -n "$VPS_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_KEY" > ~/.ssh/id_taha_vps
+          chmod 600 ~/.ssh/id_taha_vps
+      - name: Preserve evidence, restart exact dead runtime once and verify
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -i ~/.ssh/id_taha_vps -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" python3 -B -u - <<'PY'
+          import datetime
+          import fcntl
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sqlite3
+          import subprocess
+          import time
+
+          EXPECTED_ID = '9eb00e54202e'
+          EXPECTED_IMAGE = 'tahashoes-taha-ai:2a7f08279db22c5d2966d8ff39559815ce811819'
+          EXPECTED_STARTED_AT = '2026-09-13T05:38:31.093255048Z'
+          DATA = Path('/var/lib/taha-ai')
+          ENV = Path('/etc/taha-ai/.dev.vars')
+          REPO = '/var/www/taha-ai'
+
+          def run(args, timeout=20):
+              try:
+                  p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+                  return p.returncode, p.stdout, p.stderr
+              except (OSError, subprocess.TimeoutExpired):
+                  return 124, '', ''
+
+          def emit(key, value):
+              print(key + '=' + json.dumps(value, ensure_ascii=False, separators=(',', ':')), flush=True)
+
+          def inspect():
+              rc, out, _ = run(['docker', 'inspect', 'taha-ai'])
+              if rc:
+                  raise SystemExit('TARGET_CONTAINER_MISSING')
+              return json.loads(out)[0]
+
+          def check_identity(item):
+              mounts = {m['Destination']: m['Source'] for m in item.get('Mounts', [])}
+              rc, head, _ = run(['git', '-C', REPO, 'rev-parse', 'HEAD'])
+              if (not item['Id'].startswith(EXPECTED_ID) or item['Config']['Image'] != EXPECTED_IMAGE
+                      or item['State'].get('StartedAt') != EXPECTED_STARTED_AT
+                      or not item['State'].get('Running')
+                      or mounts.get('/data') != str(DATA)
+                      or mounts.get('/app/.dev.vars') != str(ENV)
+                      or rc or head.strip() != EXPECTED_IMAGE.rsplit(':', 1)[1]):
+                  raise SystemExit('TARGET_IDENTITY_CHANGED')
+
+          def secret():
+              for line in ENV.read_text().splitlines():
+                  key, sep, value = line.partition('=')
+                  if sep and key.strip() == 'INTERNAL_API_SECRET':
+                      token = value.strip().strip('\"\'')
+                      if token:
+                          return token
+              raise SystemExit('INTERNAL_API_SECRET_MISSING')
+
+          def http(path, token):
+              rc, out, _ = run(['curl', '-sS', '--connect-timeout', '4', '--max-time', '10', '-o', '/dev/null', '-w', '%{http_code}', '-H', 'Authorization: Bearer ' + token, 'http://127.0.0.1:8787' + path], 14)
+              return out.strip() if rc == 0 else '000'
+
+          def has_listener(item):
+              pid = int(item['State'].get('Pid', 0))
+              if pid <= 1:
+                  raise SystemExit('INVALID_CONTAINER_PID')
+              for family in ('tcp', 'tcp6'):
+                  table = Path(f'/proc/{pid}/net/{family}')
+                  if not table.exists():
+                      continue
+                  for line in table.read_text().splitlines()[1:]:
+                      cols = line.split()
+                      if len(cols) >= 4 and cols[1].endswith(':2253') and cols[3] == '0A':
+                          return True
+              return False
+
+          def database_busy(now_ms):
+              found = 0
+              for path in DATA.rglob('*.sqlite'):
+                  with sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=3) as db:
+                      tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                      if 'publish_jobs' not in tables or 'automation_steps' not in tables:
+                          continue
+                      found += 1
+                      for table, status in (('publish_jobs', 'publishing'), ('automation_steps', 'processing')):
+                          columns = {row[1] for row in db.execute('PRAGMA table_info(' + table + ')')}
+                          if 'status' not in columns:
+                              raise SystemExit('LEASE_SCHEMA_UNKNOWN')
+                          clause = '1=1'
+                          values = [status]
+                          if 'lease_expires_at' in columns:
+                              clause = '(lease_expires_at IS NULL OR lease_expires_at>?)'
+                              values.append(now_ms)
+                          if db.execute('SELECT COUNT(*) FROM ' + table + ' WHERE status=? AND ' + clause, values).fetchone()[0]:
+                              return True
+              if not found:
+                  raise SystemExit('APPLICATION_DATABASE_NOT_FOUND')
+              return False
+
+          def cron_busy():
+              rc, state, _ = run(['systemctl', 'show', 'taha-ai-cron.service', '-p', 'ActiveState', '--value'])
+              if rc:
+                  raise SystemExit('CRON_STATE_UNKNOWN')
+              return state.strip() in ('active', 'activating', 'deactivating')
+
+          os.umask(0o077)
+          with open('/var/lock/taha-ai-release.lock', 'a') as lock:
+              try:
+                  fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              except BlockingIOError:
+                  raise SystemExit('RELEASE_IN_PROGRESS')
+              original = inspect()
+              check_identity(original)
+              token = secret()
+              before = [http('/api/integrations', token) for _ in range(3)]
+              listener = has_listener(original)
+              emit('BEFORE', {'http': before, 'listener': listener, 'oomKilled': original['State'].get('OOMKilled')})
+              if before != ['000', '000', '000'] or listener:
+                  raise SystemExit('RUNTIME_STATE_CHANGED_NO_RESTART')
+              if cron_busy() or database_busy(int(time.time() * 1000)):
+                  raise SystemExit('ACTIVE_CRON_OR_LEASE_NO_RESTART')
+              stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+              backup = Path('/var/backups/taha-ai') / ('runtime-dead-' + stamp)
+              backup.mkdir(mode=0o700, parents=True)
+              for filename, args in [
+                  ('container.json', ['docker', 'inspect', 'taha-ai']),
+                  ('runtime.log', ['docker', 'logs', '--tail', '400', 'taha-ai']),
+                  ('processes.txt', ['docker', 'top', 'taha-ai', '-eo', 'pid,ppid,comm,rss']),
+                  ('kernel-memory.log', ['journalctl', '-k', '--since', '7 days ago', '--no-pager', '-o', 'cat']),
+              ]:
+                  rc, out, err = run(args, 25)
+                  text = out + err
+                  if filename == 'kernel-memory.log':
+                      text = '\n'.join(line for line in text.splitlines() if re.search('oom-kill|Out of memory|Killed process', line))[-16000:]
+                      emit('KERNEL_MEMORY_EVENTS', text.splitlines()[-12:])
+                  (backup / filename).write_text(text)
+              emit('EVIDENCE_BACKUP', str(backup))
+              timer_was_active = run(['systemctl', 'is-active', '--quiet', 'taha-ai-cron.timer'])[0] == 0
+              timer_stopped = False
+              restarted = False
+              healthy = False
+              try:
+                  if run(['systemctl', 'stop', 'taha-ai-cron.timer'])[0]:
+                      raise SystemExit('CANNOT_PAUSE_CRON_TIMER')
+                  timer_stopped = True
+                  if cron_busy() or database_busy(int(time.time() * 1000)):
+                      raise SystemExit('CRON_OR_LEASE_RACED_NO_RESTART')
+                  current = inspect()
+                  check_identity(current)
+                  if current['Id'] != original['Id'] or current['State']['StartedAt'] != original['State']['StartedAt'] or http('/api/integrations', token) != '000' or has_listener(current):
+                      raise SystemExit('RUNTIME_CHANGED_NO_RESTART')
+                  restarted = True
+                  if run(['docker', 'restart', '--time', '30', 'taha-ai'], 50)[0]:
+                      raise SystemExit('CONTAINER_RESTART_FAILED')
+                  for _ in range(25):
+                      if http('/api/integrations', token) == '200':
+                          healthy = True
+                          break
+                      time.sleep(2)
+                  routes = {path: http(path, token) for path in ['/', '/products', '/content', '/calendar', '/connections', '/settings/post-template', '/api/post-template', '/api/integrations']}
+                  emit('AUTHENTICATED_APP_HTTP', routes)
+                  if any(code != '200' for code in routes.values()):
+                      healthy = False
+                      raise SystemExit('REQUIRED_ROUTE_NOT_HEALTHY')
+                  final = inspect()
+                  if final['Id'] != original['Id'] or not final['State'].get('Running') or final['State'].get('OOMKilled') or has_listener(final) is False:
+                      healthy = False
+                      raise SystemExit('POST_RESTART_RUNTIME_INVALID')
+                  rc, out, err = run(['docker', 'exec', 'tahashoes-nginx', 'wget', '-S', '-O', '/dev/null', '-T', '10', '--header=Host: tahashoes.store', '--header=Authorization: Bearer ' + token, 'http://taha-ai:8787/settings/post-template'], 15)
+                  statuses = re.findall(r'HTTP/\S+\s+(\d{3})', out + err)
+                  emit('NGINX_AUTHENTICATED_UPSTREAM', {'exit': rc, 'statuses': statuses})
+                  if rc or not statuses or statuses[-1] != '200':
+                      healthy = False
+                      raise SystemExit('NGINX_UPSTREAM_NOT_HEALTHY')
+                  checked = 0
+                  for path in DATA.rglob('*.sqlite'):
+                      with sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=3) as db:
+                          tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                          if 'publish_jobs' not in tables or 'products' not in tables:
+                              continue
+                          quick = [row[0] for row in db.execute('PRAGMA quick_check')]
+                          emit('DATABASE_QUICK_CHECK', quick)
+                          if quick != ['ok']:
+                              healthy = False
+                              raise SystemExit('DATABASE_CHECK_FAILED')
+                          checked += 1
+                  if not checked:
+                      healthy = False
+                      raise SystemExit('APPLICATION_DATABASE_NOT_FOUND')
+                  run(['systemctl', 'reset-failed', 'taha-ai-cron.service'])
+                  if timer_was_active and run(['systemctl', 'start', 'taha-ai-cron.timer'])[0]:
+                      healthy = False
+                      raise SystemExit('CRON_TIMER_RESUME_FAILED')
+                  emit('RECOVERY', {'restarts': 1, 'queueWrites': 0, 'scheduleWrites': 0, 'verifiedAt': datetime.datetime.now(datetime.timezone.utc).isoformat()})
+              finally:
+                  if timer_stopped and timer_was_active and (healthy or not restarted):
+                      rc, _, _ = run(['systemctl', 'start', 'taha-ai-cron.timer'])
+                      emit('CRON_TIMER_RESTORED', rc == 0)
+                  elif timer_stopped:
+                      emit('CRON_TIMER_LEFT_STOPPED', 'runtime still unhealthy after restart')
+          PY
+      - name: Verify public authentication boundary
+        run: |
+          set -euo pipefail
+          code=$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' https://tahashoes.store/)
+          echo "PUBLIC_UNAUTHENTICATED_HTTP=$code"
+          test "$code" = 401
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_taha_vps
